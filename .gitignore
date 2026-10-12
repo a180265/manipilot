@@ -8,6 +8,6 @@ __pycache__/
 /logs/
 /evidence/
 *.db
-dist/
+console/dist/
 build/
 node_modules/

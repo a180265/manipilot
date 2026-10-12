@@ -15,6 +15,12 @@ Manipilot 是一个与具体业务无关的机械臂 + 摄像头 + 屏幕执行�
 - **多设备任务运行时**：队列/租约/eligibility/能力注册/插件框架、证据链、回调 outbox、设备发现与注册
 - **API + 契约 + 控制台**：8788 HTTP 服务、`api/contracts/` 版本化契约、TS/Vite 调试台（console/，8792）、通用服务签名原语（`runtime/service_signing.py`）
 
+## 自包含声明
+
+- **摄像头授权取流**：`tools/camera_helper/dist/CameraHelper.app` 构建产物随仓发行（macOS 摄像头权限由它持有，向 8790 帧桥推帧）；
+- **OCR**：Apple Vision 引擎源码（`adapters/vision/vision_ocr.swift`）在仓，首次调用由 swiftc 现场编译到 `data/bin/`（部署缓存，不入 git）——无任何外部服务依赖；
+- **全新部署自举**：绑定与安装指纹是本机部署态（不入 git）。初始化：`python -c` 调 `scripts.camera_binding_v2.generate_control_token(<data>/camera_helper/control.token)` 生成控制令牌、`save_binding_v2(...)` 播种摄像头绑定（deviceUniqueId 来自 helper 报告的物理摄像头标识）、`CAMERA_HOST_INSTALLATION_ID_FILE` 首启自动生成。
+
 ## 快速开始
 
 ```bash
