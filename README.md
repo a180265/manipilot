@@ -43,6 +43,24 @@ cd console && npm install && npm run dev
 
 设备绑定：复制 `configs/devices.json`（模板）按现场填写；`configs/硬件输入确认表.json` 未全部确认时强制仿真，真机驱动拒绝启用。
 
+### 摄像头链路（真机视觉，2026-10-12 实测顺序）
+
+```bash
+# 1) 帧桥（宿主安装指纹缺失时会自动生成到 data/camera_source/）
+.venv/bin/python -B -m scripts.camera_frame_server --fleet-db data/armfleet.db --evidence-dir evidence/store
+# 2) 预览面（helper 的预览平面）
+.venv/bin/python -B -m scripts.camera_preview_server
+# 3) 摄像头辅助程序（GUI）。必须先注入两个环境变量，缺一会在界面报"V2 认证失败/不可用"：
+launchctl setenv CAMERA_CONTROL_TOKEN_FILE "$PWD/data/camera_helper/control.token"
+launchctl setenv CAMERA_HOST_INSTALLATION_ID_FILE "$PWD/data/camera_source/host_installation_id"
+open tools/camera_helper/dist/CameraHelper.app     # GUI 里：刷新摄像头 → 启动通道
+# 4) 设备调试台（连接设备/点动/校准向导，8792）
+IME_BASE_URL=http://127.0.0.1:8788 .venv/bin/python scripts/motor_debug_server.py
+```
+
+- 控制令牌与宿主安装指纹是**部署态**（`data/` 不入库）：令牌经 `scripts.camera_binding_v2.generate_control_token` 生成；安装指纹为 36 位小写 UUID（帧桥启动自举兜底生成）。摄像头绑定记录同理，可经 `camera_binding_v2.save_binding_v2` 播种或走 helper GUI 绑定（注意：运行时换绑写受安全门保护，未配置对应签名端点时会按设计拒绝）。
+- `configs/devices.json` 以占位符示例入库；真机部署按现场修改后**按文件名精确 `git add`，不要整库 `-A`**（避免把本机硬件标识带进公开历史）。
+
 ## 开发边界（平台宪法，见 AGENTS.md）
 
 - 平台只提供驱动抽象、能力注册、任务运行时、租约/锁、证据、安全和插件接口；不做客户画像、价格/档期事实、草稿生成、发送许可或自动重试，也不内置刷视频、拍照、录屏、桌面巡检等业务插件。
