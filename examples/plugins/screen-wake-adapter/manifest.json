@@ -1,0 +1,33 @@
+{
+  "plugin_id": "screen-wake-adapter",
+  "name_display": "人工唤醒屏幕",
+  "version": "1.0.0",
+  "vendor": "通用屏幕适配",
+  "description": "人工确认后在校准验证点执行一次双击；不解锁、不识图、不发送、不自动重试",
+  "entry_module": "plugin.py",
+  "test_fixture": "fake-screen-wake",
+  "task_types": [{
+    "task_type": "screen_wake",
+    "name_display": "人工唤醒屏幕",
+    "confirmed_display": "双击已完成，亮屏结果请核对",
+    "capability": "arm.wake_screen",
+    "risk_level": "高",
+    "requires_input": false,
+    "description": "仅人工确认的单次双击唤醒，不执行解锁",
+    "entry_conditions": "完整校准绑定、验证点、当前会话及原租约有效；仅豁免黑屏等待",
+    "exit_conditions": "控制器确认两次下压；亮屏效果单独报告；释放原租约，不追加归位",
+    "failure_handling": "动前拒绝为明确失败，执行不明为结果未知并暂停；禁止自动重放",
+    "input_schema": {
+      "type": "object", "additionalProperties": false, "required": ["binding", "confirmed"],
+      "properties": {"binding": {"type": "object"}, "confirmed": {"type": "boolean", "const": true}}
+    }
+  }],
+  "capabilities": ["arm.wake_screen", "arm.stop", "camera.capture"],
+  "resources": {
+    "devices": {"mode": "assigned", "description": "仅本任务设备"},
+    "camera": true, "input": false, "arm": true, "external_services": [],
+    "data_scope": {"reads_customer_message_text": false, "writes_customer_data": false, "sends_external_messages": false}
+  },
+  "evidence": {"screenshot_required": true, "home_check_required": false},
+  "limits": {"max_actions_per_task": 1}
+}

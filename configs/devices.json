@@ -1,0 +1,30 @@
+{
+ "comment": "设备绑定表示例（源自单真机部署，新部署按现场修改）。configs/硬件输入确认表.json 未全部确认时强制回退仿真模式。",
+ "binding_mode": "real_single_device",
+ "devices": [
+  {
+   "device_id": "arm-01",
+   "name_display": "设备 arm-01（真机）",
+   "arm_slot": 1,
+   "camera_id": "cam-01",
+   "camera_device_unique_id": "0xXXXXXXXXXXXXXXXX",
+   "driver_mode": "daemon",
+   "binding_mode": "real",
+   "binding_note": "daemon 驱动桥绑定（串口由 arm_daemon3 独占）；2026-10-01 由在线平台记录恢复（测试覆写事故后）",
+   "serial_port": "/dev/cu.usbserial-XXXXXXXX",
+   "baud_rate": 115200,
+   "camera_device_name": "示例 UVC Camera",
+   "camera_index": 0,
+   "camera_mode": "multi_channel",
+   "camera_frame_url": "http://127.0.0.1:8790/cameras/cam-01/latest.jpg",
+   "camera_status_url": "http://127.0.0.1:8790/cameras/cam-01/status",
+   "expected_frame_width": 1280,
+   "expected_frame_height": 720,
+   "expected_frame_fps": 10,
+   "daemon_addr": "127.0.0.1:8795",
+   "hardware_mode": "real",
+   "enforce_input_gate": true,
+   "ime_device_id": "k40-8f543833-83a8-4b6d-a1bb-441028236b7a"
+  }
+ ]
+}

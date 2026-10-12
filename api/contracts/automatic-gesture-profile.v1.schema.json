@@ -1,0 +1,375 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/automatic-gesture-profile.v1.schema.json",
+  "title": "Automatic gesture profile v1（只读资格）",
+  "description": "GET /v1/devices/{id}/automatic-gestures 与 automatic-navigation 的只读资格结构（规范第 12.3/22.12/22.16 节）。usable 不是算出来的，必须等于依赖已齐且对应验收有效；top_proof_available 仅 return_top 条目必填（if/then 强制）。",
+  "type": "object",
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "unsignedInt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "positiveInt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/text"
+        },
+        "message": {
+          "$ref": "#/$defs/text"
+        }
+      }
+    },
+    "binding": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "device_id",
+            "daemon_session",
+            "camera_id",
+            "camera_device_unique_id",
+            "binding_revision",
+            "calibration_fingerprint",
+            "frame_width",
+            "frame_height",
+            "coordinate_frame_hash",
+            "gesture_profile_version",
+            "recipe_version"
+          ],
+          "properties": {
+            "device_id": {
+              "$ref": "#/$defs/text"
+            },
+            "daemon_session": {
+              "$ref": "#/$defs/text"
+            },
+            "camera_id": {
+              "$ref": "#/$defs/text"
+            },
+            "camera_device_unique_id": {
+              "$ref": "#/$defs/text"
+            },
+            "binding_revision": {
+              "$ref": "#/$defs/unsignedInt"
+            },
+            "calibration_fingerprint": {
+              "$ref": "#/$defs/sha256"
+            },
+            "frame_width": {
+              "$ref": "#/$defs/positiveInt"
+            },
+            "frame_height": {
+              "$ref": "#/$defs/positiveInt"
+            },
+            "coordinate_frame_hash": {
+              "$ref": "#/$defs/sha256"
+            },
+            "gesture_profile_version": {
+              "$ref": "#/$defs/positiveInt"
+            },
+            "recipe_version": {
+              "$ref": "#/$defs/text"
+            }
+          }
+        }
+      ]
+    },
+    "actionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gesture_id",
+        "version",
+        "state",
+        "state_display",
+        "calculated",
+        "controller_supported",
+        "contact_validated",
+        "effect_validated",
+        "usable",
+        "blocking_reasons"
+      ],
+      "properties": {
+        "gesture_id": {
+          "enum": [
+            "scroll_up",
+            "scroll_down",
+            "system_back_left",
+            "system_back_right",
+            "system_home",
+            "double_tap"
+          ]
+        },
+        "version": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "state": {
+          "enum": [
+            "unverified",
+            "valid",
+            "invalid",
+            "unsupported"
+          ]
+        },
+        "state_display": {
+          "$ref": "#/$defs/text"
+        },
+        "calculated": {
+          "type": "boolean"
+        },
+        "controller_supported": {
+          "type": "boolean"
+        },
+        "contact_validated": {
+          "type": "boolean"
+        },
+        "effect_validated": {
+          "type": "boolean"
+        },
+        "validation_status": {
+          "$ref": "#/$defs/text",
+          "description": "保留原验收状态；three_passes 才表示连续验收通过，not_tested 不得按 state=valid 提升。"
+        },
+        "usable": {
+          "type": "boolean"
+        },
+        "blocking_reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        },
+        "top_proof_available": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gesturesResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "device_id",
+        "binding",
+        "actions",
+        "blocking_reasons"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "automatic-gesture-profile.v1"
+        },
+        "device_id": {
+          "$ref": "#/$defs/text"
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        },
+        "actions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scroll_up",
+            "scroll_down",
+            "system_back_left",
+            "system_back_right",
+            "system_home",
+            "double_tap"
+          ],
+          "properties": {
+            "scroll_up": {
+              "$ref": "#/$defs/actionEntry"
+            },
+            "scroll_down": {
+              "$ref": "#/$defs/actionEntry"
+            },
+            "system_back_left": {
+              "$ref": "#/$defs/actionEntry"
+            },
+            "system_back_right": {
+              "$ref": "#/$defs/actionEntry"
+            },
+            "system_home": {
+              "$ref": "#/$defs/actionEntry"
+            },
+            "double_tap": {
+              "$ref": "#/$defs/actionEntry"
+            }
+          }
+        },
+        "blocking_reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        }
+      }
+    },
+    "navigationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "device_id",
+        "binding",
+        "actions",
+        "blocking_reasons",
+        "profile_id",
+        "version",
+        "owner_plugin",
+        "layout_version",
+        "navigation_limits"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "actions"
+            ]
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "required": [
+                  "return_top"
+                ],
+                "properties": {
+                  "return_top": {
+                    "required": [
+                      "top_proof_available"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "automatic-gesture-profile.v1"
+        },
+        "device_id": {
+          "$ref": "#/$defs/text"
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        },
+        "actions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "search_next",
+            "search_previous",
+            "return_top",
+            "back_to_list",
+            "home"
+          ],
+          "properties": {
+            "search_next": {
+              "$ref": "#/$defs/navigationActionEntry"
+            },
+            "search_previous": {
+              "$ref": "#/$defs/navigationActionEntry"
+            },
+            "return_top": {
+              "$ref": "#/$defs/navigationActionEntry"
+            },
+            "back_to_list": {
+              "$ref": "#/$defs/navigationActionEntry"
+            },
+            "home": {
+              "$ref": "#/$defs/navigationActionEntry"
+            }
+          }
+        },
+        "blocking_reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        },
+        "profile_id": {
+          "$ref": "#/$defs/text"
+        },
+        "version": {
+          "$ref": "#/$defs/positiveInt"
+        },
+        "owner_plugin": {
+          "$ref": "#/$defs/text"
+        },
+        "layout_version": {
+          "$ref": "#/$defs/text"
+        },
+        "navigation_limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_steps",
+            "max_physical_actions",
+            "timeout_ms",
+            "max_boundary_probes"
+          ],
+          "properties": {
+            "max_steps": {
+              "const": 8
+            },
+            "max_physical_actions": {
+              "const": 8
+            },
+            "timeout_ms": {
+              "const": 90000
+            },
+            "max_boundary_probes": {
+              "const": 2
+            }
+          }
+        }
+      }
+    },
+    "navigationActionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "usable",
+        "blocking_reasons"
+      ],
+      "properties": {
+        "usable": {
+          "type": "boolean"
+        },
+        "blocking_reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        },
+        "top_proof_available": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

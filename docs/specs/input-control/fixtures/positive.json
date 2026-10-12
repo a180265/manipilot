@@ -1,0 +1,236 @@
+[
+  {
+    "name": "put-open-unicode",
+    "schema": "input-settings.schema.json#/definitions/authorized_put",
+    "value": {
+      "contract_version": "device-input-settings.v1", "enabled": true,
+      "expected_revision": 0, "ime_device_id": "手机-甲",
+      "operator_id": " 值班员甲 ", "role": "operator", "reason": " 允许输入与发送 ",
+      "correlation_id": "关联-甲", "client_request_id": "请求-甲"
+    }
+  },
+  {
+    "name": "put-close-no-phone",
+    "schema": "input-settings.schema.json#/definitions/authorized_put",
+    "value": {
+      "contract_version": "device-input-settings.v1", "enabled": false,
+      "expected_revision": 2, "operator_id": "值班员甲", "role": "responder",
+      "reason": "停止新输入", "correlation_id": "关联-关", "client_request_id": "请求-关"
+    }
+  },
+  {
+    "name": "status-new-install",
+    "schema": "input-settings.schema.json#/definitions/status",
+    "value": {
+      "contract_version": "device-input-settings.v1", "device_id": "机械臂-甲",
+      "ime_device_id": null, "current_ime_device_id": null, "enabled": false,
+      "revision": 0, "revoked_through_revision": 0, "updated_at": null,
+      "observed_at": "2026-10-03T10:00:00+08:00", "effective": false,
+      "blocking_reasons": [
+        {"code": "input_switch_disabled", "message": "输入与发送未允许"},
+        {"code": "input_binding_unavailable", "message": "尚未确定唯一输入法手机"},
+        {"code": "calibration_not_ready", "message": "机械校准未就绪"},
+        {"code": "ime_offline", "message": "输入法未在线"},
+        {"code": "ime_keyboard_inactive", "message": "输入法键盘未展开"}
+      ],
+      "calibration_ready": false, "ime_online": false, "keyboard_active": false,
+      "pending_cancellation_count": 0, "input_recovery_required": false
+    }
+  },
+  {
+    "name": "success-original",
+    "schema": "input-settings.schema.json#/definitions/success",
+    "value": {
+      "settings": {
+        "contract_version": "device-input-settings.v1", "device_id": "机械臂-甲",
+        "ime_device_id": "手机-甲", "current_ime_device_id": "手机-甲", "enabled": true,
+        "revision": 1, "revoked_through_revision": 0, "updated_at": "2026-10-03T10:00:00+08:00",
+        "observed_at": "2026-10-03T10:00:00+08:00", "effective": true,
+        "blocking_reasons": [], "calibration_ready": true, "ime_online": true,
+        "keyboard_active": true, "pending_cancellation_count": 0, "input_recovery_required": false
+      },
+      "replayed": false
+    }
+  },
+  {
+    "name": "settings-file-open-then-close",
+    "schema": "input-settings.schema.json#/definitions/file",
+    "value": {
+      "contract_version": "device-input-settings.v1", "device_id": "机械臂-甲",
+      "ime_device_id": "手机-甲", "enabled": false, "revision": 2, "revoked_through_revision": 2,
+      "updated_at": "2026-10-03T10:01:00+08:00", "operator_id": "值班员甲",
+      "reason": "停止新输入", "client_request_id": "请求-乙",
+      "requests": {
+        "请求-甲": {
+          "request_digest": "30fc0c9ef839129f4059c34708c7c847b4e40eefa2af693366ea863bcdf9523b",
+          "normalized_request": {
+            "contract_version": "device-input-settings.v1", "enabled": true, "expected_revision": 0,
+            "ime_device_id": "手机-甲", "operator_id": "值班员甲", "role": "operator",
+            "reason": "允许输入与发送", "correlation_id": "关联-甲", "client_request_id": "请求-甲"
+          },
+          "call_context": {"origin": "human_put", "operator_id": "值班员甲", "role": "operator", "operation_id": null},
+          "before": {"enabled": false, "ime_device_id": null, "revision": 0, "revoked_through_revision": 0, "updated_at": null},
+          "after": {"enabled": true, "ime_device_id": "手机-甲", "revision": 1, "revoked_through_revision": 0, "updated_at": "2026-10-03T10:00:00+08:00"},
+          "audit": {
+            "device_id": "机械臂-甲", "requested_ime_device_id": "手机-甲", "authorized_ime_device_id": "手机-甲",
+            "operator_id": "值班员甲", "role": "operator", "reason": "允许输入与发送",
+            "correlation_id": "关联-甲", "client_request_id": "请求-甲", "committed_at": "2026-10-03T10:00:00+08:00"
+          },
+          "original_response": {
+            "settings": {
+              "contract_version": "device-input-settings.v1", "device_id": "机械臂-甲",
+              "ime_device_id": "手机-甲", "current_ime_device_id": "手机-甲", "enabled": true,
+              "revision": 1, "revoked_through_revision": 0, "updated_at": "2026-10-03T10:00:00+08:00",
+              "observed_at": "2026-10-03T10:00:00+08:00", "effective": true, "blocking_reasons": [],
+              "calibration_ready": true, "ime_online": true, "keyboard_active": true,
+              "pending_cancellation_count": 0, "input_recovery_required": false
+            },
+            "replayed": false
+          }
+        },
+        "请求-乙": {
+          "request_digest": "d4bccb0df3df91006c82c78b1a132131f2078bd6a85a5fb4bcdd82c766cb1bef",
+          "normalized_request": {
+            "contract_version": "device-input-settings.v1", "enabled": false, "expected_revision": 1,
+            "ime_device_id": "已失效手机", "operator_id": "值班员甲", "role": "operator",
+            "reason": "停止新输入", "correlation_id": "关联-乙", "client_request_id": "请求-乙"
+          },
+          "call_context": {"origin": "human_put", "operator_id": "值班员甲", "role": "operator", "operation_id": null},
+          "before": {"enabled": true, "ime_device_id": "手机-甲", "revision": 1, "revoked_through_revision": 0, "updated_at": "2026-10-03T10:00:00+08:00"},
+          "after": {"enabled": false, "ime_device_id": "手机-甲", "revision": 2, "revoked_through_revision": 2, "updated_at": "2026-10-03T10:01:00+08:00"},
+          "audit": {
+            "device_id": "机械臂-甲", "requested_ime_device_id": "已失效手机", "authorized_ime_device_id": "手机-甲",
+            "operator_id": "值班员甲", "role": "operator", "reason": "停止新输入",
+            "correlation_id": "关联-乙", "client_request_id": "请求-乙", "committed_at": "2026-10-03T10:01:00+08:00"
+          },
+          "original_response": {
+            "settings": {
+              "contract_version": "device-input-settings.v1", "device_id": "机械臂-甲",
+              "ime_device_id": "手机-甲", "current_ime_device_id": "手机-甲", "enabled": false,
+              "revision": 2, "revoked_through_revision": 2, "updated_at": "2026-10-03T10:01:00+08:00",
+              "observed_at": "2026-10-03T10:01:00+08:00", "effective": false,
+              "blocking_reasons": [
+                {"code": "input_switch_disabled", "message": "已禁止新输入"},
+                {"code": "ime_cancel_pending", "message": "原输入法任务等待取消确认"},
+                {"code": "editor_review_required", "message": "编辑框残留待核对"}
+              ],
+              "calibration_ready": true, "ime_online": true, "keyboard_active": true,
+              "pending_cancellation_count": 1, "input_recovery_required": true
+            },
+            "replayed": false
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "owner-revoked",
+    "schema": "input-record.schema.json",
+    "value": {
+      "record_version": "input-control-record.v1", "record_id": "owner:task:任务-甲",
+      "device_id": "机械臂-甲", "kind": "owner", "revision": 2,
+      "created_at": "2026-10-03T10:00:01+08:00", "updated_at": "2026-10-03T10:01:00+08:00",
+      "owner_type": "fleet_task", "owner_ref": "任务-甲", "ime_device_id": "手机-甲",
+      "settings_revision": 1, "binding_revision": 0,
+      "payload_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "admitted_at": "2026-10-03T10:00:01+08:00", "revocation": "revoked", "revoked_at_revision": 2
+    }
+  },
+  {
+    "name": "effect-unknown-waiting-phone",
+    "schema": "input-record.schema.json",
+    "value": {
+      "record_version": "input-control-record.v1",
+      "record_id": "effect:737c1cdc46a34e6e38369e2653dd6834dece02d084bc499e9f7504219b0cacf8",
+      "device_id": "机械臂-甲", "kind": "effect", "revision": 3,
+      "created_at": "2026-10-03T10:00:02+08:00", "updated_at": "2026-10-03T10:01:00+08:00",
+      "owner_id": "owner:task:任务-甲", "slot_key": ["ime:候选-甲", 0, "ime_create"],
+      "effect_kind": "ime_create", "payload_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "state": "unknown", "prepared_at": "2026-10-03T10:00:02+08:00",
+      "claimed_at": "2026-10-03T10:00:03+08:00", "finished_at": null, "receipt": null,
+      "ime_task_id": "候选-甲", "cancel_state": "waiting_ack", "typed_character_count": null
+    }
+  },
+  {
+    "name": "guard-open",
+    "schema": "input-record.schema.json",
+    "value": {
+      "record_version": "input-control-record.v1", "record_id": "guard:机械臂-甲",
+      "device_id": "机械臂-甲", "kind": "device_guard", "revision": 3,
+      "created_at": "2026-10-03T10:00:00+08:00", "updated_at": "2026-10-03T10:01:00+08:00",
+      "issues": [
+        {"issue_id": "问题-取消", "code": "ime_cancel_pending", "owner_id": "owner:task:任务-甲", "effect_id": "effect:737c1cdc46a34e6e38369e2653dd6834dece02d084bc499e9f7504219b0cacf8", "state": "open", "opened_at": "2026-10-03T10:01:00+08:00", "resolved_at": null, "resolution": null},
+        {"issue_id": "问题-编辑框", "code": "editor_review_required", "owner_id": "owner:task:任务-甲", "effect_id": null, "state": "open", "opened_at": "2026-10-03T10:01:00+08:00", "resolved_at": null, "resolution": null}
+      ],
+      "settings_checkpoint": {"revision": 2, "digest": "39a2f33403e4d948ffe9f9183fbc3b5b6e8084990e574671bb8d87efa2a54753"},
+      "binding_change": null, "review_requests": {}
+    }
+  },
+  {
+    "name": "review-request",
+    "schema": "input-recovery.schema.json#/definitions/authorized_request",
+    "value": {
+      "contract_version": "input-recovery-review.v1", "expected_recovery_revision": 3,
+      "ime_device_id": "手机-甲", "issue_ids": ["问题-取消", "问题-编辑框"],
+      "candidate_removed": true, "editor_checked": true,
+      "operator_id": "值班员甲", "role": "responder", "reason": "已核对旧候选与编辑框",
+      "correlation_id": "关联-核对", "client_request_id": "请求-核对"
+    }
+  },
+  {
+    "name": "review-response",
+    "schema": "input-recovery.schema.json#/definitions/response",
+    "value": {
+      "contract_version": "input-recovery-review.v1", "device_id": "机械臂-甲",
+      "issue_ids": ["问题-取消", "问题-编辑框"], "recovery_revision": 4, "input_recovery_required": false
+    }
+  },
+  {
+    "name": "heartbeat-v1",
+    "schema": "ime-control.schema.json",
+    "value": {"appVersion": "contract-fixture", "keyboardActive": true, "currentTaskId": null, "inputTaskControlVersion": 1}
+  },
+  {
+    "name": "heartbeat-response",
+    "schema": "ime-control.schema.json#/definitions/heartbeat_response",
+    "value": {
+      "deviceId": "手机-甲", "appVersion": "contract-fixture", "keyboardActive": true,
+      "currentTaskId": null, "lastSeenAt": "2026-10-03T10:01:00+08:00", "online": true, "inputTaskControlVersion": 1
+    }
+  },
+  {
+    "name": "cancel-command",
+    "schema": "ime-control.schema.json#/definitions/control_command",
+    "value": {"commandId": 7, "taskId": "候选-甲", "command": "cancel", "createdAt": "2026-10-03T10:01:00+08:00"}
+  },
+  {
+    "name": "cancel-ack",
+    "schema": "ime-control.schema.json#/definitions/control_ack",
+    "value": {"deviceId": "手机-甲", "commandId": 7, "typedCharacterCount": 4}
+  },
+  {
+    "name": "typing-request",
+    "schema": "ime-control.schema.json#/definitions/status_request",
+    "value": {"deviceId": "手机-甲", "status": "typing", "typedCharacterCount": 0}
+  },
+  {
+    "name": "task-cancelled-progress-retained",
+    "schema": "ime-control.schema.json#/definitions/control_ack_success",
+    "value": {
+      "taskId": "候选-甲", "deviceId": "手机-甲", "targetUser": "文档虚构对象",
+      "content": "仅供契约校验，不可执行", "typingSpeed": "normal", "resolvedTypingSpeed": "normal",
+      "status": "cancelled", "typedCharacterCount": 4, "failureReason": "手机已停止旧输入循环",
+      "source": "api", "createdAt": "2026-10-03T10:00:03+08:00", "updatedAt": "2026-10-03T10:02:00+08:00"
+    }
+  },
+  {
+    "name": "fleet-storage-invalid",
+    "schema": "fleet-error.schema.json#/definitions/http_response",
+    "value": {"http_status": 503, "body": {"error": {"key": "input_settings_invalid", "title": "输入开关资料无法安全读取", "suggestion": "保留原资料并核对，不重置许可版本。", "trace_id": "追踪-损坏"}}}
+  },
+  {
+    "name": "ime-start-revoked",
+    "schema": "ime-control.schema.json#/definitions/start_error",
+    "value": {"error": "input_authorization_revoked", "message": "Input authorization revoked; do not start typing."}
+  }
+]

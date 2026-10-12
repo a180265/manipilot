@@ -1,0 +1,53 @@
+# Manipilot 通用机械臂执行平台
+
+Manipilot 是一个与具体业务无关的机械臂 + 摄像头 + 屏幕执行平台（SDK）：设备驱动、通用界面动作、任务租约、执行证据、屏幕输入法、统一校准和调试台。业务应用（聊天代运营、RPA 等）作为外部插件经版本化 HTTP/JSON 契约接入，平台不内置任何具体业务流程。
+
+> 本仓库源自 WX 项目内孵化的 arm_fleet 平台（2026-10-12 隔离手术后的基线）：核心对业务适配层零 import；WX 业务通道（导航服务签名等）位于可选的 `extensions/` 扩展，不在本仓库发行，剔除后平台行为完整。
+
+## 功能组成
+
+- **运动控制**：GRBL/串口驱动、daemon 驱动桥（8795）、任务租约/设备锁/归位/急停/人工接管、`fake_arm` 仿真
+- **摄像头链路**：帧桥（8790）+ 预览（8793）、`tools/camera_helper`（macOS 授权取流 CameraHelper.app）、帧保留策略
+- **OCR 与屏幕感知**：Apple Vision 本地 OCR（`adapters/vision`）、文字定位点击、手机定位（`phone_localization`）、屏幕姿态/边缘/亮屏唤醒
+- **统一校准栈**：校准向导 + bundle、屏幕校准、ui_targets 目标登记、探头运动、校准门禁、视觉验证、恢复/re-stamp
+- **手势与滑动**：手势程序/配方/收藏手势、自动手势、校准直驱滑动（`calibrated_scroll`）、滑动视觉判定、layout 布局识别家族（`adapters/uinav` + `runtime/layout_*`）
+- **屏幕输入法**：`adapters/screen_ime` 全套（候选栏下发文本 + iOS/macOS 客户端 + 自动配对 + LAN TLS 代理）
+- **多设备任务运行时**：队列/租约/eligibility/能力注册/插件框架、证据链、回调 outbox、设备发现与注册
+- **API + 契约 + 控制台**：8788 HTTP 服务、`api/contracts/` 版本化契约、TS/Vite 调试台（console/，8792）、通用服务签名原语（`runtime/service_signing.py`）
+
+## 快速开始
+
+```bash
+# 环境（Python ≥3.11）
+uv venv --python 3.11 .venv
+uv pip install -e ".[server,real]" pytest
+
+# 后端（默认 127.0.0.1:8788；硬件模式由配置与安全门禁决定，未确认时回退仿真）
+.venv/bin/python -m agent
+
+# 调试台（127.0.0.1:5174）
+cd console && npm install && npm run dev
+
+# 测试
+.venv/bin/python -m pytest tests/ -q -n 4
+
+# 真机只读检查（串口 ? + 摄像头采集，零运动；需先完成 configs/硬件输入确认表.json）
+.venv/bin/python scripts/g_live_readonly.py
+```
+
+设备绑定：复制 `configs/devices.json`（模板）按现场填写；`configs/硬件输入确认表.json` 未全部确认时强制仿真，真机驱动拒绝启用。
+
+## 开发边界（平台宪法，见 AGENTS.md）
+
+- 平台只提供驱动抽象、能力注册、任务运行时、租约/锁、证据、安全和插件接口；不做客户画像、价格/档期事实、草稿生成、发送许可或自动重试，也不内置刷视频、拍照、录屏、桌面巡检等业务插件。
+- 业务应用经 `api/contracts/` 的版本化 HTTP/JSON 契约接入；插件不 import 平台内部 Python 包、不读平台数据库。
+- 动作后无法确认结果时必须报告"结果未知"，不能猜成"明确失败"或"已完成"。
+- 控制台、日志摘要、报告使用中文业务关键词；英文只作协议键与稳定编号。
+
+## 目录
+
+`agent/` 设备常驻进程 · `drivers/` 机械臂/摄像头/输入驱动 · `adapters/screen_ime` 屏幕输入法 · `adapters/vision` OCR 与视觉 · `adapters/uinav` 列表 UI 导航规划 · `runtime/` 队列/租约/状态机/校准门禁 · `api/` HTTP 服务与契约 · `console/` 调试台前端 · `tasks/` 插件接口 · `examples/plugins/` 示例插件 · `fakes/` 仿真 · `tests/` 协议与故障注入测试 · `docs/` 平台文档
+
+## 测试基线
+
+基线（2026-10-12）：**4290 绿 / 30 红 / 240 跳过 / 0 错误**。30 红为源自仓继承的存量评审债（手势接线 7、串口重枚举 6、手机姿态终审 6、布局授权 4、裁剪匹配 2、线契约/能力预检/调试台屏证/摄像头代理各 1）加 1 例顺序敏感用例（隔离跑绿）；240 跳过 = 以 wx-wechat-adapter 示例为业务载具的流量用例（SDK 不发行该示例，见各文件 skipif 说明），后续以中性示例载具重建。

@@ -1,0 +1,199 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:input-control:settings",
+  "title": "Pending implementation: device-input-settings.v1",
+  "$ref": "#/definitions/put_request",
+  "definitions": {
+    "put_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "enabled", "expected_revision", "operator_id", "role", "reason", "correlation_id", "client_request_id"],
+      "properties": {
+        "contract_version": {"type": "string", "const": "device-input-settings.v1"},
+        "enabled": {"type": "boolean"},
+        "expected_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        "ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "operator_id": {"$ref": "urn:wx:design:input-control:common#/definitions/operator"},
+        "role": {"$ref": "urn:wx:design:input-control:common#/definitions/role"},
+        "reason": {"$ref": "urn:wx:design:input-control:common#/definitions/reason"},
+        "correlation_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+        "client_request_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"}
+      },
+      "allOf": [{
+        "if": {"properties": {"enabled": {"const": true}}},
+        "then": {"required": ["ime_device_id"], "properties": {"ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"}}}
+      }]
+    },
+    "authorized_put": {
+      "allOf": [
+        {"$ref": "#/definitions/put_request"},
+        {"properties": {"role": {"enum": ["operator", "responder"]}}}
+      ]
+    },
+    "normalized_request": {
+      "allOf": [
+        {"$ref": "#/definitions/put_request"},
+        {
+          "required": ["ime_device_id"],
+          "properties": {
+            "role": {"enum": ["operator", "responder", "system"]},
+            "operator_id": {"pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])"},
+            "reason": {"pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])"}
+          },
+          "if": {"properties": {"role": {"const": "system"}}},
+          "then": {"properties": {"enabled": {"const": false}}}
+        }
+      ]
+    },
+    "get_query": {"type": "object", "additionalProperties": false, "properties": {}},
+    "blocking_reason": {
+      "type": "object", "additionalProperties": false, "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "input_switch_disabled", "input_binding_unavailable", "input_binding_mismatch",
+            "calibration_not_ready", "ime_offline", "ime_keyboard_inactive", "ime_control_incompatible",
+            "device_removed", "device_binding_disabled", "device_offline", "device_starting",
+            "device_busy", "device_returning_home", "device_paused", "device_quarantined",
+            "device_maintenance", "device_degraded", "estop_active", "home_not_confirmed",
+            "camera_waiting", "lease_conflict", "startup_reconciling",
+            "settings_commit_pending", "input_record_invalid", "input_effect_unknown",
+            "ime_cancel_pending", "editor_review_required", "binding_change_pending", "legacy_input_review_required"
+          ]
+        },
+        "message": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "[\\u3400-\\u9fff]"}
+      }
+    },
+    "status": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "device_id", "ime_device_id", "current_ime_device_id", "enabled", "revision", "revoked_through_revision", "updated_at", "observed_at", "effective", "blocking_reasons", "calibration_ready", "ime_online", "keyboard_active", "pending_cancellation_count", "input_recovery_required"],
+      "properties": {
+        "contract_version": {"type": "string", "const": "device-input-settings.v1"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "current_ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "enabled": {"type": "boolean"},
+        "revision": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        "revoked_through_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_time"},
+        "observed_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "effective": {"type": "boolean"},
+        "blocking_reasons": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/definitions/blocking_reason"}},
+        "calibration_ready": {"type": "boolean"},
+        "ime_online": {"type": "boolean"},
+        "keyboard_active": {"type": "boolean"},
+        "pending_cancellation_count": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        "input_recovery_required": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"revision": {"const": 0}}},
+          "then": {"properties": {"enabled": {"const": false}, "ime_device_id": {"type": "null"}, "revoked_through_revision": {"const": 0}, "updated_at": {"type": "null"}}},
+          "else": {"properties": {"updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}}}
+        },
+        {
+          "if": {"properties": {"enabled": {"const": true}}},
+          "then": {"properties": {"ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"}, "revision": {"minimum": 1}}}
+        },
+        {
+          "if": {"properties": {"effective": {"const": true}}},
+          "then": {"properties": {
+            "enabled": {"const": true}, "calibration_ready": {"const": true},
+            "ime_online": {"const": true}, "keyboard_active": {"const": true},
+            "current_ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+            "input_recovery_required": {"const": false}, "pending_cancellation_count": {"const": 0},
+            "blocking_reasons": {"maxItems": 0}
+          }},
+          "else": {"properties": {"blocking_reasons": {"minItems": 1}}}
+        },
+        {
+          "if": {"properties": {"pending_cancellation_count": {"minimum": 1}}},
+          "then": {"properties": {"input_recovery_required": {"const": true}}}
+        }
+      ]
+    },
+    "success": {
+      "type": "object", "additionalProperties": false, "required": ["settings", "replayed"],
+      "properties": {"settings": {"$ref": "#/definitions/status"}, "replayed": {"type": "boolean"}}
+    },
+    "original_success": {
+      "allOf": [{"$ref": "#/definitions/success"}, {"properties": {"replayed": {"const": false}}}]
+    },
+    "saved_value": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "ime_device_id", "revision", "revoked_through_revision", "updated_at"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "revision": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        "revoked_through_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_time"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"revision": {"const": 0}}},
+          "then": {"properties": {"enabled": {"const": false}, "ime_device_id": {"type": "null"}, "revoked_through_revision": {"const": 0}, "updated_at": {"type": "null"}}},
+          "else": {"properties": {"updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}}}
+        },
+        {
+          "if": {"properties": {"enabled": {"const": true}}},
+          "then": {"properties": {"ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"}, "revision": {"minimum": 1}}}
+        }
+      ]
+    },
+    "audit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["device_id", "requested_ime_device_id", "authorized_ime_device_id", "operator_id", "role", "reason", "correlation_id", "client_request_id", "committed_at"],
+      "properties": {
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "requested_ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "authorized_ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "operator_id": {"$ref": "urn:wx:design:input-control:common#/definitions/operator"},
+        "role": {"type": "string", "enum": ["operator", "responder", "system"]},
+        "reason": {"$ref": "urn:wx:design:input-control:common#/definitions/reason"},
+        "correlation_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+        "client_request_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+        "committed_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}
+      }
+    },
+    "ledger_entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["request_digest", "normalized_request", "call_context", "before", "after", "audit", "original_response"],
+      "properties": {
+        "request_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "normalized_request": {"$ref": "#/definitions/normalized_request"},
+        "call_context": {"$ref": "urn:wx:design:input-control:common#/definitions/call_context"},
+        "before": {"$ref": "#/definitions/saved_value"},
+        "after": {"$ref": "#/definitions/saved_value"},
+        "audit": {"$ref": "#/definitions/audit"},
+        "original_response": {"$ref": "#/definitions/original_success"}
+      }
+    },
+    "file": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "device_id", "ime_device_id", "enabled", "revision", "revoked_through_revision", "updated_at", "operator_id", "reason", "client_request_id", "requests"],
+      "properties": {
+        "contract_version": {"type": "string", "const": "device-input-settings.v1"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "enabled": {"type": "boolean"},
+        "revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "revoked_through_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "operator_id": {"$ref": "urn:wx:design:input-control:common#/definitions/operator"},
+        "reason": {"$ref": "urn:wx:design:input-control:common#/definitions/reason"},
+        "client_request_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+        "migration_baseline": {"$ref": "urn:wx:design:input-control:migration#/definitions/baseline"},
+        "requests": {
+          "type": "object", "additionalProperties": false,
+          "propertyNames": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+          "patternProperties": {"^\\S(?:[\\s\\S]*\\S)?$": {"$ref": "#/definitions/ledger_entry"}}
+        }
+      },
+      "allOf": [{
+        "if": {"not": {"required": ["migration_baseline"]}},
+        "then": {"properties": {"requests": {"minProperties": 1}}}
+      }]
+    }
+  }
+}

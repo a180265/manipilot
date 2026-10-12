@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/saved-screen-gesture.v1.schema.json",
+  "title": "Saved screen gesture v1",
+  "description": "Read-only device-bound saved geometry. Usability is not live execution permission or phone-effect confirmation.",
+  "type": "object",
+  "oneOf": [
+    {"$ref": "#/$defs/entry"},
+    {"$ref": "#/$defs/list"}
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "label": {"type": "string", "minLength": 1, "maxLength": 100, "pattern": "\\S"},
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": {"type": "number", "minimum": 0, "maximum": 1},
+        "y": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "daemon_session", "camera_id", "camera_device_unique_id", "binding_revision", "calibration_fingerprint", "frame_width", "frame_height"],
+      "properties": {
+        "device_id": {"$ref": "#/$defs/id"},
+        "daemon_session": {"$ref": "#/$defs/text"},
+        "camera_id": {"$ref": "#/$defs/text"},
+        "camera_device_unique_id": {"$ref": "#/$defs/text"},
+        "binding_revision": {"type": "integer", "minimum": 0},
+        "calibration_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "frame_width": {"type": "integer", "minimum": 1},
+        "frame_height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "interval": {"type": "integer", "minimum": 50, "maximum": 500, "multipleOf": 10},
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "binding"],
+      "properties": {
+        "action": {"enum": ["double_tap", "swipe"]},
+        "binding": {"$ref": "#/$defs/binding"},
+        "point": {"$ref": "#/$defs/point"},
+        "start": {"$ref": "#/$defs/point"},
+        "end": {"$ref": "#/$defs/point"},
+        "interval_ms": {"$ref": "#/$defs/interval"},
+        "duration_ms": {"type": "integer", "minimum": 150, "maximum": 5000}
+      },
+      "oneOf": [
+        {
+          "properties": {"action": {"const": "double_tap"}},
+          "required": ["point", "interval_ms"],
+          "not": {"anyOf": [{"required": ["start"]}, {"required": ["end"]}, {"required": ["duration_ms"]}]}
+        },
+        {
+          "properties": {"action": {"const": "swipe"}},
+          "required": ["start", "end", "duration_ms"],
+          "not": {"anyOf": [{"required": ["point"]}, {"required": ["interval_ms"]}]}
+        }
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "device_id", "gesture_id", "version", "label", "action", "binding", "payload", "usable", "blocking_reasons", "effect_status", "effect_status_display", "created_by", "created_at", "updated_by", "updated_at"],
+      "properties": {
+        "contract_version": {"const": "saved-screen-gesture.v1"},
+        "device_id": {"$ref": "#/$defs/id"},
+        "gesture_id": {"$ref": "#/$defs/id"},
+        "version": {"type": "integer", "minimum": 1},
+        "label": {"$ref": "#/$defs/label"},
+        "action": {"enum": ["double_tap", "swipe"]},
+        "binding": {"$ref": "#/$defs/binding"},
+        "payload": {"$ref": "#/$defs/payload"},
+        "usable": {"type": "boolean"},
+        "blocking_reasons": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/text"}},
+        "effect_status": {"const": "unverified"},
+        "effect_status_display": {"const": "手机效果未核验"},
+        "created_by": {"$ref": "#/$defs/label"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_by": {"$ref": "#/$defs/label"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"action": {"const": "double_tap"}}},
+          "then": {"properties": {"payload": {"properties": {"action": {"const": "double_tap"}}}}},
+          "else": {"properties": {"payload": {"properties": {"action": {"const": "swipe"}}}}}
+        },
+        {
+          "if": {"properties": {"usable": {"const": true}}},
+          "then": {"properties": {"blocking_reasons": {"maxItems": 0}}},
+          "else": {"properties": {"blocking_reasons": {"minItems": 1}}}
+        }
+      ]
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "device_id", "gestures"],
+      "properties": {
+        "contract_version": {"const": "saved-screen-gesture.v1"},
+        "device_id": {"$ref": "#/$defs/id"},
+        "gestures": {"type": "array", "items": {"$ref": "#/$defs/entry"}}
+      }
+    },
+    "saveBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "action", "operator"],
+      "properties": {
+        "label": {"$ref": "#/$defs/label"},
+        "operator": {"$ref": "#/$defs/label"},
+        "action": {"enum": ["double_tap", "swipe"]},
+        "point": {"$ref": "#/$defs/point"},
+        "start": {"$ref": "#/$defs/point"},
+        "end": {"$ref": "#/$defs/point"},
+        "interval_ms": {"$ref": "#/$defs/interval"},
+        "gesture_id": {"$ref": "#/$defs/id"},
+        "expected_version": {"type": "integer", "minimum": 1}
+      },
+      "dependentRequired": {"expected_version": ["gesture_id"]},
+      "oneOf": [
+        {
+          "properties": {"action": {"const": "double_tap"}},
+          "required": ["point", "interval_ms"],
+          "not": {"anyOf": [{"required": ["start"]}, {"required": ["end"]}]}
+        },
+        {
+          "properties": {"action": {"const": "swipe"}},
+          "required": ["start", "end"],
+          "not": {"anyOf": [{"required": ["point"]}, {"required": ["interval_ms"]}]}
+        }
+      ]
+    }
+  }
+}

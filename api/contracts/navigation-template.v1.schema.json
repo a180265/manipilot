@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/navigation-template.v1.schema.json",
+  "title": "Navigation template v1",
+  "description": "桌面/顶部模板登记契约（规范第 22.15 节）。preview 只采帧和候选不做机械动作；登记必须显式确认；不接受客户端文件路径、URL 或 base64 图像。",
+  "type": "object",
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "unsignedInt": {"type": "integer", "minimum": 0},
+    "positiveInt": {"type": "integer", "minimum": 1},
+    "binding": {"type": "object"},
+    "regionPx": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["left_px", "top_px", "width_px", "height_px"],
+      "properties": {
+        "left_px": {"$ref": "#/$defs/unsignedInt"},
+        "top_px": {"$ref": "#/$defs/unsignedInt"},
+        "width_px": {"$ref": "#/$defs/positiveInt"},
+        "height_px": {"$ref": "#/$defs/positiveInt"}
+      }
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "evidence_id", "sha256", "captured_at", "camera_id", "frame_seq", "calibration_fingerprint"],
+      "properties": {
+        "kind": {"enum": ["image", "phone_trace", "controller_receipt", "probe_trace"]},
+        "evidence_id": {"$ref": "#/$defs/text"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "captured_at": {"type": "string", "format": "date-time"},
+        "camera_id": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]},
+        "frame_seq": {"anyOf": [{"$ref": "#/$defs/positiveInt"}, {"type": "null"}]},
+        "calibration_fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "previewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {"kind": {"enum": ["launcher", "top"]}}
+    },
+    "previewResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preview_id", "device_id", "binding", "kind", "frame_evidence", "candidates", "expires_at"],
+      "properties": {
+        "preview_id": {"$ref": "#/$defs/uuid"},
+        "device_id": {"$ref": "#/$defs/text"},
+        "binding": {"$ref": "#/$defs/binding"},
+        "kind": {"enum": ["launcher", "top"]},
+        "frame_evidence": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/evidenceRef"}},
+        "candidates": {"type": "array", "maxItems": 6, "items": {"$ref": "#/$defs/regionPx"}},
+        "expires_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "restoreTarget": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["kind", "visible_text", "region", "expected_page_id"],
+      "properties": {
+        "kind": {"const": "ocr_text"},
+        "visible_text": {"$ref": "#/$defs/text"},
+        "region": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y", "width", "height"],
+          "properties": {
+            "x": {"type": "number", "minimum": 0, "maximum": 1},
+            "y": {"type": "number", "minimum": 0, "maximum": 1},
+            "width": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+            "height": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+          }
+        },
+        "expected_page_id": {"const": "gesture-parent"}
+      }
+    },
+    "registrationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_version", "preview_id", "confirmed", "anchor_regions", "restore_target"],
+      "properties": {
+        "expected_version": {"$ref": "#/$defs/unsignedInt"},
+        "preview_id": {"$ref": "#/$defs/uuid"},
+        "confirmed": {"const": true},
+        "anchor_regions": {
+          "type": "array", "minItems": 1, "maxItems": 6,
+          "items": {"$ref": "#/$defs/regionPx"}
+        },
+        "restore_target": {"$ref": "#/$defs/restoreTarget"}
+      }
+    },
+    "templateRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "template_id", "version", "device_id", "kind", "binding", "layout_version", "anchor_evidence", "restore_target", "confirmed_at", "confirmation_source"],
+      "properties": {
+        "contract_version": {"const": "navigation-template.v1"},
+        "template_id": {"$ref": "#/$defs/text"},
+        "version": {"$ref": "#/$defs/positiveInt"},
+        "device_id": {"$ref": "#/$defs/text"},
+        "kind": {"enum": ["launcher", "top"]},
+        "binding": {"$ref": "#/$defs/binding"},
+        "layout_version": {"$ref": "#/$defs/text"},
+        "anchor_evidence": {
+          "type": "array", "minItems": 1, "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["region", "frame_evidence", "crop_sha256", "evidence_id"],
+            "properties": {
+              "region": {"$ref": "#/$defs/regionPx"},
+              "frame_evidence": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/evidenceRef"}},
+              "crop_sha256": {"$ref": "#/$defs/sha256"},
+              "evidence_id": {"$ref": "#/$defs/text"}
+            }
+          }
+        },
+        "restore_target": {"$ref": "#/$defs/restoreTarget"},
+        "confirmed_at": {"type": "string", "format": "date-time"},
+        "confirmation_source": {"const": "debug_explicit_confirmation"}
+      }
+    }
+  }
+}

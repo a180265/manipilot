@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Fleet 任务输入法 · 手机演示端</title>
+<style>
+  body { font-family: -apple-system, sans-serif; margin: 0; background: #f2f2f6; }
+  header { background: #1c1c1e; color: #fff; padding: 10px 14px; font-size: 15px; }
+  .tabs { display: flex; background: #e5e5ea; }
+  .tabs button { flex: 1; border: 0; padding: 10px; font-size: 15px; background: transparent; }
+  .tabs button.on { background: #fff; font-weight: 600; }
+  section { padding: 12px; }
+  label { font-size: 13px; color: #555; display: block; margin: 8px 0 4px; }
+  input { width: 100%; box-sizing: border-box; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; }
+  button.primary { width: 100%; margin-top: 12px; padding: 12px; font-size: 16px; border: 0;
+                   border-radius: 10px; background: #007aff; color: #fff; }
+  button.stop { background: #ff3b30; }
+  #log { margin-top: 10px; padding: 10px; background: #fff; border-radius: 10px;
+         font-size: 13px; min-height: 120px; white-space: pre-wrap; word-break: break-all; color: #333; }
+  /* 输入演示的候选栏（机械臂点击目标） */
+  #candidate { display: none; margin: 12px 0; padding: 14px; background: #fff; border-radius: 12px;
+               font-size: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.15); cursor: pointer; }
+  #fake-input { margin-top: 8px; width: 100%; box-sizing: border-box; min-height: 84px; padding: 10px;
+                font-size: 16px; background: #fff; border-radius: 10px; border: 1px solid #ddd; }
+  /* 校准模式全屏标靶 */
+  #cal-stage { display: none; position: fixed; inset: 0; background: #000; z-index: 99; color: #fff; }
+  #cal-tip { position: absolute; top: 12px; left: 0; right: 0; text-align: center; font-size: 15px; }
+  #cal-target { position: absolute; width: 56px; height: 56px; border: 3px solid #ffd60a;
+                border-radius: 50%; left: 50%; top: 50%; transform: translate(-50%,-50%); display: none; }
+  .hint { font-size: 12px; color: #8e8e93; margin-top: 8px; }
+  /* 摄像头标定全屏画面 */
+  #cam-stage { display: none; position: fixed; inset: 0; background: #fff; z-index: 98;
+               border: 10px solid #000; box-sizing: border-box; }
+  .mk img { width: 64px; height: 64px; display: block; }
+  #cam-tip { position: absolute; top: 24px; left: 0; right: 0; text-align: center;
+             font-size: 14px; color: #333; }
+  .mk { position: absolute; width: 34px; height: 34px; border-radius: 50%;
+        transform: translate(-50%, -50%); }
+  #cam-report { position: absolute; bottom: 34px; left: 50%; transform: translateX(-50%);
+                padding: 12px 18px; font-size: 14px; border: 0; border-radius: 10px;
+                background: #007aff; color: #fff; }
+  #cam-clear { position: absolute; bottom: 34px; left: 50%; transform: translateX(calc(-50% + 170px));
+               padding: 12px 14px; font-size: 13px; border: 0; border-radius: 10px;
+               background: #8e8e93; color: #fff; }
+  #cam-hud { position: absolute; bottom: 90px; left: 0; right: 0; text-align: center;
+             font-size: 14px; color: #007aff; font-weight: 600; }
+  .hint code { background: #eee; padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>Fleet 任务输入法 · 手机演示端</header>
+<div class="tabs">
+  <button id="tab-input" class="on" onclick="switchTab('input')">输入演示</button>
+  <button id="tab-cal" onclick="switchTab('cal')">屏幕校准</button>
+  <button id="tab-cam" onclick="switchTab('cam')">摄像头标定</button>
+</div>
+
+<!-- 输入演示 -->
+<section id="pane-input">
+  <label>服务地址</label>
+  <input id="base-url" placeholder="http://192.168.1.10:8788">
+  <label>设备编号（同一台手机保持稳定）</label>
+  <input id="device-id" placeholder="phone-demo">
+  <button id="start-btn" class="primary" onclick="toggleInput()">开始接收任务</button>
+  <div id="candidate" onclick="confirmTap()">✦ <span id="candidate-text"></span></div>
+  <div id="fake-input">（任务文本会像输入法一样逐字出现在这里）</div>
+  <div class="hint">心跳/长轮询/逐字回报走真实协议；候选栏出现后点击它开始输入，等价于机械臂点击候选栏。</div>
+  <div id="log"></div>
+</section>
+
+<!-- 屏幕校准 -->
+<section id="pane-cal" style="display:none">
+  <label>服务地址</label>
+  <input id="cal-url" placeholder="http://192.168.1.10:8788">
+  <label>设备编号（与电脑端创建会话时一致）</label>
+  <input id="cal-device" placeholder="phone-demo">
+  <button id="cal-btn" class="primary" onclick="toggleCal()">进入全屏标靶页</button>
+  <div class="hint">流程：电脑端创建校准会话并布防 → 本页自动回报 open → 出现标靶圈后在屏幕任意位置点一下（ACTION_UP 回报像素）。只回传触点像素，不保存机械坐标。</div>
+  <div id="cal-log" class="hint"></div>
+</section>
+
+<!-- 摄像头标定：固定机位摄像头 + 屏幕四角色标 -->
+<section id="pane-cam" style="display:none">
+  <label>服务地址</label>
+  <input id="cam-url" placeholder="http://192.168.1.10:8788">
+  <label>设备编号（与机械臂映射一致）</label>
+  <input id="cam-device" placeholder="phone-demo">
+  <button id="cam-btn" class="primary" onclick="showCameraStage()">进入摄像头标定画面</button>
+  <div class="hint">
+    前提：摄像头与手机都已固定且摄像头能拍到整块屏幕。<br>
+    步骤：① 进入标定画面（四角出现 ArUco 基准码）→ ② 点「回报标定点」，服务端拍一帧完成
+    "摄像头→屏幕"标定并返回残差；<br>
+    ③ 机械臂段（无需贴任何标记）：手动把机械臂挪到屏幕上，每按下一个位置，
+    本页面自动累计触点像素；共点 3 个不同位置后，在电脑端把 3 个机械坐标按顺序调
+    <code>robot-complete</code>（useManualTouches）生成正式映射。<br>
+    摄像头或手机任一移动后，重新做第①②步即可。
+  </div>
+  <div id="cam-log" class="hint"></div>
+</section>
+
+<div id="cam-stage">
+  <div id="cam-tip">摄像头标定画面：手机与摄像头都不要动。机械臂点击屏幕会自动累计触点。</div>
+  <div class="mk" id="aruco-slot-1"><img alt="标码1"></div>
+  <div class="mk" id="aruco-slot-2"><img alt="标码2"></div>
+  <div class="mk" id="aruco-slot-3"><img alt="标码3"></div>
+  <div class="mk" id="aruco-slot-4"><img alt="标码4"></div>
+  <div id="cam-hud">已累计触点 0 个</div>
+  <button id="cam-report" onclick="reportMarkers()">回报标定点（摄像头→屏幕）</button>
+  <button id="cam-clear" onclick="clearTouches()">清空触点</button>
+</div>
+
+<div id="cal-stage">
+  <div id="cal-tip">屏幕校准：请保持本页打开</div>
+  <div id="cal-target"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let inputRunning = false, heartbeats = null, pollLoop = null, controlLoop = null;
+let currentTask = null, tapConfirmed = false, cancelRequested = false;
+let calRunning = false, calLoop = null, calSessionId = null, calArmed = null;
+
+function log(msg) { const el = $('log'); el.textContent = msg + "\n" + el.textContent; }
+function calLog(msg) { const el = $('cal-log'); el.textContent = msg + "\n" + el.textContent; }
+
+function switchTab(tab) {
+  $('pane-input').style.display = tab === 'input' ? 'block' : 'none';
+  $('pane-cal').style.display = tab === 'cal' ? 'block' : 'none';
+  $('pane-cam').style.display = tab === 'cam' ? 'block' : 'none';
+  $('tab-input').className = tab === 'input' ? 'on' : '';
+  $('tab-cal').className = tab === 'cal' ? 'on' : '';
+  $('tab-cam').className = tab === 'cam' ? 'on' : '';
+  if (tab !== 'cam') $('cam-stage').style.display = 'none';
+}
+
+/* ---------- 摄像头标定（固定机位） ---------- */
+const ARUCO_POSITIONS = {1: [0.06, 0.08], 2: [0.94, 0.08],
+                         3: [0.94, 0.92], 4: [0.06, 0.92]};
+
+function showCameraStage() {
+  const base = $('cam-url').value.trim().replace(/\/+$/, '');
+  if (!base) { $('cam-log').textContent = '请先填写服务地址'; return; }
+  const stage = $('cam-stage');
+  stage.style.display = 'block';
+  for (const [id, [fx, fy]] of Object.entries(ARUCO_POSITIONS)) {
+    const slot = $('aruco-slot-' + id);
+    slot.style.left = (fx * 100) + '%';
+    slot.style.top = (fy * 100) + '%';
+    const img = slot.querySelector('img');
+    if (!img.src) img.src = base + '/screen-ime/aruco/' + id + '.png';
+  }
+}
+
+/* 机械臂物理点屏幕 → touchend 自动回报触点像素（按顺序积累） */
+$('cam-stage').addEventListener('touchend', async (event) => {
+  if (event.target.closest('button') || event.target.closest('img')) return;
+  event.preventDefault();
+  const base = $('cam-url').value.trim().replace(/\/+$/, '');
+  const device = $('cam-device').value.trim() || 'phone-demo';
+  if (!base) return;
+  const touch = event.changedTouches[0];
+  const dpr = window.devicePixelRatio || 1;
+  try {
+    const res = await fetch(base + '/api/v1/screen-ime/camera/manual-touch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({deviceId: device,
+                            screenX: touch.clientX * dpr, screenY: touch.clientY * dpr})
+    });
+    const body = await res.json();
+    $('cam-hud').textContent = '已累计触点 ' + body.touchCount + ' 个';
+  } catch (e) { /* 网络异常忽略，触点不完整由配对校验兜底 */ }
+}, {passive: false});
+
+async function clearTouches() {
+  const base = $('cam-url').value.trim().replace(/\/+$/, '');
+  const device = $('cam-device').value.trim() || 'phone-demo';
+  await fetch(base + '/api/v1/screen-ime/camera/manual-touch?device_id='
+              + encodeURIComponent(device), {method: 'DELETE'});
+  $('cam-hud').textContent = '已累计触点 0 个';
+}
+
+async function reportMarkers() {
+  const base = $('cam-url').value.trim().replace(/\/+$/, '');
+  const device = $('cam-device').value.trim() || 'phone-demo';
+  if (!base) { $('cam-log').textContent = '请先填写服务地址'; return; }
+  const dpr = window.devicePixelRatio || 1;
+  const markers = Object.entries(ARUCO_POSITIONS).map(([id, [fx, fy]]) => ({
+    id: Number(id), screenX: fx * window.innerWidth * dpr, screenY: fy * window.innerHeight * dpr
+  }));
+  $('cam-report').disabled = true;
+  try {
+    const res = await fetch(base + '/api/v1/screen-ime/camera/markers', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({deviceId: device, markers})
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      $('cam-log').textContent = '标定失败：' + body.error + ' — ' + body.message;
+    } else {
+      $('cam-log').textContent = '标定成功：重投影残差 ' + body.reprojectionRms.toFixed(2)
+          + 'px，版本 ' + body.version
+          + '。下一步在电脑端做机械臂段（robot-point ×3 → robot-complete）。';
+    }
+  } catch (e) {
+    $('cam-log').textContent = '连接异常：' + e.message;
+  } finally {
+    $('cam-report').disabled = false;
+  }
+}
+
+async function api(base, path, options) {
+  const res = await fetch(base + path, options);
+  if (res.status === 204) return null;
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error + ': ' + body.message);
+  return body;
+}
+
+/* ---------- 输入演示 ---------- */
+async function heartbeatOnce(base, device) {
+  await api(base, '/api/v1/devices/' + encodeURIComponent(device) + '/heartbeat', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({appVersion: 'web-phone-demo', keyboardActive: true, currentTaskId: currentTask?.taskId ?? null})
+  });
+}
+
+function startHeartbeat(base, device) {
+  heartbeats = setInterval(() => heartbeatOnce(base, device).catch(() => {}), 5000);
+  heartbeatOnce(base, device).catch(() => {});
+}
+
+function startControlWatch(base, device) {
+  controlLoop = (async () => {
+    while (inputRunning && currentTask) {
+      try {
+        const cmd = await api(base, '/api/v1/tasks/' + currentTask.taskId + '/control/next?deviceId=' +
+            encodeURIComponent(device) + '&waitSeconds=5');
+        if (cmd && cmd.command === 'cancel') {
+          cancelRequested = true;
+          await api(base, '/api/v1/tasks/' + currentTask.taskId + '/control/ack', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({deviceId: device, commandId: cmd.commandId, typedCharacterCount: typedCount})
+          });
+          log('收到取消，已停止输入（已输入 ' + typedCount + ' 字，内容保持原样）');
+          finishTask();
+          return;
+        }
+      } catch (e) { await new Promise(r => setTimeout(r, 300)); }
+    }
+  })();
+}
+
+let typedCount = 0;
+function confirmTap() { tapConfirmed = true; $('candidate').style.cursor = 'default'; }
+
+function finishTask() {
+  currentTask = null; tapConfirmed = false; cancelRequested = false; typedCount = 0;
+  $('candidate').style.display = 'none';
+  $('fake-input').textContent = '（任务文本会像输入法一样逐字出现在这里）';
+}
+
+async function processTask(base, device, task) {
+  currentTask = task; tapConfirmed = false; cancelRequested = false; typedCount = 0;
+  log('收到任务：' + task.content);
+  await api(base, '/api/v1/tasks/' + task.taskId + '/status', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({deviceId: device, status: 'displayed'})
+  });
+  $('candidate-text').textContent = task.content;
+  $('candidate').style.display = 'block';
+  $('candidate').style.cursor = 'pointer';
+  startControlWatch(base, device);
+
+  while (!tapConfirmed) {
+    if (cancelRequested) return;
+    await new Promise(r => setTimeout(r, 100));
+  }
+  log('候选栏被点击（等效机械臂点击），开始逐字输入');
+
+  const box = $('fake-input');
+  box.textContent = '';
+  const graphemes = Array.from(task.content);   // 图元分割（与 Android/iOS 口径一致）
+  for (let i = 0; i < graphemes.length; i++) {
+    if (cancelRequested) return;
+    box.textContent += graphemes[i];
+    typedCount = i + 1;
+    await api(base, '/api/v1/tasks/' + task.taskId + '/status', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({deviceId: device, status: typedCount === graphemes.length ? 'inserted' : 'typing',
+                            typedCharacterCount: typedCount})
+    });
+    await new Promise(r => setTimeout(r, 130));
+  }
+  log('任务完成：已输入 ' + typedCount + ' 个字符（inserted）');
+  finishTask();
+}
+
+function toggleInput() {
+  if (inputRunning) {
+    inputRunning = false;
+    clearInterval(heartbeats);
+    $('start-btn').textContent = '开始接收任务';
+    $('start-btn').className = 'primary';
+    $('candidate').style.display = 'none';
+    log('已停止');
+    return;
+  }
+  const base = $('base-url').value.trim().replace(/\/+$/, '');
+  const device = $('device-id').value.trim() || 'phone-demo';
+  if (!base) { log('请先填写服务地址'); return; }
+  inputRunning = true;
+  $('start-btn').textContent = '停止';
+  $('start-btn').className = 'primary stop';
+  startHeartbeat(base, device);
+  log('已上线（' + device + '），长轮询等待任务…');
+  pollLoop = (async () => {
+    while (inputRunning) {
+      try {
+        const task = await api(base, '/api/v1/devices/' + encodeURIComponent(device) + '/tasks/next?waitSeconds=20');
+        if (task && inputRunning) await processTask(base, device, task);
+      } catch (e) { log('连接异常：' + e.message); await new Promise(r => setTimeout(r, 1000)); }
+    }
+  })();
+}
+
+/* ---------- 屏幕校准 ---------- */
+function toggleCal() {
+  if (calRunning) {
+    calRunning = false;
+    $('cal-stage').style.display = 'none';
+    $('cal-btn').textContent = '进入全屏标靶页';
+    if (calSessionId) {
+      const base = $('cal-url').value.trim().replace(/\/+$/, '');
+      fetch(base + '/api/v1/calibrations/' + calSessionId + '/client', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({deviceId: $('cal-device').value.trim() || 'phone-demo', state: 'closed'})
+      }).catch(() => {});
+    }
+    return;
+  }
+  calRunning = true;
+  $('cal-stage').style.display = 'block';
+  $('cal-btn').textContent = '退出标靶页';
+  const base = $('cal-url').value.trim().replace(/\/+$/, '');
+  const device = $('cal-device').value.trim() || 'phone-demo';
+  calLoop = (async () => {
+    while (calRunning) {
+      try {
+        const session = await api(base, '/api/v1/devices/' + encodeURIComponent(device) + '/calibration');
+        if (session) {
+          calSessionId = session.sessionId;
+          if (session.clientState !== 'open') {
+            const dpr = window.devicePixelRatio || 1;
+            await api(base, '/api/v1/calibrations/' + session.sessionId + '/client', {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({deviceId: device, state: 'open',
+                                    screenWidth: Math.round(window.innerWidth * dpr),
+                                    screenHeight: Math.round(window.innerHeight * dpr),
+                                    orientation: window.innerWidth > window.innerHeight ? 'landscape' : 'portrait'})});
+            calLog('校准页已回报 open');
+          }
+          if (session.armed) {
+            calArmed = session.armed;
+            $('cal-target').style.display = 'block';
+            $('cal-tip').textContent = '标靶 ' + session.armed.sequence + '：在屏幕任意位置点一下';
+          }
+        } else {
+          $('cal-tip').textContent = '等待电脑端创建校准会话…';
+          $('cal-target').style.display = 'none';
+        }
+      } catch (e) { calLog('连接异常：' + e.message); }
+      await new Promise(r => setTimeout(r, 400));
+    }
+  })();
+}
+
+$('cal-stage').addEventListener('touchend', async (event) => {
+  if (!calArmed || !calSessionId) return;
+  event.preventDefault();
+  const base = $('cal-url').value.trim().replace(/\/+$/, '');
+  const device = $('cal-device').value.trim() || 'phone-demo';
+  const dpr = window.devicePixelRatio || 1;
+  const touch = event.changedTouches[0];
+  try {
+    await api(base, '/api/v1/calibrations/' + calSessionId + '/touch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({deviceId: device, sampleId: calArmed.sampleId, sequence: calArmed.sequence,
+                            screenX: touch.clientX * dpr, screenY: touch.clientY * dpr,
+                            screenWidth: Math.round(window.innerWidth * dpr),
+                            screenHeight: Math.round(window.innerHeight * dpr),
+                            orientation: window.innerWidth > window.innerHeight ? 'landscape' : 'portrait',
+                            eventTime: Date.now()})
+    });
+    calLog('已回报标靶 ' + calArmed.sequence + ' 的触点');
+    $('cal-tip').textContent = '已回报触点，等待下一个标靶';
+    $('cal-target').style.display = 'none';
+    calArmed = null;
+  } catch (e) { calLog('回报被拒绝：' + e.message); }
+}, {passive: false});
+
+/* 从 URL 参数预填 ?base= &device= */
+const params = new URLSearchParams(location.search);
+if (params.get('base')) $('base-url').value = params.get('base');
+if (params.get('device')) $('device-id').value = params.get('device');
+if (params.get('base')) $('cal-url').value = params.get('base');
+if (params.get('device')) $('cal-device').value = params.get('device');
+if (params.get('base')) $('cam-url').value = params.get('base');
+if (params.get('device')) $('cam-device').value = params.get('device');
+</script>
+</body>
+</html>

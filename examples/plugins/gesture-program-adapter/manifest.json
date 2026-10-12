@@ -1,0 +1,163 @@
+{
+  "plugin_id": "gesture-program-adapter",
+  "name_display": "通用手势程序插件",
+  "version": "1.0.0",
+  "vendor": "Arm Fleet 平台方（外部插件）",
+  "description": "按 gesture-program.v1 执行一次冻结的单指手势程序：本地先拒绝非法程序（零动作），执行后按三层状态归约结果；scroll_displacement 效果用前后帧位移测量验证，manual_only 等无验证器效果明确转人工。不连串口、不联网。",
+  "entry_module": "plugin.py",
+  "test_fixture": "fake-camera + fake-arm(path.v1)",
+  "task_types": [
+    {
+      "task_type": "gesture_program",
+      "name_display": "通用手势程序任务",
+      "confirmed_display": "手势程序已执行并核验",
+      "capability": "gesture.program",
+      "requires_input": false,
+      "risk_level": "高",
+      "request_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_id", "task_type", "contract_version", "device_id", "idempotency_key", "payload", "expires_at", "correlation_id"],
+        "properties": {
+          "task_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "task_type": {"const": "gesture_program"},
+          "contract_version": {"const": "gesture-program.v1"},
+          "device_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "idempotency_key": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "payload": {"$ref": "#/$defs/payload"},
+          "expires_at": {"type": "string", "format": "date-time"},
+          "correlation_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "policy_context": {"type": "object"}
+        },
+        "$defs": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["binding", "program", "expected_effect"],
+            "properties": {
+              "binding": {"$ref": "#/$defs/binding"},
+              "program": {"$ref": "#/$defs/program"},
+              "expected_effect": {"$ref": "#/$defs/expectedEffect"},
+              "saved_program_ref": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["gesture_id", "version"],
+                "properties": {
+                  "gesture_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                  "version": {"type": "integer", "minimum": 1}
+                }
+              }
+            }
+          },
+          "binding": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["device_id", "daemon_session", "camera_id", "camera_device_unique_id", "binding_revision", "calibration_fingerprint", "frame_width", "frame_height", "coordinate_frame_hash", "gesture_profile_version", "recipe_version"],
+            "properties": {
+              "device_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+              "daemon_session": {"type": "string", "minLength": 1, "pattern": "\\S"},
+              "camera_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+              "camera_device_unique_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+              "binding_revision": {"type": "integer", "minimum": 0},
+              "calibration_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "frame_width": {"type": "integer", "minimum": 1},
+              "frame_height": {"type": "integer", "minimum": 1},
+              "coordinate_frame_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "gesture_profile_version": {"type": "integer", "minimum": 0},
+              "recipe_version": {"type": "string", "minLength": 1, "pattern": "\\S"}
+            }
+          },
+          "program": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["program_version", "coordinate_space", "strokes"],
+            "properties": {
+              "program_version": {"const": "gesture-program.v1"},
+              "coordinate_space": {"const": "calibration_root_normalized.v1"},
+              "strokes": {
+                "type": "array", "minItems": 1, "maxItems": 4,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["points", "hold_before_ms", "hold_after_ms", "gap_after_ms"],
+                  "properties": {
+                    "points": {
+                      "type": "array", "minItems": 1, "maxItems": 64,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["x", "y", "t_ms"],
+                        "properties": {
+                          "x": {"type": "number", "minimum": 0, "maximum": 1},
+                          "y": {"type": "number", "minimum": 0, "maximum": 1},
+                          "t_ms": {"type": "integer", "minimum": 0}
+                        }
+                      }
+                    },
+                    "hold_before_ms": {"type": "integer", "minimum": 0, "maximum": 2000},
+                    "hold_after_ms": {"type": "integer", "minimum": 0, "maximum": 2000},
+                    "gap_after_ms": {"type": "integer", "minimum": 0, "maximum": 1000}
+                  }
+                }
+              }
+            }
+          },
+          "expectedEffect": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reference_id", "reference_version"],
+            "properties": {
+              "kind": {"enum": ["scroll_displacement", "page_transition", "fixture_trace", "manual_only"]},
+              "reference_id": {"type": "string"},
+              "reference_version": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["binding", "program", "expected_effect"],
+        "properties": {
+          "binding": {"type": "object", "description": "第 7 节新完整绑定；结构见 api/contracts/gesture-program.v1 契约副本"},
+          "program": {"type": "object", "description": "gesture-program.v1 单指程序；序列语义由插件用 drivers/gesture_program.validate_program 本地强校验"},
+          "expected_effect": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reference_id", "reference_version"],
+            "properties": {
+              "kind": {"enum": ["scroll_displacement", "page_transition", "fixture_trace", "manual_only"]},
+              "reference_id": {"type": "string"},
+              "reference_version": {"type": "integer", "minimum": 0}
+            }
+          },
+          "saved_program_ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["gesture_id", "version"],
+            "properties": {
+              "gesture_id": {"type": "string", "minLength": 1},
+              "version": {"type": "integer", "minimum": 1}
+            },
+            "description": "存在时必须与 program 快照 hash 一致"
+          }
+        }
+      },
+      "description": "执行一次冻结的 gesture-program.v1 手势程序并归约三层结果（规范第 6/3/22.16 节）；运行时按 stroke 数扣物理预算",
+      "entry_conditions": "设备手势程序开关开启；当前校准与坐标桥有效；程序通过本地 schema 与序列语义校验",
+      "exit_conditions": "程序执行完成并输出 controller/contact/effect 三层状态与证据；manual_only 明确转人工确认",
+      "failure_handling": "非法程序本地拒绝且零动作；规划拒绝（坐标桥缺失/时序不可达/路径未支持）为明确失败；控制器未知或效果未知为结果未知，不重试"
+    }
+  ],
+  "capabilities": ["arm.execute_gesture_program", "camera.capture", "camera.measure_scroll"],
+  "resources": {
+    "devices": {"mode": "assigned", "description": "只访问任务指定设备"},
+    "camera": true,
+    "input": false,
+    "arm": true,
+    "external_services": [],
+    "data_scope": {"reads_customer_message_text": false, "writes_customer_data": false, "sends_external_messages": false}
+  },
+  "evidence": {"screenshot_required": true, "home_check_required": true},
+  "limits": {"max_actions_per_task": 4, "max_tasks_per_hour": 30}
+}

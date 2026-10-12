@@ -1,0 +1,167 @@
+{
+  "region": {
+    "contract_version": "phone-search-region.v1",
+    "device_id": "arm-01", "version": 1,
+    "installation_binding": {"camera_id": "camera-01", "camera_device_unique_id": "USB/physical-camera-01", "camera_binding_id": "90000000-0000-4000-8000-000000000001", "arm_binding_id": "binding-arm-01"},
+    "source_size": {"width": 1000, "height": 2000},
+    "source_geometry_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rect": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+    "pixel_rect": {"left": 100, "top": 200, "right": 900, "bottom": 1800},
+    "reference_evidence_id": "frame-002",
+    "created_at": "2026-10-03T00:00:01Z", "created_by": "operator-01",
+    "sha256": "d46b1ee66803682669ccb58cd41f7d53fe750bd60fbc3c8e786dc795db6d33b1"
+  },
+  "region_draft": {
+    "contract_version": "phone-search-region.v1",
+    "device_id": "arm-01", "version": 2,
+    "installation_binding": {"camera_id": "camera-01", "camera_device_unique_id": "USB/physical-camera-01", "camera_binding_id": "90000000-0000-4000-8000-000000000001", "arm_binding_id": "binding-arm-01"},
+    "source_size": {"width": 1000, "height": 2000},
+    "source_geometry_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rect": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+    "pixel_rect": {"left": 100, "top": 200, "right": 900, "bottom": 1800},
+    "reference_evidence_id": "frame-002",
+    "created_at": "2026-10-03T00:00:01Z", "created_by": "operator-01",
+    "sha256": "7a76ec88317ff4433367068ff7af01358282f3d7c3fe05b3b873ecb7ad310728"
+  },
+  "empty_pointer": {
+    "contract_version": "layout-pointer.v1", "device_id": "arm-01", "kind": "phone_search_region",
+    "revision": 0, "selected_version": null, "selected_sha256": null, "updated_at": null, "operation_id": null
+  },
+  "active_pointer": {
+    "contract_version": "layout-pointer.v1", "device_id": "arm-01", "kind": "phone_search_region",
+    "revision": 1, "selected_version": 1,
+    "selected_sha256": "d46b1ee66803682669ccb58cd41f7d53fe750bd60fbc3c8e786dc795db6d33b1",
+    "updated_at": "2026-10-03T00:00:01Z", "operation_id": "70000000-0000-4000-8000-000000000001"
+  },
+  "preview_request": {
+    "contract_version": "phone-search-region-preview.v1", "correlation_id": "60000000-0000-4000-8000-000000000001",
+    "rect": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8}, "source_evidence_id": "frame-001"
+  },
+  "preview": {
+    "contract_version": "phone-search-region-preview.v1", "correlation_id": "60000000-0000-4000-8000-000000000001",
+    "preview_id": "50000000-0000-4000-8000-000000000001",
+    "region_digest": "d008428a7226705d55ca7727161c7f662cb3d22ccfd58e8004f7a679957e4cea",
+    "rect": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.8},
+    "pixel_rect": {"left": 100, "top": 200, "right": 900, "bottom": 1800},
+    "source_binding": {
+      "device_id": "arm-01",
+      "installation_binding": {"camera_id": "camera-01", "camera_device_unique_id": "USB/physical-camera-01", "camera_binding_id": "90000000-0000-4000-8000-000000000001", "arm_binding_id": "binding-arm-01"},
+      "source_size": {"width": 1000, "height": 2000},
+      "source_geometry_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence_id": "frame-002", "source_session_id": "camera-source-epoch-01", "frame_seq": 2,
+      "source_captured_at": "2026-10-03T00:00:00Z", "server_received_at": "2026-10-03T00:00:00Z"
+    },
+    "detected_quad": [{"x": 200, "y": 300}, {"x": 800, "y": 300}, {"x": 800, "y": 1700}, {"x": 200, "y": 1700}],
+    "status": "verified", "reason_codes": [],
+    "created_at": "2026-10-03T00:00:00Z", "expires_at": "2026-10-03T00:02:00Z"
+  },
+  "save_request": {
+    "contract_version": "phone-search-region-write.v1", "correlation_id": "60000000-0000-4000-8000-000000000002",
+    "client_request_id": "80000000-0000-4000-8000-000000000001",
+    "expected_revision": 0, "preview_id": "50000000-0000-4000-8000-000000000001",
+    "region_digest": "d008428a7226705d55ca7727161c7f662cb3d22ccfd58e8004f7a679957e4cea",
+    "publish": true
+  },
+  "save_response": {
+    "contract_version": "phone-search-region-write.v1", "correlation_id": "60000000-0000-4000-8000-000000000002",
+    "operation_id": "70000000-0000-4000-8000-000000000001", "revision": 1,
+    "saved_version": 1, "selected_version": 1, "status": "verified", "replayed": false
+  },
+  "unregistered": {
+    "contract_version": "phone-search-region-read.v1", "correlation_id": "60000000-0000-4000-8000-000000000003",
+    "revision": 0, "selected": null, "pending_draft": null, "status": "unregistered", "reasons": []
+  },
+  "publication": {
+    "before": {"$fixture": "empty_pointer"}, "preview": {"$fixture": "preview"},
+    "request": {"$fixture": "save_request"}, "record": {"$fixture": "region"},
+    "response": {"$fixture": "save_response"}, "after": {"$fixture": "active_pointer"},
+    "principal_id": "operator-01", "preview_principal_id": "operator-01",
+    "device_idle": true, "binding_unchanged": true, "source_fresh": true, "now": "2026-10-03T00:00:01Z"
+  },
+  "handshake_request": {"contract_version": "ime-geometry.v1", "client_instance_id": "10000000-0000-4000-8000-000000000001", "imeGeometryVersion": 1},
+  "handshake_response": {"contract_version": "ime-geometry.v1", "runtime_session_id": "20000000-0000-4000-8000-000000000001"},
+  "handshake": {
+    "request": {"$fixture": "handshake_request"}, "response": {"$fixture": "handshake_response"},
+    "active_client_instance_id": null, "active_runtime_session_id": null, "retired_client_instance_ids": []
+  },
+  "display": {"display_id": 0, "width_px": 1080, "height_px": 2400, "rotation": 0, "density": 3},
+  "ime_snapshot": {
+    "contract_version": "ime-geometry.v1", "ime_device_id": "ime-arm-01",
+    "runtime_session_id": "20000000-0000-4000-8000-000000000001",
+    "view_instance_id": "30000000-0000-4000-8000-000000000001",
+    "seq": 5, "request_nonce": "40000000-0000-4000-8000-000000000001", "captured_uptime_ms": 5000,
+    "display": {"$fixture": "display"}, "layout_version": "keyboard-v1",
+    "keyboard_active": true, "geometry_valid": true,
+    "keyboard_bounds": {"left": 0, "top": 1600, "right": 1080, "bottom": 2300},
+    "current_task_id": "ime-task-001",
+    "targets": [
+      {"id": "ime_candidate_bar", "bounds": {"left": 24, "top": 1620, "right": 850, "bottom": 1740}, "visible": true, "enabled": true, "clickable": true},
+      {"id": "ime_delete_key", "bounds": {"left": 900, "top": 2000, "right": 1050, "bottom": 2150}, "visible": true, "enabled": true, "clickable": true}
+    ],
+    "reason": "snapshot"
+  },
+  "invalid_targets": [
+    {"id": "ime_candidate_bar", "bounds": null, "visible": false, "enabled": false, "clickable": false},
+    {"id": "ime_delete_key", "bounds": null, "visible": false, "enabled": false, "clickable": false}
+  ],
+  "poll_query": {"runtime_session_id": "20000000-0000-4000-8000-000000000001", "waitSeconds": 20},
+  "poll_response": {"contract_version": "ime-geometry.v1", "runtime_session_id": "20000000-0000-4000-8000-000000000001", "request_nonce": "40000000-0000-4000-8000-000000000001"},
+  "report_response": {"contract_version": "ime-geometry.v1", "accepted_seq": 5, "geometry_valid": true, "server_received_at": "2026-10-03T00:00:01Z"},
+  "nonce": {
+    "request_nonce": "40000000-0000-4000-8000-000000000001",
+    "runtime_session_id": "20000000-0000-4000-8000-000000000001",
+    "view_instance_id": "30000000-0000-4000-8000-000000000001",
+    "operation_id": "70000000-0000-4000-8000-000000000003", "issued_at_ms": 10000
+  },
+  "first_receipt": {
+    "runtime_session_id": "20000000-0000-4000-8000-000000000001",
+    "view_instance_id": "30000000-0000-4000-8000-000000000001",
+    "seq": 5, "snapshot_sha256": "6155046550d0d0cc746c071bf8be2e29fb5945e83bac1f5314360d1b20b3b2fb",
+    "server_received_at": "2026-10-03T00:00:01Z", "received_monotonic_ms": 10500,
+    "request_nonce": "40000000-0000-4000-8000-000000000001",
+    "nonce_issued_at_ms": 10000, "nonce_expires_at_ms": 12000
+  },
+  "acceptance": {
+    "snapshot": {"$fixture": "ime_snapshot"}, "authenticated_device_id": "ime-arm-01",
+    "active_runtime_session_id": "20000000-0000-4000-8000-000000000001",
+    "current_view_instance_id": "30000000-0000-4000-8000-000000000001", "retired_view_ids": [],
+    "max_seq": 4, "previous_snapshot_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "max_captured_uptime_ms": 4900, "pending_nonce": {"$fixture": "nonce"}, "now_ms": 10500,
+    "server_now": "2026-10-03T00:00:01Z", "first_receipt": null,
+    "receipt_after": {"$fixture": "first_receipt"}, "report_response": {"$fixture": "report_response"}
+  },
+  "current_acceptance": {
+    "snapshot": {"$fixture": "ime_snapshot"}, "authenticated_device_id": "ime-arm-01",
+    "active_runtime_session_id": "20000000-0000-4000-8000-000000000001",
+    "current_view_instance_id": "30000000-0000-4000-8000-000000000001", "retired_view_ids": [],
+    "max_seq": 5, "previous_snapshot_sha256": "6155046550d0d0cc746c071bf8be2e29fb5945e83bac1f5314360d1b20b3b2fb",
+    "max_captured_uptime_ms": 5000, "pending_nonce": {"$fixture": "nonce"}, "now_ms": 10500,
+    "server_now": "2026-10-03T00:00:01Z", "first_receipt": {"$fixture": "first_receipt"},
+    "receipt_after": {"$fixture": "first_receipt"}, "report_response": {"$fixture": "report_response"}
+  },
+  "contact": {
+    "acceptance": {"$fixture": "current_acceptance"}, "now_ms": 11000,
+    "operation_id": "70000000-0000-4000-8000-000000000003",
+    "target_id": "ime_candidate_bar", "owner_task_id": "ime-task-001",
+    "camera_matches": true, "expected_display": {"$fixture": "display"},
+    "expected_layout_version": "keyboard-v1", "input_claim_valid": true
+  },
+  "asset": {
+    "id": "reference", "relative_path": "assets/list/reference.png",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "media_type": "image/png", "width": 32, "height": 32
+  },
+  "relative_rect": {"dx": -0.1, "dy": 0.2, "width": 0.2, "height": 0.1},
+  "page_list": "wechat_list",
+  "page_hidden": "chat_ime_hidden",
+  "page_empty": "chat_ime_empty",
+  "page_text": "chat_ime_text",
+  "geometry_mode_live": "live_ime_v1",
+  "geometry_mode_legacy": "legacy_registered",
+  "all_region_reasons": [
+    "phone_not_located", "multiple_screen_candidates", "screen_outside_region",
+    "dark_screen", "occluded", "source_unavailable", "source_binding_changed",
+    "geometry_changed", "archive_invalid"
+  ],
+  "general_reasons": ["layout_permission_denied", "ime_geometry_session_stale"]
+}

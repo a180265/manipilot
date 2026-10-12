@@ -1,0 +1,186 @@
+{
+  "gesture_rules_version": "gesture-rules.v1",
+  "phone_trace_limits": {
+    "max_events_per_trace": 512,
+    "max_contact_ms": 8000,
+    "max_body_bytes": 65536,
+    "min_move_sample_interval_ms": 16,
+    "retry_attempts": 3,
+    "retry_delays_ms": [
+      250,
+      500,
+      1000
+    ],
+    "max_program_contact_ms": 8000,
+    "max_stroke_contact_ms": 5000
+  },
+  "command_timing": {
+    "expiry_ms": 10000,
+    "poll_interval_ms": 250,
+    "heartbeat_interval_ms": 500,
+    "collect_grace_ms": 3500,
+    "execution_timeout_margin_ms": 5000,
+    "execution_timeout_cap_ms": 15000
+  },
+  "self_test_budget": {
+    "timeout_ms": 600000,
+    "max_physical_actions": 36,
+    "consecutive_passes_required": 3,
+    "max_repeats_per_candidate": 3,
+    "lease_renew_interval_s": 20,
+    "waiting_phone_timeout_ms": 30000
+  },
+  "scroll_self_test": {
+    "reset_offset_fraction": 0.5,
+    "candidates": [
+      {
+        "id": "S1",
+        "x": 0.5,
+        "y_start": 0.75,
+        "y_end": 0.3,
+        "feed": 2250
+      },
+      {
+        "id": "S2",
+        "x": 0.5,
+        "y_start": 0.75,
+        "y_end": 0.3,
+        "feed": 1500
+      },
+      {
+        "id": "S3",
+        "x": 0.5,
+        "y_start": 0.75,
+        "y_end": 0.3,
+        "feed": 3000
+      }
+    ],
+    "pass_thresholds": {
+      "endpoint_tolerance_factor": 2,
+      "endpoint_tolerance_min_px": 12,
+      "path_deviation_percentile": 0.95,
+      "net_displacement_min_ratio": 0.8,
+      "reverse_max_ratio": 0.1,
+      "scroll_min_ratio": 0.15
+    }
+  },
+  "wechat_list_layout": {
+    "layout_version": "wechat-list-layout.v1",
+    "title_region": [
+      0,
+      0,
+      1,
+      0.18
+    ],
+    "tab_region": [
+      0,
+      0.78,
+      1,
+      1
+    ],
+    "chinese_tabs": [
+      "微信",
+      "通讯录",
+      "发现",
+      "我"
+    ],
+    "english_tabs": [
+      "WeChat",
+      "Contacts",
+      "Discover",
+      "Me"
+    ],
+    "min_tab_confidence": 0.85,
+    "list_top_gap_ratio": 0.03,
+    "list_bottom_gap_ratio": 0.04,
+    "list_left_ratio": 0.05,
+    "list_right_ratio": 0.95,
+    "min_list_height_ratio": 0.45
+  },
+  "scroll_observation": {
+    "max_corners": 200,
+    "quality_level": 0.01,
+    "min_distance": 8,
+    "block_size": 7,
+    "win_size": 21,
+    "max_level": 3,
+    "criteria_count": 30,
+    "criteria_eps": 0.01,
+    "max_forward_backward_error_px": 1.5,
+    "min_inliers": 12,
+    "min_retained_ratio": 0.7,
+    "max_horizontal_ratio": 0.03,
+    "max_dy_mad_ratio": 0.02,
+    "min_displacement_ratio": 0.04,
+    "ocr_row_position_tolerance_ratio": 0.04,
+    "max_frame_chain": 30,
+    "stationary": {
+      "median_ratio": 0.01,
+      "frames": 3,
+      "frame_interval_ms": 300,
+      "min_unique_ocr_rows": 3
+    }
+  },
+  "business_scroll_adjustment": {
+    "max_length_multiplier": 1.2,
+    "max_length_ratio_of_list": 0.55,
+    "allowed_adjustments": 1
+  },
+  "navigation_limits": {
+    "max_steps": 8,
+    "max_physical_actions": 8,
+    "timeout_ms": 90000,
+    "max_boundary_probes": 2
+  },
+  "system_back": {
+    "y_candidates": [
+      0.5,
+      0.4,
+      0.6
+    ],
+    "inward_lengths": [
+      0.2,
+      0.3
+    ],
+    "max_candidates": 6,
+    "min_intersection_width_factor": 2,
+    "min_intersection_width_px": 2,
+    "max_consecutive_passes": 3
+  },
+  "system_home": {
+    "x_candidates": [
+      0.5,
+      0.35,
+      0.65
+    ],
+    "inward_lengths": [
+      0.18,
+      0.28
+    ],
+    "max_candidates": 6
+  },
+  "launcher_template": {
+    "min_anchor_correlation": 0.92,
+    "best_vs_second_margin": 0.05,
+    "position_tolerance_ratio": 0.02,
+    "search_window_ratio": 0.03,
+    "min_anchor_size_px": 24,
+    "min_anchor_stddev": 10,
+    "min_anchors": 3,
+    "max_anchors": 6,
+    "stable_frames": 3,
+    "frame_interval_ms": 300
+  },
+  "double_tap": {
+    "interval_ms": 50,
+    "feed": 3000,
+    "consecutive_passes_required": 3,
+    "max_wait_first_contact_ms": 2000
+  },
+  "top_template": {
+    "min_regions": 1,
+    "max_regions": 3,
+    "stable_frames": 3,
+    "frame_interval_ms": 300
+  }
+}

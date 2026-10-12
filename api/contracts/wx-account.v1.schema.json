@@ -1,0 +1,420 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:wx:contract:wx-account.v1",
+  "title": "WX 人员账号与会话公开协议（R3-18/19，身份附件 W3）",
+  "type": "object",
+  "description": "严格 schema：所有请求/响应 additionalProperties=false，未声明字段一律拒绝（特别是 role、permissions、actor 与他人凭据）。运行时 parser 与 fixtures 必须加载本文件校验。",
+  "$defs": {
+    "RequestId": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "Username": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,31}$",
+      "description": "统一小写；首尾空白与大小写变体直接拒绝，不做静默归一"
+    },
+    "DisplayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "Password": {
+      "type": "string",
+      "minLength": 12,
+      "maxLength": 256
+    },
+    "Role": {
+      "enum": [
+        "admin",
+        "staff"
+      ]
+    },
+    "IsoTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "UserView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user_id",
+        "username",
+        "display_name",
+        "role",
+        "enabled",
+        "must_change_password",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "user_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F-]{36}$"
+        },
+        "username": {
+          "$ref": "#/$defs/Username"
+        },
+        "display_name": {
+          "$ref": "#/$defs/DisplayName"
+        },
+        "role": {
+          "$ref": "#/$defs/Role"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "must_change_password": {
+          "type": "boolean"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "created_at": {
+          "$ref": "#/$defs/IsoTimestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/IsoTimestamp"
+        }
+      },
+      "description": "只含展示与状态字段；不含任何口令派生参数、盐、摘要或会话令牌"
+    },
+    "Capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wx.business",
+        "wx.mark_read_only",
+        "wx.config"
+      ],
+      "properties": {
+        "wx.business": {
+          "const": true
+        },
+        "wx.mark_read_only": {
+          "const": true
+        },
+        "wx.config": {
+          "type": "boolean"
+        }
+      },
+      "description": "D06：两类角色业务同权；wx.config 仅 admin 为 true"
+    },
+    "ErrorCode": {
+      "enum": [
+        "invalid_request",
+        "password_invalid",
+        "authentication_required",
+        "permission_denied",
+        "csrf_invalid",
+        "origin_rejected",
+        "password_change_required",
+        "user_not_found",
+        "method_not_allowed",
+        "username_exists",
+        "revision_conflict",
+        "idempotency_conflict",
+        "auth_rate_limited",
+        "auth_unavailable",
+        "persistence_unavailable"
+      ],
+      "description": "wx-account-error.v1 闭集；禁止闭集之外的错误码"
+    },
+    "ErrorShell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "code",
+        "message",
+        "request_id"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "wx-account-error.v1"
+        },
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/RequestId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "SessionGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "request_id",
+        "user",
+        "capabilities",
+        "csrf_token",
+        "expires_at"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "wx-account.v1"
+        },
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "user": {
+          "$ref": "#/$defs/UserView"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "csrf_token": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 128
+        },
+        "expires_at": {
+          "$ref": "#/$defs/IsoTimestamp"
+        }
+      }
+    },
+    "LoginRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "username",
+        "password"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "LogoutRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        }
+      }
+    },
+    "LogoutResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "request_id",
+        "revoked"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "wx-account.v1"
+        },
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "revoked": {
+          "const": true
+        }
+      }
+    },
+    "PasswordChangeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "current_password",
+        "new_password"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "current_password": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "new_password": {
+          "$ref": "#/$defs/Password"
+        }
+      }
+    },
+    "PasswordChangeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "request_id",
+        "changed",
+        "reauthenticate"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "wx-account.v1"
+        },
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "changed": {
+          "const": true
+        },
+        "reauthenticate": {
+          "const": true
+        }
+      }
+    },
+    "UsersListResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "items"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "wx-account.v1"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UserView"
+          }
+        }
+      }
+    },
+    "UserCreateRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "username",
+        "display_name",
+        "initial_password"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "username": {
+          "$ref": "#/$defs/Username"
+        },
+        "display_name": {
+          "$ref": "#/$defs/DisplayName"
+        },
+        "initial_password": {
+          "$ref": "#/$defs/Password"
+        },
+        "description": "服务端固定 role=staff、must_change_password=true；body 中的 role/permissions/actor 字段按未声明字段拒绝"
+      }
+    },
+    "UserMutationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "request_id",
+        "user"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "wx-account.v1"
+        },
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "user": {
+          "$ref": "#/$defs/UserView"
+        }
+      }
+    },
+    "UserPatchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "expected_revision"
+      ],
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "request_id",
+                "expected_revision",
+                "enabled"
+              ]
+            },
+            {
+              "required": [
+                "request_id",
+                "expected_revision",
+                "display_name"
+              ]
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "display_name": {
+          "$ref": "#/$defs/DisplayName"
+        }
+      }
+    },
+    "ResetPasswordRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "expected_revision",
+        "temporary_password"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "temporary_password": {
+          "$ref": "#/$defs/Password"
+        }
+      }
+    }
+  }
+}

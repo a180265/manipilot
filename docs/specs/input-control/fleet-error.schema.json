@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:input-control:error",
+  "title": "Pending implementation: input-control Fleet errors",
+  "$ref": "#/definitions/body",
+  "definitions": {
+    "body": {
+      "type": "object", "additionalProperties": false, "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object", "additionalProperties": false,
+          "required": ["key", "title", "suggestion", "trace_id"],
+          "properties": {
+            "key": {"type": "string", "enum": [
+              "invalid_request", "unsupported_contract", "permission_denied", "device_not_found",
+              "revision_conflict", "request_conflict", "calibration_not_ready",
+              "input_binding_unavailable", "input_binding_mismatch", "input_revision_exhausted",
+              "input_settings_invalid", "input_settings_write_failed", "input_settings_commit_unknown",
+              "input_recovery_conflict", "input_recovery_busy", "input_recovery_issue_not_reviewable",
+              "input_recovery_write_failed", "input_recovery_commit_unknown", "input_control_not_ready",
+              "input_acceptance_removed", "legacy_request_replay_unavailable"
+            ]},
+            "title": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "[\\u3400-\\u9fff]"},
+            "suggestion": {"type": "string", "minLength": 1, "maxLength": 1000, "pattern": "[\\u3400-\\u9fff]"},
+            "trace_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+            "detail": {"type": "string", "minLength": 1, "maxLength": 2000}
+          }
+        }
+      }
+    },
+    "http_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["http_status", "body"],
+      "properties": {
+        "http_status": {"type": "integer", "enum": [400, 403, 404, 409, 410, 503]},
+        "body": {"$ref": "#/definitions/body"}
+      },
+      "allOf": [
+        {"if": {"properties": {"http_status": {"const": 400}}}, "then": {"properties": {"body": {"properties": {"error": {"properties": {"key": {"enum": ["invalid_request", "unsupported_contract"]}}}}}}}},
+        {"if": {"properties": {"http_status": {"const": 403}}}, "then": {"properties": {"body": {"properties": {"error": {"properties": {"key": {"const": "permission_denied"}}}}}}}},
+        {"if": {"properties": {"http_status": {"const": 404}}}, "then": {"properties": {"body": {"properties": {"error": {"properties": {"key": {"const": "device_not_found"}}}}}}}},
+        {"if": {"properties": {"http_status": {"const": 409}}}, "then": {"properties": {"body": {"properties": {"error": {"properties": {"key": {"enum": ["revision_conflict", "request_conflict", "calibration_not_ready", "input_binding_unavailable", "input_binding_mismatch", "input_revision_exhausted", "input_recovery_conflict", "input_recovery_busy", "input_recovery_issue_not_reviewable", "legacy_request_replay_unavailable"]}}}}}}}},
+        {"if": {"properties": {"http_status": {"const": 410}}}, "then": {"properties": {"body": {"properties": {"error": {"properties": {"key": {"const": "input_acceptance_removed"}}}}}}}},
+        {"if": {"properties": {"http_status": {"const": 503}}}, "then": {"properties": {"body": {"properties": {"error": {"properties": {"key": {"enum": ["input_settings_invalid", "input_settings_write_failed", "input_settings_commit_unknown", "input_recovery_write_failed", "input_recovery_commit_unknown", "input_control_not_ready"]}}}}}}}}
+      ]
+    },
+    "write_failure": {
+      "allOf": [
+        {"$ref": "#/definitions/http_response"},
+        {"properties": {"http_status": {"const": 503}, "body": {"properties": {"error": {"properties": {"key": {"enum": ["input_settings_write_failed", "input_settings_commit_unknown"]}}}}}}}
+      ]
+    }
+  }
+}

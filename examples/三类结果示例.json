@@ -1,0 +1,53 @@
+{
+  "comment": "task-result.v1 三类结果示例（已发送 / 明确失败 / 结果未知），由 Arm Fleet POST 到 WX 回调地址 /v1/arm-fleet/task-results。对账：WX 按 task_id 关联自己提交的 chat-send.v1（outbox_id ↔ task_id），每个 Outbox 恰好一个结果。",
+  "examples": [
+    {
+      "case": "已发送（发送成功、取证与归位完成）",
+      "payload": {
+        "task_id": "task-8f2a1b3c",
+        "status": "confirmed",
+        "status_display": "已发送",
+        "reported_at": "2026-08-30T10:00:05.123Z",
+        "contract_version": "task-result.v1",
+        "provider_message_id": "sim-msg-0001",
+        "sent_at": "2026-08-30T10:00:03.900Z",
+        "evidence_hash": "3f7a1c...（发送后截图 SHA-256）",
+        "home_check": {"home_ok": true, "checked_at": "2026-08-30T10:00:04.800Z"}
+      }
+    },
+    {
+      "case": "明确失败（打开会话与会话不一致，未输入未发送，平台不自动重试）",
+      "payload": {
+        "task_id": "task-9c4d2e55",
+        "status": "failed",
+        "status_display": "明确失败",
+        "reported_at": "2026-08-30T10:05:02.456Z",
+        "contract_version": "task-result.v1",
+        "error_category": "conversation_mismatch",
+        "retryable": false,
+        "evidence_hash": "9b2d4f...（失败现场截图 SHA-256）"
+      }
+    },
+    {
+      "case": "结果未知（输入过程中断连，消息是否发出无法确认，设备已自动暂停待人工）",
+      "payload": {
+        "task_id": "task-77aa01bb",
+        "status": "unknown",
+        "status_display": "结果未知",
+        "reported_at": "2026-08-30T10:10:08.001Z",
+        "contract_version": "task-result.v1",
+        "uncertainty_reason": "连接中断，动作结果无法确认：输入过程中连接中断，已输入内容无法确认",
+        "evidence_hash": "5c8e11...（中断前截图 SHA-256）"
+      }
+    }
+  ],
+  "common_failed_categories": {
+    "account_mismatch": "账号不匹配",
+    "conversation_mismatch": "会话不匹配",
+    "text_hash_mismatch": "文字哈希不匹配",
+    "captcha_or_risk": "验证码或风控页",
+    "wechat_not_logged_in": "微信未登录",
+    "camera_unavailable": "摄像头不可用",
+    "driver_motion_failed": "运动失败"
+  }
+}

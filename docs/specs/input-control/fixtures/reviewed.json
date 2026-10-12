@@ -1,0 +1,50 @@
+[
+  {
+    "name": "guard-reviewed-no-phone-ack",
+    "schema": "input-record.schema.json",
+    "value": {
+      "record_version": "input-control-record.v1", "record_id": "guard:机械臂-甲",
+      "device_id": "机械臂-甲", "kind": "device_guard", "revision": 4,
+      "created_at": "2026-10-03T10:00:00+08:00", "updated_at": "2026-10-03T10:03:00+08:00",
+      "issues": [
+        {
+          "issue_id": "问题-取消", "code": "ime_cancel_pending", "owner_id": "owner:task:任务-甲",
+          "effect_id": "effect:737c1cdc46a34e6e38369e2653dd6834dece02d084bc499e9f7504219b0cacf8",
+          "state": "resolved", "opened_at": "2026-10-03T10:01:00+08:00",
+          "resolved_at": "2026-10-03T10:03:00+08:00",
+          "resolution": {"method": "human_review", "client_request_id": "请求-核对", "reviewed_at": "2026-10-03T10:03:00+08:00"}
+        },
+        {
+          "issue_id": "问题-编辑框", "code": "editor_review_required", "owner_id": "owner:task:任务-甲",
+          "effect_id": null, "state": "resolved", "opened_at": "2026-10-03T10:01:00+08:00",
+          "resolved_at": "2026-10-03T10:03:00+08:00",
+          "resolution": {"method": "human_review", "client_request_id": "请求-核对", "reviewed_at": "2026-10-03T10:03:00+08:00"}
+        }
+      ],
+      "settings_checkpoint": {"revision": 2, "digest": "39a2f33403e4d948ffe9f9183fbc3b5b6e8084990e574671bb8d87efa2a54753"},
+      "binding_change": null,
+      "review_requests": {
+        "请求-核对": {
+          "request_digest": "fe7f742cad45c713e6e4200ba3ecf9c1d5ebef0b7d2682e66e1890551cf2ff80",
+          "normalized_request": {
+            "contract_version": "input-recovery-review.v1", "expected_recovery_revision": 3,
+            "ime_device_id": "手机-甲", "issue_ids": ["问题-取消", "问题-编辑框"],
+            "candidate_removed": true, "editor_checked": true,
+            "operator_id": "值班员甲", "role": "responder", "reason": "已核对旧候选与编辑框",
+            "correlation_id": "关联-核对", "client_request_id": "请求-核对"
+          },
+          "call_context": {"origin": "human_review", "operator_id": "值班员甲", "role": "responder", "operation_id": null},
+          "original_issues": [
+            {"issue_id": "问题-取消", "code": "ime_cancel_pending", "owner_id": "owner:task:任务-甲", "effect_id": "effect:737c1cdc46a34e6e38369e2653dd6834dece02d084bc499e9f7504219b0cacf8", "state": "open", "opened_at": "2026-10-03T10:01:00+08:00", "resolved_at": null, "resolution": null},
+            {"issue_id": "问题-编辑框", "code": "editor_review_required", "owner_id": "owner:task:任务-甲", "effect_id": null, "state": "open", "opened_at": "2026-10-03T10:01:00+08:00", "resolved_at": null, "resolution": null}
+          ],
+          "reviewed_at": "2026-10-03T10:03:00+08:00",
+          "original_response": {
+            "contract_version": "input-recovery-review.v1", "device_id": "机械臂-甲",
+            "issue_ids": ["问题-取消", "问题-编辑框"], "recovery_revision": 4, "input_recovery_required": false
+          }
+        }
+      }
+    }
+  }
+]

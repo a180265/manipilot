@@ -1,0 +1,260 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:input-control:record",
+  "title": "Pending implementation: input-control-record.v1",
+  "oneOf": [
+    {"$ref": "#/definitions/owner"}, {"$ref": "#/definitions/effect"},
+    {"$ref": "#/definitions/device_guard"}, {"$ref": "#/definitions/settings_write"}
+  ],
+  "definitions": {
+    "owner": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record_version", "record_id", "device_id", "kind", "revision", "created_at", "updated_at", "owner_type", "owner_ref", "ime_device_id", "settings_revision", "binding_revision", "payload_digest", "admitted_at", "revocation", "revoked_at_revision"],
+      "properties": {
+        "record_version": {"type": "string", "const": "input-control-record.v1"},
+        "record_id": {"$ref": "urn:wx:design:input-control:common#/definitions/owner_id"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "kind": {"type": "string", "const": "owner"},
+        "revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "created_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "owner_type": {"type": "string", "enum": ["fleet_task", "direct_ime"]},
+        "owner_ref": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "settings_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "binding_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        "payload_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "admitted_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "revocation": {"type": "string", "enum": ["active", "revoked"]},
+        "revoked_at_revision": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"}, {"type": "null"}]}
+      },
+      "allOf": [{
+        "if": {"properties": {"revocation": {"const": "active"}}},
+        "then": {"properties": {"revoked_at_revision": {"type": "null"}}},
+        "else": {"properties": {"revoked_at_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"}}}
+      }]
+    },
+    "slot_key": {
+      "type": "array", "minItems": 3, "maxItems": 3, "additionalItems": false,
+      "items": [
+        {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])"},
+        {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        {"$ref": "urn:wx:design:input-control:common#/definitions/effect_kind"}
+      ]
+    },
+    "receipt_observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "event", "evidence", "recorded_at", "input_effect_not_started", "motion_not_started", "ime_status", "typed_character_count", "command_id"],
+      "properties": {
+        "source": {"type": "string", "enum": ["ime_repository", "ime_phone", "driver", "input_control"]},
+        "event": {"type": "string", "enum": ["call_result", "task_observation", "control_ack", "not_delivered", "repository_absent", "repository_cancelled"]},
+        "evidence": {"$ref": "urn:wx:design:input-control:common#/definitions/evidence"},
+        "recorded_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "input_effect_not_started": {"type": "boolean"},
+        "motion_not_started": {"type": ["boolean", "null"]},
+        "ime_status": {"type": ["string", "null"], "enum": ["pending", "displayed", "typing", "inserted", "typing_failed", "cancel_requested", "cancelled", null]},
+        "typed_character_count": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_count"},
+        "command_id": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"event": {"const": "control_ack"}}},
+          "then": {"properties": {
+            "source": {"const": "ime_phone"},
+            "command_id": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+            "typed_character_count": {"$ref": "urn:wx:design:input-control:common#/definitions/typed_count"},
+            "ime_status": {"enum": ["cancelled", "inserted", "typing_failed"]}, "input_effect_not_started": {"const": false}
+          }},
+          "else": {"properties": {"command_id": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"event": {"enum": ["not_delivered", "repository_absent"]}}},
+          "then": {"properties": {"input_effect_not_started": {"const": true}}}
+        }
+      ]
+    },
+    "receipt": {
+      "type": "object", "additionalProperties": false, "required": ["observations"],
+      "properties": {"observations": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/receipt_observation"}}}
+    },
+    "effect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record_version", "record_id", "device_id", "kind", "revision", "created_at", "updated_at", "owner_id", "slot_key", "effect_kind", "payload_digest", "state", "prepared_at", "claimed_at", "finished_at", "receipt", "ime_task_id", "cancel_state", "typed_character_count"],
+      "properties": {
+        "record_version": {"type": "string", "const": "input-control-record.v1"},
+        "record_id": {"$ref": "urn:wx:design:input-control:common#/definitions/effect_id"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "kind": {"type": "string", "const": "effect"},
+        "revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "created_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "owner_id": {"$ref": "urn:wx:design:input-control:common#/definitions/owner_id"},
+        "slot_key": {"$ref": "#/definitions/slot_key"},
+        "effect_kind": {"$ref": "urn:wx:design:input-control:common#/definitions/effect_kind"},
+        "payload_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "state": {"type": "string", "enum": ["prepared", "claimed", "completed", "not_started", "unknown"]},
+        "prepared_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "claimed_at": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_time"},
+        "finished_at": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_time"},
+        "receipt": {"anyOf": [{"$ref": "#/definitions/receipt"}, {"type": "null"}]},
+        "ime_task_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "cancel_state": {"type": "string", "enum": ["none", "requested", "waiting_ack", "confirmed", "not_created", "unknown"]},
+        "typed_character_count": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_count"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"effect_kind": {"enum": ["ime_create", "ime_deliver", "ime_start"]}}},
+          "then": {"properties": {
+            "ime_task_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+            "typed_character_count": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/typed_count"}, {"type": "null"}]}
+          }},
+          "else": {"properties": {"ime_task_id": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"effect_kind": {"not": {"const": "ime_create"}}}},
+          "then": {"properties": {"cancel_state": {"const": "none"}}}
+        },
+        {
+          "if": {"properties": {"state": {"const": "prepared"}}},
+          "then": {"properties": {"claimed_at": {"type": "null"}, "finished_at": {"type": "null"}, "receipt": {"type": "null"}, "cancel_state": {"const": "none"}, "typed_character_count": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"state": {"enum": ["claimed", "unknown"]}}},
+          "then": {"properties": {"claimed_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}, "finished_at": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"state": {"const": "completed"}}},
+          "then": {"properties": {
+            "claimed_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+            "finished_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+            "receipt": {"$ref": "#/definitions/receipt"}
+          }}
+        },
+        {
+          "if": {"properties": {"state": {"const": "not_started"}}},
+          "then": {"properties": {"finished_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}, "receipt": {"$ref": "#/definitions/receipt"}}}
+        },
+        {
+          "if": {"properties": {"cancel_state": {"const": "confirmed"}}},
+          "then": {"properties": {
+            "typed_character_count": {"$ref": "urn:wx:design:input-control:common#/definitions/typed_count"},
+            "receipt": {"allOf": [{"$ref": "#/definitions/receipt"}, {"properties": {"observations": {"contains": {"properties": {"event": {"const": "control_ack"}}}}}}]}
+          }}
+        }
+      ]
+    },
+    "resolution": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["method", "client_request_id", "reviewed_at"],
+          "properties": {
+            "method": {"type": "string", "const": "human_review"},
+            "client_request_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+            "reviewed_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["method", "evidence", "reconciled_at"],
+          "properties": {
+            "method": {"type": "string", "const": "fact_reconciliation"},
+            "evidence": {"$ref": "urn:wx:design:input-control:common#/definitions/evidence"},
+            "reconciled_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}
+          }
+        }
+      ]
+    },
+    "issue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["issue_id", "code", "owner_id", "effect_id", "state", "opened_at", "resolved_at", "resolution"],
+      "properties": {
+        "issue_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "code": {"$ref": "urn:wx:design:input-control:common#/definitions/issue_code"},
+        "owner_id": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/owner_id"}, {"type": "null"}]},
+        "effect_id": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/effect_id"}, {"type": "null"}]},
+        "state": {"type": "string", "enum": ["open", "resolved"]},
+        "opened_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "resolved_at": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_time"},
+        "resolution": {"anyOf": [{"$ref": "#/definitions/resolution"}, {"type": "null"}]}
+      },
+      "allOf": [{
+        "if": {"properties": {"state": {"const": "open"}}},
+        "then": {"properties": {"resolved_at": {"type": "null"}, "resolution": {"type": "null"}}},
+        "else": {"properties": {"resolved_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}, "resolution": {"$ref": "#/definitions/resolution"}}}
+      }]
+    },
+    "checkpoint": {
+      "type": "object", "additionalProperties": false, "required": ["revision", "digest"],
+      "properties": {"revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"}, "digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"}}
+    },
+    "binding_change": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation_id", "old_ime_device_id", "new_ime_device_id", "phase"],
+      "properties": {
+        "operation_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "old_ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "new_ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "phase": {"type": "string", "enum": ["prepared", "closed", "reconciling", "applied"]}
+      }
+    },
+    "device_guard": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record_version", "record_id", "device_id", "kind", "revision", "created_at", "updated_at", "issues", "settings_checkpoint", "binding_change", "review_requests"],
+      "properties": {
+        "record_version": {"type": "string", "const": "input-control-record.v1"},
+        "record_id": {"type": "string", "minLength": 7, "maxLength": 262, "pattern": "^guard:\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "kind": {"type": "string", "const": "device_guard"},
+        "revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "created_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "issues": {"type": "array", "items": {"$ref": "#/definitions/issue"}},
+        "settings_checkpoint": {"anyOf": [{"$ref": "#/definitions/checkpoint"}, {"type": "null"}]},
+        "binding_change": {"anyOf": [{"$ref": "#/definitions/binding_change"}, {"type": "null"}]},
+        "review_requests": {
+          "type": "object", "additionalProperties": false,
+          "propertyNames": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+          "patternProperties": {"^\\S(?:[\\s\\S]*\\S)?$": {"$ref": "urn:wx:design:input-control:review#/definitions/review_entry"}}
+        }
+      }
+    },
+    "write_failure": {
+      "type": "object", "additionalProperties": false, "required": ["stage", "occurred_at", "response"],
+      "properties": {
+        "stage": {"type": "string", "enum": ["before_replace", "commit_uncertain", "recovery_open_aborted"]},
+        "occurred_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "response": {"$ref": "urn:wx:design:input-control:error#/definitions/write_failure"}
+      }
+    },
+    "settings_write": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record_version", "record_id", "device_id", "kind", "revision", "created_at", "updated_at", "normalized_request", "call_context", "before_digest", "after_digest", "before_revision", "after_revision", "proposed_file", "original_response", "state", "failure"],
+      "properties": {
+        "record_version": {"type": "string", "const": "input-control-record.v1"},
+        "record_id": {"type": "string", "pattern": "^write:[a-f0-9]{64}$(?![\\s\\S])"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "kind": {"type": "string", "const": "settings_write"},
+        "revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "created_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "normalized_request": {"$ref": "urn:wx:design:input-control:settings#/definitions/normalized_request"},
+        "call_context": {"$ref": "urn:wx:design:input-control:common#/definitions/call_context"},
+        "before_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "after_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "before_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"},
+        "after_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "proposed_file": {"$ref": "urn:wx:design:input-control:settings#/definitions/file"},
+        "original_response": {"$ref": "urn:wx:design:input-control:settings#/definitions/original_success"},
+        "state": {"type": "string", "enum": ["prepared", "applied", "aborted"]},
+        "failure": {"anyOf": [{"$ref": "#/definitions/write_failure"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "aborted"}}},
+          "then": {"properties": {"failure": {"$ref": "#/definitions/write_failure"}}}
+        }
+      ]
+    }
+  }
+}

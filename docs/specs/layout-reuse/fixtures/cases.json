@@ -1,0 +1,183 @@
+[
+  {"name": "region-record", "family": "region", "definition": "record", "base": "region", "valid": true},
+  {"name": "pointer-empty", "family": "region", "definition": "pointer", "base": "empty_pointer", "valid": true},
+  {"name": "pointer-selected", "family": "region", "definition": "pointer", "base": "active_pointer", "valid": true},
+  {"name": "preview-request", "family": "region", "definition": "preview_request", "base": "preview_request", "valid": true},
+  {"name": "preview-verified", "family": "region", "definition": "preview_response", "base": "preview", "valid": true},
+  {"name": "preview-needs-review", "family": "region", "definition": "preview_response", "base": "preview", "valid": true, "set": [{"path": "/status", "value": "needs_review"}, {"path": "/detected_quad", "value": null}, {"path": "/reason_codes", "value": ["phone_not_located"]}]},
+  {"name": "save-request", "family": "region", "definition": "save_request", "base": "save_request", "valid": true},
+  {"name": "save-response", "family": "region", "definition": "save_response", "base": "save_response", "valid": true},
+  {"name": "read-unregistered", "family": "region", "definition": "get_response", "base": "unregistered", "valid": true},
+  {"name": "publish-first-region", "family": "region", "definition": "publication_case", "base": "publication", "valid": true},
+  {"name": "draft-preserves-existing-pointer", "family": "region", "definition": "publication_case", "base": "publication", "valid": true, "set": [
+    {"path": "/before", "value": {"$fixture": "active_pointer"}},
+    {"path": "/record", "value": {"$fixture": "region_draft"}},
+    {"path": "/request/publish", "value": false}, {"path": "/request/expected_revision", "value": 1},
+    {"path": "/preview/status", "value": "needs_review"}, {"path": "/preview/detected_quad", "value": null}, {"path": "/preview/reason_codes", "value": ["phone_not_located"]},
+    {"path": "/response/saved_version", "value": 2}, {"path": "/response/status", "value": "draft_saved"},
+    {"path": "/device_idle", "value": false}
+  ]},
+  {"name": "region-bool-version", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "schema:", "set": [{"path": "/version", "value": true}]},
+  {"name": "region-float-version", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "schema:", "set": [{"path": "/version", "value": 1.0}]},
+  {"name": "region-overflow", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "rect:x_overflow", "set": [{"path": "/rect/width", "value": 0.95}]},
+  {"name": "region-zero-height", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "schema:", "set": [{"path": "/rect/height", "value": 0}]},
+  {"name": "region-rounding-disagreement", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "region:pixel_rect_mismatch", "set": [{"path": "/pixel_rect/left", "value": 101}]},
+  {"name": "region-less-than-four-pixels", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "region:too_narrow", "set": [{"path": "/rect/width", "value": 0.003}, {"path": "/pixel_rect/right", "value": 103}]},
+  {"name": "region-bad-hash", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "region:digest_mismatch", "set": [{"path": "/created_by", "value": "other-operator"}]},
+  {"name": "region-roi-corners-forbidden", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "schema:", "set": [{"path": "/roi_corners", "value": [[0, 0], [1, 0], [1, 1], [0, 1]]}]},
+  {"name": "region-unsafe-device-path", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "schema:", "set": [{"path": "/device_id", "value": "../arm-01"}]},
+  {"name": "region-empty-camera-id", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "schema:", "set": [{"path": "/installation_binding/camera_device_unique_id", "value": " "}]},
+  {"name": "region-missing-camera-binding-instance", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "schema:", "delete": ["/installation_binding/camera_binding_id"]},
+  {"name": "region-global-revision-not-binding-instance", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "schema:", "set": [{"path": "/installation_binding/camera_binding_id", "value": 2}]},
+  {"name": "region-rebinding-cannot-relabel-old-record", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "region:digest_mismatch", "set": [{"path": "/installation_binding/camera_binding_id", "value": "90000000-0000-4000-8000-000000000002"}]},
+  {"name": "preview-rebinding-cannot-relabel-old-evidence", "family": "region", "definition": "preview_response", "base": "preview", "valid": false, "error": "preview:digest_mismatch", "set": [{"path": "/source_binding/installation_binding/camera_binding_id", "value": "90000000-0000-4000-8000-000000000002"}]},
+  {"name": "region-missing-pixel-rect", "family": "region", "definition": "record", "base": "region", "valid": false, "error": "schema:", "delete": ["/pixel_rect"]},
+  {"name": "pointer-null-selected-hash", "family": "region", "definition": "pointer", "base": "active_pointer", "valid": false, "error": "schema:", "set": [{"path": "/selected_sha256", "value": null}]},
+  {"name": "pointer-revision-zero-not-selected", "family": "region", "definition": "pointer", "base": "active_pointer", "valid": false, "error": "schema:", "set": [{"path": "/revision", "value": 0}]},
+  {"name": "preview-quad-on-crop-edge", "family": "region", "definition": "preview_response", "base": "preview", "valid": false, "error": "preview:quad_touches_crop", "set": [{"path": "/detected_quad/0/x", "value": 100}]},
+  {"name": "preview-self-crossing-quad", "family": "region", "definition": "preview_response", "base": "preview", "valid": false, "error": "preview:quad_not_clockwise_convex", "set": [{"path": "/detected_quad", "value": [{"x": 200, "y": 300}, {"x": 800, "y": 1700}, {"x": 800, "y": 300}, {"x": 200, "y": 1700}]}]},
+  {"name": "preview-false-pass", "family": "region", "definition": "preview_response", "base": "preview", "valid": false, "error": "schema:", "set": [{"path": "/detected_quad", "value": null}]},
+  {"name": "preview-expiry-extension", "family": "region", "definition": "preview_response", "base": "preview", "valid": false, "error": "preview:lifetime", "set": [{"path": "/expires_at", "value": "2026-10-03T00:03:00Z"}]},
+  {"name": "preview-timestamp-no-zone", "family": "region", "definition": "preview_response", "base": "preview", "valid": false, "error": "schema:", "set": [{"path": "/expires_at", "value": "2026-10-03T00:02:00"}]},
+  {"name": "save-client-sets-author", "family": "region", "definition": "save_request", "base": "save_request", "valid": false, "error": "schema:", "set": [{"path": "/created_by", "value": "operator-01"}]},
+  {"name": "save-cas-conflict", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:cas_conflict", "set": [{"path": "/request/expected_revision", "value": 1}]},
+  {"name": "save-expired-preview", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:preview_expired", "set": [{"path": "/now", "value": "2026-10-03T00:02:00Z"}]},
+  {"name": "save-busy-device", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:device_busy", "set": [{"path": "/device_idle", "value": false}]},
+  {"name": "save-other-principal", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:principal_mismatch", "set": [{"path": "/principal_id", "value": "operator-02"}]},
+  {"name": "save-binding-changed", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:binding_or_source", "set": [{"path": "/binding_unchanged", "value": false}]},
+  {"name": "save-source-stale", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:binding_or_source", "set": [{"path": "/source_fresh", "value": false}]},
+  {"name": "save-unverified-publish", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:preview_unverified", "set": [{"path": "/preview/status", "value": "needs_review"}, {"path": "/preview/detected_quad", "value": null}, {"path": "/preview/reason_codes", "value": ["multiple_screen_candidates"]}]},
+  {"name": "save-draft-cannot-change-pointer", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:draft_changed_pointer", "set": [{"path": "/request/publish", "value": false}, {"path": "/response/status", "value": "draft_saved"}]},
+  {"name": "save-revision-skipped", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:revision_step", "set": [{"path": "/after/revision", "value": 2}, {"path": "/response/revision", "value": 2}]},
+  {"name": "save-different-preview", "family": "region", "definition": "publication_case", "base": "publication", "valid": false, "error": "save:preview_mismatch", "set": [{"path": "/request/preview_id", "value": "50000000-0000-4000-8000-000000000002"}]},
+  {"name": "get-missing-archive-not-unregistered", "family": "region", "definition": "get_response", "base": "unregistered", "valid": false, "error": "get:selection_revision", "set": [{"path": "/revision", "value": 1}]},
+  {"name": "ime-handshake-first", "family": "ime", "definition": "handshake_case", "base": "handshake", "valid": true},
+  {"name": "ime-handshake-replay", "family": "ime", "definition": "handshake_case", "base": "handshake", "valid": true, "set": [{"path": "/active_client_instance_id", "value": "10000000-0000-4000-8000-000000000001"}, {"path": "/active_runtime_session_id", "value": "20000000-0000-4000-8000-000000000001"}]},
+  {"name": "ime-handshake-retired-client", "family": "ime", "definition": "handshake_case", "base": "handshake", "valid": false, "error": "ime:retired_client", "set": [{"path": "/retired_client_instance_ids", "value": ["10000000-0000-4000-8000-000000000001"]}]},
+  {"name": "ime-handshake-bool-capability", "family": "ime", "definition": "handshake_request", "base": "handshake_request", "valid": false, "error": "schema:", "set": [{"path": "/imeGeometryVersion", "value": true}]},
+  {"name": "ime-handshake-empty-client", "family": "ime", "definition": "handshake_request", "base": "handshake_request", "valid": false, "error": "schema:", "set": [{"path": "/client_instance_id", "value": ""}]},
+  {"name": "ime-handshake-session-null", "family": "ime", "definition": "handshake_response", "base": "handshake_response", "valid": false, "error": "schema:", "set": [{"path": "/runtime_session_id", "value": null}]},
+  {"name": "ime-poll-query", "family": "ime", "definition": "poll_query", "base": "poll_query", "valid": true},
+  {"name": "ime-poll-response", "family": "ime", "definition": "poll_response", "base": "poll_response", "valid": true},
+  {"name": "ime-report-response", "family": "ime", "definition": "report_response", "base": "report_response", "valid": true},
+  {"name": "ime-poll-session-required", "family": "ime", "definition": "poll_query", "base": "poll_query", "valid": false, "error": "schema:", "delete": ["/runtime_session_id"]},
+  {"name": "ime-poll-null-nonce", "family": "ime", "definition": "poll_response", "base": "poll_response", "valid": false, "error": "schema:", "set": [{"path": "/request_nonce", "value": null}]},
+  {"name": "ime-valid-active-snapshot", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": true},
+  {"name": "ime-valid-layout-event", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": true, "set": [{"path": "/reason", "value": "layout_ready"}, {"path": "/request_nonce", "value": null}]},
+  {"name": "ime-active-invalid-layout", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": true, "set": [{"path": "/reason", "value": "layout_changed"}, {"path": "/request_nonce", "value": null}, {"path": "/geometry_valid", "value": false}, {"path": "/keyboard_bounds", "value": null}, {"path": "/targets", "value": {"$fixture": "invalid_targets"}}]},
+  {"name": "ime-hidden-state", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": true, "set": [{"path": "/reason", "value": "hidden"}, {"path": "/request_nonce", "value": null}, {"path": "/keyboard_active", "value": false}, {"path": "/geometry_valid", "value": false}, {"path": "/keyboard_bounds", "value": null}, {"path": "/targets", "value": {"$fixture": "invalid_targets"}}]},
+  {"name": "ime-destroyed-state", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": true, "set": [{"path": "/reason", "value": "destroyed"}, {"path": "/request_nonce", "value": null}, {"path": "/keyboard_active", "value": false}, {"path": "/geometry_valid", "value": false}, {"path": "/keyboard_bounds", "value": null}, {"path": "/targets", "value": {"$fixture": "invalid_targets"}}]},
+  {"name": "ime-task-null-is-allowed-for-idle-preview", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": true, "set": [{"path": "/current_task_id", "value": null}]},
+  {"name": "ime-bool-seq", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/seq", "value": true}]},
+  {"name": "ime-empty-session", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/runtime_session_id", "value": ""}]},
+  {"name": "ime-empty-view", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/view_instance_id", "value": ""}]},
+  {"name": "ime-empty-task-not-null", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/current_task_id", "value": ""}]},
+  {"name": "ime-nonce-empty-not-null", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/request_nonce", "value": ""}]},
+  {"name": "ime-snapshot-null-nonce", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/request_nonce", "value": null}]},
+  {"name": "ime-event-nonce-forbidden", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/reason", "value": "task_changed"}]},
+  {"name": "ime-negative-bound", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/targets/0/bounds/left", "value": -1}]},
+  {"name": "ime-target-outside-display", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "bounds:x_order_or_overflow", "set": [{"path": "/targets/0/bounds/right", "value": 1081}]},
+  {"name": "ime-target-reversed", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "bounds:x_order_or_overflow", "set": [{"path": "/targets/0/bounds/right", "value": 20}]},
+  {"name": "ime-target-outside-keyboard", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "ime:target_outside_keyboard", "set": [{"path": "/targets/0/bounds/top", "value": 1500}]},
+  {"name": "ime-hidden-clickable", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/targets/0/visible", "value": false}]},
+  {"name": "ime-disabled-clickable", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/targets/0/enabled", "value": false}]},
+  {"name": "ime-duplicate-target", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "ime:target_ids", "set": [{"path": "/targets/1/id", "value": "ime_candidate_bar"}]},
+  {"name": "ime-hidden-valid-geometry", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/reason", "value": "hidden"}, {"path": "/request_nonce", "value": null}]},
+  {"name": "ime-text-forbidden", "family": "ime", "definition": "snapshot", "base": "ime_snapshot", "valid": false, "error": "schema:", "set": [{"path": "/text", "value": "must-not-be-here"}]},
+  {"name": "ime-first-report", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": true},
+  {"name": "ime-identical-replay", "family": "ime", "definition": "acceptance_case", "base": "current_acceptance", "valid": true},
+  {"name": "ime-old-session-report", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": false, "error": "ime:session_stale", "set": [{"path": "/active_runtime_session_id", "value": "20000000-0000-4000-8000-000000000002"}]},
+  {"name": "ime-old-view-report", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": false, "error": "ime:view_retired", "set": [{"path": "/retired_view_ids", "value": ["30000000-0000-4000-8000-000000000001"]}]},
+  {"name": "ime-low-seq-report", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": false, "error": "ime:sequence_stale", "set": [{"path": "/snapshot/seq", "value": 3}]},
+  {"name": "ime-same-seq-different-body", "family": "ime", "definition": "acceptance_case", "base": "current_acceptance", "valid": false, "error": "ime:sequence_conflict", "set": [{"path": "/snapshot/captured_uptime_ms", "value": 5001}]},
+  {"name": "ime-nonce-unrequested", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": false, "error": "ime:nonce_missing", "set": [{"path": "/pending_nonce", "value": null}]},
+  {"name": "ime-nonce-expired", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": false, "error": "ime:nonce_expired", "set": [{"path": "/now_ms", "value": 12001}]},
+  {"name": "ime-first-answer-after-one-second", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": false, "error": "ime:first_answer_late", "set": [{"path": "/now_ms", "value": 11001}]},
+  {"name": "ime-nonce-wrong-view", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": false, "error": "ime:nonce_view", "set": [{"path": "/pending_nonce/view_instance_id", "value": "30000000-0000-4000-8000-000000000002"}]},
+  {"name": "ime-candidate-contact-evidence", "family": "ime", "definition": "contact_case", "base": "contact", "valid": true},
+  {"name": "ime-delete-owner-task-not-required", "family": "ime", "definition": "contact_case", "base": "contact", "valid": true, "set": [{"path": "/target_id", "value": "ime_delete_key"}, {"path": "/owner_task_id", "value": null}]},
+  {"name": "ime-snapshot-too-old-at-contact", "family": "ime", "definition": "contact_case", "base": "contact", "valid": false, "error": "ime:snapshot_expired", "set": [{"path": "/now_ms", "value": 11501}]},
+  {"name": "ime-contact-newer-seq-exists", "family": "ime", "definition": "contact_case", "base": "contact", "valid": false, "error": "ime:sequence_stale", "set": [{"path": "/acceptance/max_seq", "value": 6}]},
+  {"name": "ime-contact-other-owner", "family": "ime", "definition": "contact_case", "base": "contact", "valid": false, "error": "ime:candidate_task_mismatch", "set": [{"path": "/owner_task_id", "value": "ime-task-002"}]},
+  {"name": "ime-contact-other-operation", "family": "ime", "definition": "contact_case", "base": "contact", "valid": false, "error": "ime:nonce_operation", "set": [{"path": "/operation_id", "value": "70000000-0000-4000-8000-000000000004"}]},
+  {"name": "ime-contact-input-closed", "family": "ime", "definition": "contact_case", "base": "contact", "valid": false, "error": "ime:input_claim_revoked", "set": [{"path": "/input_claim_valid", "value": false}]},
+  {"name": "ime-contact-camera-unknown", "family": "ime", "definition": "contact_case", "base": "contact", "valid": false, "error": "ime:camera_mismatch", "set": [{"path": "/camera_matches", "value": false}]},
+  {"name": "ime-contact-rotation-changed", "family": "ime", "definition": "contact_case", "base": "contact", "valid": false, "error": "ime:display_mismatch", "set": [{"path": "/expected_display/rotation", "value": 90}]},
+  {"name": "asset-safe-name", "family": "common", "definition": "asset", "base": "asset", "valid": true},
+  {"name": "asset-traversal", "family": "common", "definition": "asset", "base": "asset", "valid": false, "error": "schema:", "set": [{"path": "/relative_path", "value": "assets/../secret.png"}]},
+  {"name": "asset-absolute", "family": "common", "definition": "asset", "base": "asset", "valid": false, "error": "schema:", "set": [{"path": "/relative_path", "value": "/tmp/secret.png"}]},
+  {"name": "asset-remote", "family": "common", "definition": "asset", "base": "asset", "valid": false, "error": "schema:", "set": [{"path": "/relative_path", "value": "https://example.invalid/a.png"}]},
+  {"name": "asset-backslash", "family": "common", "definition": "asset", "base": "asset", "valid": false, "error": "schema:", "set": [{"path": "/relative_path", "value": "assets\\a.png"}]},
+  {"name": "asset-percent-encoded-traversal", "family": "common", "definition": "asset", "base": "asset", "valid": false, "error": "schema:", "set": [{"path": "/relative_path", "value": "assets/%2e%2e/secret.png"}]},
+  {"name": "asset-media-extension-mismatch", "family": "common", "definition": "asset", "base": "asset", "valid": false, "error": "asset:media_mismatch", "set": [{"path": "/media_type", "value": "image/jpeg"}]},
+  {"name": "relative-rect-dx-dy", "family": "common", "definition": "relative_rect", "base": "relative_rect", "valid": true},
+  {"name": "relative-old-x-rejected", "family": "common", "definition": "relative_rect", "base": "relative_rect", "valid": false, "error": "schema:", "set": [{"path": "/x", "value": 0}]},
+  {"name": "page-list-enum", "family": "common", "definition": "page_state", "base": "page_list", "valid": true},
+  {"name": "page-hidden-enum", "family": "common", "definition": "page_state", "base": "page_hidden", "valid": true},
+  {"name": "page-empty-enum", "family": "common", "definition": "page_state", "base": "page_empty", "valid": true},
+  {"name": "page-text-enum", "family": "common", "definition": "page_state", "base": "page_text", "valid": true},
+  {"name": "geometry-mode-live", "family": "common", "definition": "keyboard_geometry_mode", "base": "geometry_mode_live", "valid": true},
+  {"name": "geometry-mode-legacy", "family": "common", "definition": "keyboard_geometry_mode", "base": "geometry_mode_legacy", "valid": true},
+  {"name": "ime-view-change-increments-seq", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": true, "set": [
+    {"path": "/snapshot/view_instance_id", "value": "30000000-0000-4000-8000-000000000002"},
+    {"path": "/snapshot/reason", "value": "layout_ready"}, {"path": "/snapshot/request_nonce", "value": null},
+    {"path": "/receipt_after/view_instance_id", "value": "30000000-0000-4000-8000-000000000002"},
+    {"path": "/receipt_after/snapshot_sha256", "value": "990794d6a0c65faa2fe96220c222dd00c5be6739dd54c7cbd5185e1f8b98bbd2"},
+    {"path": "/receipt_after/request_nonce", "value": null},
+    {"path": "/receipt_after/nonce_issued_at_ms", "value": null}, {"path": "/receipt_after/nonce_expires_at_ms", "value": null}
+  ]},
+  {"name": "ime-view-change-must-not-reset-seq", "family": "ime", "definition": "acceptance_case", "base": "acceptance", "valid": false, "error": "ime:sequence_stale", "set": [
+    {"path": "/snapshot/view_instance_id", "value": "30000000-0000-4000-8000-000000000002"},
+    {"path": "/snapshot/reason", "value": "layout_ready"}, {"path": "/snapshot/request_nonce", "value": null}, {"path": "/snapshot/seq", "value": 1}
+  ]},
+  {"name": "ime-new-client-must-not-reuse-session", "family": "ime", "definition": "handshake_case", "base": "handshake", "valid": false, "error": "ime:new_client_reused_session", "set": [
+    {"path": "/active_client_instance_id", "value": "10000000-0000-4000-8000-000000000002"},
+    {"path": "/active_runtime_session_id", "value": "20000000-0000-4000-8000-000000000001"}
+  ]},
+  {"name": "ime-repeated-handshake-keeps-session", "family": "ime", "definition": "handshake_case", "base": "handshake", "valid": false, "error": "ime:handshake_replay_changed_session", "set": [
+    {"path": "/active_client_instance_id", "value": "10000000-0000-4000-8000-000000000001"},
+    {"path": "/active_runtime_session_id", "value": "20000000-0000-4000-8000-000000000002"}
+  ]},
+  {"name": "ime-replay-after-one-second-keeps-original-receipt", "family": "ime", "definition": "acceptance_case", "base": "current_acceptance", "valid": true, "set": [
+    {"path": "/now_ms", "value": 11600}, {"path": "/server_now", "value": "2026-10-03T00:00:02.1Z"}
+  ]},
+  {"name": "ime-replay-after-one-second-still-cannot-click", "family": "ime", "definition": "contact_case", "base": "contact", "valid": false, "error": "ime:snapshot_expired", "set": [
+    {"path": "/acceptance/now_ms", "value": 11600},
+    {"path": "/acceptance/server_now", "value": "2026-10-03T00:00:02.1Z"},
+    {"path": "/now_ms", "value": 11600}
+  ]},
+  {"name": "ime-replay-cannot-refresh-monotonic-time", "family": "ime", "definition": "acceptance_case", "base": "current_acceptance", "valid": false, "error": "ime:replay_receipt_changed", "set": [
+    {"path": "/now_ms", "value": 11600}, {"path": "/receipt_after/received_monotonic_ms", "value": 11600}
+  ]},
+  {"name": "ime-replay-cannot-refresh-wall-time", "family": "ime", "definition": "acceptance_case", "base": "current_acceptance", "valid": false, "error": "ime:replay_receipt_changed", "set": [
+    {"path": "/now_ms", "value": 11600}, {"path": "/receipt_after/server_received_at", "value": "2026-10-03T00:00:02.1Z"}
+  ]},
+  {"name": "ime-replay-cannot-refresh-ack-time", "family": "ime", "definition": "acceptance_case", "base": "current_acceptance", "valid": false, "error": "ime:ack_time_refreshed", "set": [
+    {"path": "/now_ms", "value": 11600}, {"path": "/report_response/server_received_at", "value": "2026-10-03T00:00:02.1Z"}
+  ]},
+  {"name": "ime-replay-cannot-extend-nonce-deadline", "family": "ime", "definition": "acceptance_case", "base": "current_acceptance", "valid": false, "error": "ime:replay_receipt_changed", "set": [
+    {"path": "/receipt_after/nonce_expires_at_ms", "value": 13000}
+  ]},
+  {"name": "ime-replay-cannot-reset-nonce-issue-time", "family": "ime", "definition": "acceptance_case", "base": "current_acceptance", "valid": false, "error": "ime:nonce_clock_changed", "set": [
+    {"path": "/now_ms", "value": 11600}, {"path": "/pending_nonce/issued_at_ms", "value": 11200}
+  ]},
+  {"name": "ime-replay-needs-first-receipt", "family": "ime", "definition": "acceptance_case", "base": "current_acceptance", "valid": false, "error": "ime:replay_receipt_missing", "set": [
+    {"path": "/first_receipt", "value": null}
+  ]},
+  {"name": "ime-contact-cannot-supply-fresh-receive-time", "family": "ime", "definition": "contact_case", "base": "contact", "valid": false, "error": "schema:", "set": [
+    {"path": "/received_at_ms", "value": 11000}
+  ]},
+  {"name": "ime-first-receipt-record", "family": "ime", "definition": "receipt", "base": "first_receipt", "valid": true},
+  {"name": "ime-first-receipt-deadline-mismatch", "family": "ime", "definition": "receipt", "base": "first_receipt", "valid": false, "error": "ime:nonce_deadline_changed", "set": [
+    {"path": "/nonce_expires_at_ms", "value": 12001}
+  ]},
+  {"name": "region-all-nine-reasons", "family": "region", "definition": "reason_codes", "base": "all_region_reasons", "valid": true},
+  {"name": "general-reasons-not-restricted-to-region", "family": "common", "definition": "reason_codes", "base": "general_reasons", "valid": true},
+  {"name": "region-rejects-general-error-codes", "family": "region", "definition": "reason_codes", "base": "general_reasons", "valid": false, "error": "schema:"},
+  {"name": "preview-rejects-old-reason-alias", "family": "region", "definition": "preview_response", "base": "preview", "valid": false, "error": "schema:", "set": [
+    {"path": "/status", "value": "needs_review"}, {"path": "/detected_quad", "value": null}, {"path": "/reason_codes", "value": ["screen_not_found"]}
+  ]},
+  {"name": "region-get-rejects-unknown-reason", "family": "region", "definition": "get_response", "base": "unregistered", "valid": false, "error": "schema:", "set": [
+    {"path": "/status", "value": "needs_review"}, {"path": "/reasons", "value": ["arbitrary_reason"]}
+  ]}
+]

@@ -1,0 +1,190 @@
+{
+  "plugin_id": "screen-ime-adapter",
+  "name_display": "屏幕输入法适配插件",
+  "version": "1.1.0",
+  "vendor": "Arm Fleet 屏幕输入适配（移植自 AI_demo K40InputMethod/K40TaskServer）",
+  "description": "把文本经手机输入法候选栏安全下发到屏幕（机械臂只点一次候选，输入法按人工节奏逐字输入），并通过输入法校准页采集机械臂到屏幕的仿射映射。平台核心不包含输入法业务流程，本插件通过标准插件接口安装、审查和卸载。",
+  "entry_module": "plugin.py",
+  "test_fixture": "fake-arm + 内嵌屏幕输入法服务（仿真手机输入法由测试夹具模拟）",
+  "task_types": [
+    {
+      "task_type": "screen_input",
+      "name_display": "屏幕文字输入任务",
+      "confirmed_display": "已输入",
+      "capability": "screen.text_input",
+      "risk_level": "中",
+      "result_contract": "task-result.v1",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "text",
+          "ime_device_id"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "原样输入文本（协议不改写）"
+          },
+          "text_hash": {
+            "type": "string",
+            "description": "SHA-256（UTF-8 十六进制小写），可选，校验文本未被改写"
+          },
+          "ime_device_id": {
+            "type": "string",
+            "description": "输入法设备编号（手机端心跳使用的 deviceId）"
+          },
+          "typing_speed": {
+            "type": "string",
+            "enum": [
+              "slow",
+              "normal",
+              "fast",
+              "random"
+            ],
+            "description": "输入速度档位，缺省 random"
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "等待已显示/已输入的长轮询秒数，缺省 20"
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "确认输入法在线且键盘激活 → 下发文本到候选栏并核对返回内容 → 机械臂点击候选 → 等待输入法逐字输入完成 → 取证",
+      "entry_conditions": "输入法设备最近 45 秒内有心跳且 keyboardActive=true；手机停留在目标应用的普通文本框",
+      "exit_conditions": "输入法任务 inserted（已输入）或进入 typing_failed/cancelled 等明确终态",
+      "failure_handling": "设备离线或键盘关闭为明确失败；返回内容与原文不一致拒绝执行（协议不改写文本）；输入中失败回报已输入字符数，不自动重试，由人工确认屏幕残留内容"
+    },
+    {
+      "task_type": "screen_calibration",
+      "name_display": "屏幕校准采样任务",
+      "confirmed_display": "已完成",
+      "capability": "screen.calibration",
+      "risk_level": "高",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "ime_device_id"
+        ],
+        "properties": {
+          "ime_device_id": {
+            "type": "string",
+            "description": "输入法设备编号"
+          },
+          "anchor_robot_x": {
+            "type": "number",
+            "description": "首个采样点机械 X（缺省使用仿真锚点；真机由 GRBL MPos 读取）"
+          },
+          "anchor_robot_y": {
+            "type": "number",
+            "description": "首个采样点机械 Y"
+          },
+          "move_step_mm": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "采样点间距（毫米），缺省 15"
+          },
+          "residual_threshold_px": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "仿射拟合残差阈值（像素），缺省 3"
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "等待校准页打开/触点回报的轮询秒数，缺省 20"
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "创建校准会话 → 等待手机校准页打开 → 三点不共线采样（布防、机械臂受控短按、手机回报像素）→ 仿射拟合与残差校验 → 按 deviceId 保存映射",
+      "entry_conditions": "输入法设备在线；手机已手动打开输入法校准页；机械臂处于悬停安全高度",
+      "exit_conditions": "会话 completed 且映射保存成功，或会话取消/残差超限等明确失败",
+      "failure_handling": "校准页未打开、触点无匹配布防、样本共线或残差超限均为明确失败且不写入正式映射；手机回报 closed 立即清除布防；真机运动前仍受平台硬件安全门禁限制"
+    },
+    {
+      "task_type": "screen_type",
+      "name_display": "屏幕键盘逐字输入任务",
+      "confirmed_display": "已输入",
+      "capability": "screen.keyboard_type",
+      "risk_level": "高",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "text",
+          "ime_device_id"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 60,
+            "description": "要打的文本（受逐键点击节奏限制，建议短文本）"
+          },
+          "ime_device_id": {
+            "type": "string",
+            "description": "校准映射所属设备编号（screen-mappings 键）"
+          },
+          "layout": {
+            "type": "object",
+            "description": "键盘布局模板（region+rows 归一化坐标）；缺省用内置英文 26 键 QWERTY"
+          },
+          "pace_ms": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 3000,
+            "description": "每键间隔毫秒，缺省 350"
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "不装输入法，机械臂直接在手机系统键盘上逐字打字：校准映射（机械↔屏幕）+ 键盘布局模板（字符→键位）+ 逆变换 → 逐键绝对坐标点击",
+      "entry_conditions": "该设备已有有效校准映射；手机停留在目标应用且键盘布局与模板一致（机型/方向/候选栏状态）",
+      "exit_conditions": "文本逐键点完或中途失败（未知字符/布局不符/映射缺失为明确失败）",
+      "failure_handling": "映射缺失、布局缺键为明确失败且立即停止；机械臂中途异常按平台规则转结果未知；不自动重试"
+    }
+  ],
+  "capabilities": [
+    "arm.click",
+    "arm.home",
+    "arm.stop",
+    "camera.capture",
+    "input.ime_create"
+  ],
+  "resources": {
+    "devices": {
+      "mode": "assigned",
+      "description": "由任务指定机械臂设备；输入法设备编号由任务 payload 指定"
+    },
+    "camera": true,
+    "input": false,
+    "arm": true,
+    "external_services": [
+      {
+        "name": "screen-ime-service",
+        "purpose": "Arm Fleet 进程内嵌的屏幕输入法任务服务（/api/v1/* 设备侧协议，仅限可信局域网）；插件通过进程内接口读写任务与校准会话"
+      }
+    ],
+    "data_scope": {
+      "reads_customer_message_text": false,
+      "writes_customer_data": false,
+      "sends_external_messages": false,
+      "note": "仅处理任务给定文本与校准采样坐标；文本原样转发不改写，不保存业务副本"
+    }
+  },
+  "evidence": {
+    "screenshot_required": true,
+    "home_check_required": true
+  },
+  "limits": {
+    "max_actions_per_task": 240,
+    "max_tasks_per_hour": 60
+  }
+}

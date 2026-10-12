@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arm-fleet.local/contracts/ime-pairing.v1.schema.json",
+  "title": "ime-pairing.v1",
+  "type": "object",
+  "$defs": {
+    "request_id": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$"},
+    "uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "invite_secret": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+    "credential_token": {"type": "string", "minLength": 32, "maxLength": 128},
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "error"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "request_id": {"type": ["string", "null"]},
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {"enum": ["invalid_request", "authentication_required",
+                              "phone_scope_denied", "pairing_not_found",
+                              "method_not_allowed", "invitation_consumed",
+                              "phone_already_paired", "pairing_pending",
+                              "revision_conflict", "idempotency_conflict",
+                              "invitation_expired", "pairing_expired",
+                              "rate_limited", "persistence_unavailable",
+                              "clock_untrusted"]},
+            "message": {"type": "string"}
+          }
+        }
+      }
+    },
+    "trust_material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["https_origin", "spki_sha256"],
+      "properties": {
+        "https_origin": {"type": "string", "pattern": "^https://"},
+        "ca_cert_b64": {"type": "string"},
+        "spki_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "server_id": {"type": "string"}
+      }
+    },
+    "invitation_created": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "request_id", "invitation_id",
+                   "server_id", "expires_at", "status", "trust"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "request_id": {"$ref": "#/$defs/request_id"},
+        "invitation_id": {"$ref": "#/$defs/uuid"},
+        "server_id": {"type": "string"},
+        "expires_at": {"type": "string"},
+        "status": {"enum": ["offered"]},
+        "arm_id": {"type": ["string", "null"]},
+        "trust": {"$ref": "#/$defs/trust_material"},
+        "replayed": {"type": "boolean"}
+      }
+    },
+    "invitation_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "invitation_id", "status", "expires_at"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "invitation_id": {"$ref": "#/$defs/uuid"},
+        "status": {"enum": ["offered", "consumed", "expired", "revoked"]},
+        "expires_at": {"type": "string"},
+        "arm_id": {"type": ["string", "null"]},
+        "created_at": {"type": "string"},
+        "consumed_by_pairing": {"type": ["string", "null"]}
+      }
+    },
+    "phone_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ime_device_id", "phone_instance_id", "state",
+                   "revision", "credential_generation"],
+      "properties": {
+        "ime_device_id": {"type": "string"},
+        "phone_instance_id": {"type": "string"},
+        "phone_label": {"type": ["string", "null"]},
+        "state": {"enum": ["pending", "active", "revoked"]},
+        "revision": {"type": "integer", "minimum": 1},
+        "credential_generation": {"type": "integer", "minimum": 1},
+        "pairing_id": {"type": ["string", "null"]},
+        "binding_summary": {"type": ["string", "null"]},
+        "updated_at": {"type": "string"}
+      }
+    },
+    "phone_revoke_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "request_id", "expected_revision", "reason"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "request_id": {"$ref": "#/$defs/request_id"},
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    },
+    "phone_revoke_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "request_id", "ime_device_id",
+                   "state", "revision", "credential_generation"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "request_id": {"$ref": "#/$defs/request_id"},
+        "ime_device_id": {"type": "string"},
+        "state": {"enum": ["revoked"]},
+        "revision": {"type": "integer", "minimum": 1},
+        "credential_generation": {"type": "integer", "minimum": 1},
+        "replayed": {"type": "boolean"}
+      }
+    },
+    "pairing_confirm_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "request_id", "invitation_id",
+                   "invite_secret", "phone_instance_id", "phone_label",
+                   "credential_id", "credential_token"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "request_id": {"$ref": "#/$defs/request_id"},
+        "invitation_id": {"$ref": "#/$defs/uuid"},
+        "invite_secret": {"$ref": "#/$defs/invite_secret"},
+        "phone_instance_id": {"type": "string", "minLength": 8, "maxLength": 128},
+        "phone_label": {"type": "string", "minLength": 1, "maxLength": 64},
+        "credential_id": {"$ref": "#/$defs/uuid"},
+        "credential_token": {"$ref": "#/$defs/credential_token"}
+      }
+    },
+    "pairing_confirm_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "request_id", "pairing_id",
+                   "ime_device_id", "state", "revision", "activation_deadline"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "request_id": {"$ref": "#/$defs/request_id"},
+        "pairing_id": {"$ref": "#/$defs/request_id"},
+        "ime_device_id": {"type": "string"},
+        "state": {"enum": ["pending"]},
+        "revision": {"type": "integer", "minimum": 1},
+        "activation_deadline": {"type": "string"},
+        "server_id": {"type": "string"},
+        "replayed": {"type": "boolean"}
+      }
+    },
+    "pairing_activate_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "request_id", "expected_revision"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "request_id": {"$ref": "#/$defs/request_id"},
+        "expected_revision": {"type": "integer", "minimum": 1}
+      }
+    },
+    "pairing_activate_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "request_id", "pairing_id",
+                   "ime_device_id", "state", "credential_id",
+                   "generation", "revision"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "request_id": {"$ref": "#/$defs/request_id"},
+        "pairing_id": {"type": "string"},
+        "ime_device_id": {"type": "string"},
+        "state": {"enum": ["active"]},
+        "credential_id": {"$ref": "#/$defs/uuid"},
+        "generation": {"type": "integer", "minimum": 1},
+        "revision": {"type": "integer", "minimum": 1},
+        "replayed": {"type": "boolean"}
+      }
+    },
+    "pairing_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "pairing_id", "ime_device_id", "state"],
+      "properties": {
+        "contract_version": {"const": "ime-pairing.v1"},
+        "pairing_id": {"type": "string"},
+        "ime_device_id": {"type": "string"},
+        "state": {"enum": ["pending", "active", "expired", "revoked"]},
+        "revision": {"type": "integer"},
+        "activation_deadline": {"type": ["string", "null"]},
+        "credential_id": {"type": ["string", "null"]},
+        "generation": {"type": ["integer", "null"]}
+      }
+    }
+  }
+}

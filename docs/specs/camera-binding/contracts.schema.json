@@ -1,0 +1,343 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:camera-binding:v2",
+  "$comment": "Documentation-only design. Definitions are complete projections, not replacements for unchanged mechanical model fields.",
+  "$ref": "#/definitions/binding_file",
+  "definitions": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+    "uuid": {"type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "time": {"type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T.*(?:Z|[+-]\\d{2}:\\d{2})$"},
+    "uint": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "ns": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "nullable_uuid": {"anyOf": [{"$ref": "#/definitions/uuid"}, {"type": "null"}]},
+    "nullable_id": {"anyOf": [{"$ref": "#/definitions/id"}, {"type": "null"}]},
+    "nullable_time": {"anyOf": [{"$ref": "#/definitions/time"}, {"type": "null"}]},
+    "size": {
+      "type": "object", "additionalProperties": false, "required": ["width", "height"],
+      "properties": {"width": {"$ref": "#/definitions/positive"}, "height": {"$ref": "#/definitions/positive"}}
+    },
+    "crop": {
+      "type": "object", "additionalProperties": false, "required": ["left", "top", "right", "bottom"],
+      "properties": {"left": {"$ref": "#/definitions/uint"}, "top": {"$ref": "#/definitions/uint"}, "right": {"$ref": "#/definitions/positive"}, "bottom": {"$ref": "#/definitions/positive"}}
+    },
+    "source_geometry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "input_size", "format_id", "crop", "rotation_degrees", "mirror_x", "mirror_y", "output_size", "resampler", "zoom_milli", "stabilization"],
+      "properties": {
+        "contract_version": {"const": "source-geometry.v1"}, "input_size": {"$ref": "#/definitions/size"},
+        "format_id": {"type": "string", "pattern": "^fourcc:[0-9a-f]{8};size:[1-9][0-9]*x[1-9][0-9]*;pixel-aspect:[1-9][0-9]*/[1-9][0-9]*$"},
+        "crop": {"$ref": "#/definitions/crop"}, "rotation_degrees": {"type": "integer", "enum": [0, 90, 180, 270]},
+        "mirror_x": {"type": "boolean"}, "mirror_y": {"type": "boolean"}, "output_size": {"$ref": "#/definitions/size"},
+        "resampler": {"enum": ["none", "area", "bilinear"]}, "zoom_milli": {"type": "integer", "minimum": 1000},
+        "stabilization": {"const": "off"}
+      }
+    },
+    "legacy_binding": {
+      "type": "object", "additionalProperties": false, "required": ["cameraId", "deviceUniqueId", "displayName", "boundAt", "boundBy"],
+      "properties": {
+        "cameraId": {"$ref": "#/definitions/id"}, "deviceUniqueId": {"$ref": "#/definitions/id"},
+        "displayName": {"$ref": "#/definitions/id"}, "boundAt": {"$ref": "#/definitions/nullable_time"}, "boundBy": {"$ref": "#/definitions/nullable_id"}
+      }
+    },
+    "binding_record": {
+      "type": "object", "additionalProperties": false, "required": ["cameraId", "deviceUniqueId", "cameraBindingId", "displayName", "boundAt", "boundBy"],
+      "properties": {
+        "cameraId": {"$ref": "#/definitions/id"}, "deviceUniqueId": {"$ref": "#/definitions/id"},
+        "cameraBindingId": {"$ref": "#/definitions/uuid"}, "displayName": {"$ref": "#/definitions/id"},
+        "boundAt": {"$ref": "#/definitions/nullable_time"}, "boundBy": {"$ref": "#/definitions/nullable_id"}
+      }
+    },
+    "legacy_binding_file": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "revision", "bindings"],
+      "properties": {"schemaVersion": {"type": "integer", "const": 1}, "revision": {"$ref": "#/definitions/uint"}, "bindings": {"type": "array", "maxItems": 128, "items": {"$ref": "#/definitions/legacy_binding"}}}
+    },
+    "binding_file": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "revision", "bindings"],
+      "properties": {"schemaVersion": {"type": "integer", "const": 2}, "revision": {"$ref": "#/definitions/uint"}, "bindings": {"type": "array", "maxItems": 128, "items": {"$ref": "#/definitions/binding_record"}}}
+    },
+    "binding_view": {
+      "type": "object", "additionalProperties": false, "required": ["contract_version", "camera_id", "device_id", "revision", "binding", "status"],
+      "properties": {
+        "contract_version": {"const": "camera-binding.v2"}, "camera_id": {"$ref": "#/definitions/id"}, "device_id": {"$ref": "#/definitions/id"},
+        "revision": {"$ref": "#/definitions/uint"}, "binding": {"anyOf": [{"$ref": "#/definitions/binding_record"}, {"type": "null"}]},
+        "status": {"enum": ["bound", "unbound"]}
+      }
+    },
+    "binding_write_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "request_id", "expected_revision", "expected_binding_id", "device_unique_id", "display_name"],
+      "properties": {
+        "contract_version": {"const": "camera-binding-write.v2"}, "request_id": {"$ref": "#/definitions/uuid"},
+        "expected_revision": {"$ref": "#/definitions/uint"}, "expected_binding_id": {"$ref": "#/definitions/nullable_uuid"},
+        "device_unique_id": {"$ref": "#/definitions/id"}, "display_name": {"$ref": "#/definitions/id"}
+      }
+    },
+    "binding_renew_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "request_id", "expected_revision", "expected_binding_id", "reason"],
+      "properties": {
+        "contract_version": {"const": "camera-binding-renew.v2"}, "request_id": {"$ref": "#/definitions/uuid"},
+        "expected_revision": {"$ref": "#/definitions/uint"}, "expected_binding_id": {"$ref": "#/definitions/uuid"},
+        "reason": {"const": "installation_moved"}
+      }
+    },
+    "binding_remove_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "request_id", "expected_revision", "expected_binding_id"],
+      "properties": {
+        "contract_version": {"const": "camera-binding-remove.v2"}, "request_id": {"$ref": "#/definitions/uuid"},
+        "expected_revision": {"$ref": "#/definitions/uint"}, "expected_binding_id": {"$ref": "#/definitions/uuid"}
+      }
+    },
+    "binding_write_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "request_id", "camera_id", "revision", "binding", "status", "replayed"],
+      "properties": {
+        "contract_version": {"const": "camera-binding-write-result.v2"}, "request_id": {"$ref": "#/definitions/uuid"},
+        "camera_id": {"$ref": "#/definitions/id"}, "revision": {"$ref": "#/definitions/uint"},
+        "binding": {"anyOf": [{"$ref": "#/definitions/binding_record"}, {"type": "null"}]},
+        "status": {"enum": ["changed", "unchanged", "metadata_changed", "unbound", "installation_changed"]}, "replayed": {"type": "boolean"}
+      }
+    },
+    "error": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "request_id", "code", "message", "motion_started", "retryable"],
+      "properties": {
+        "contract_version": {"const": "camera-binding-error.v2"}, "request_id": {"$ref": "#/definitions/nullable_uuid"},
+        "code": {"enum": ["camera_not_found", "camera_operation_not_found", "camera_permission_denied", "camera_request_invalid", "camera_binding_conflict", "camera_device_busy", "camera_request_conflict", "camera_archive_invalid", "camera_storage_failed", "camera_commit_unknown", "source_session_expired", "source_binding_changed", "source_geometry_changed", "source_frame_conflict", "source_sequence_invalid", "source_timing_unproven", "source_unavailable", "device_context_expired"]},
+        "message": {"$ref": "#/definitions/id"}, "motion_started": {"const": false}, "retryable": {"const": false}
+      }
+    },
+    "binding_operation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "request_id", "camera_id", "principal_id", "request_sha256", "kind", "before", "after", "before_sha256", "after_sha256", "phase", "response", "error", "created_at", "updated_at"],
+      "properties": {
+        "contract_version": {"const": "camera-binding-operation.v2"}, "request_id": {"$ref": "#/definitions/uuid"},
+        "camera_id": {"$ref": "#/definitions/nullable_id"}, "principal_id": {"$ref": "#/definitions/id"}, "request_sha256": {"$ref": "#/definitions/sha"},
+        "kind": {"enum": ["bind", "metadata", "renew", "unbind", "migrate"]},
+        "before": {"oneOf": [{"$ref": "#/definitions/legacy_binding_file"}, {"$ref": "#/definitions/binding_file"}]},
+        "after": {"$ref": "#/definitions/binding_file"}, "before_sha256": {"$ref": "#/definitions/sha"}, "after_sha256": {"$ref": "#/definitions/sha"},
+        "phase": {"enum": ["prepared", "committed", "aborted", "unknown"]},
+        "response": {"anyOf": [{"$ref": "#/definitions/binding_write_response"}, {"type": "null"}]},
+        "error": {"anyOf": [{"$ref": "#/definitions/error"}, {"type": "null"}]},
+        "created_at": {"$ref": "#/definitions/time"}, "updated_at": {"$ref": "#/definitions/time"}
+      }
+    },
+    "binding_operation_view": {
+      "type": "object", "additionalProperties": false, "required": ["contract_version", "request_id", "kind", "phase", "response", "error"],
+      "properties": {
+        "contract_version": {"const": "camera-binding-operation-view.v2"}, "request_id": {"$ref": "#/definitions/uuid"},
+        "kind": {"enum": ["bind", "metadata", "renew", "unbind", "migrate"]},
+        "phase": {"enum": ["prepared", "committed", "aborted", "unknown"]},
+        "response": {"anyOf": [{"$ref": "#/definitions/binding_write_response"}, {"type": "null"}]},
+        "error": {"anyOf": [{"$ref": "#/definitions/error"}, {"type": "null"}]}
+      }
+    },
+    "capture_session_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "request_id", "server_instance_id", "client_instance_id", "replaces_generation_id", "device_unique_id", "camera_binding_id", "geometry", "clock_registration_id"],
+      "properties": {
+        "contract_version": {"const": "camera-capture-session.v2"}, "request_id": {"$ref": "#/definitions/uuid"}, "client_instance_id": {"$ref": "#/definitions/uuid"},
+        "server_instance_id": {"$ref": "#/definitions/uuid"}, "replaces_generation_id": {"$ref": "#/definitions/nullable_uuid"},
+        "device_unique_id": {"$ref": "#/definitions/id"}, "camera_binding_id": {"$ref": "#/definitions/uuid"},
+        "geometry": {"$ref": "#/definitions/source_geometry"}, "clock_registration_id": {"$ref": "#/definitions/uuid"}
+      }
+    },
+    "capture_session_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "request_id", "server_instance_id", "camera_id", "device_id", "camera_binding_id", "source_geometry_id", "source_generation_id", "source_clock_id", "created_at"],
+      "properties": {
+        "contract_version": {"const": "camera-capture-session.v2"}, "request_id": {"$ref": "#/definitions/uuid"},
+        "server_instance_id": {"$ref": "#/definitions/uuid"},
+        "camera_id": {"$ref": "#/definitions/id"}, "device_id": {"$ref": "#/definitions/id"}, "camera_binding_id": {"$ref": "#/definitions/uuid"},
+        "source_geometry_id": {"$ref": "#/definitions/sha"}, "source_generation_id": {"$ref": "#/definitions/uuid"},
+        "source_clock_id": {"type": "string", "pattern": "^mach-absolute:[0-9a-f]{64}$"}, "created_at": {"$ref": "#/definitions/time"}
+      }
+    },
+    "capture_session_view": {
+      "type": "object", "additionalProperties": false, "required": ["contract_version", "server_instance_id", "camera_id", "active_session"],
+      "properties": {
+        "contract_version": {"const": "camera-capture-session-view.v2"},
+        "server_instance_id": {"$ref": "#/definitions/uuid"}, "camera_id": {"$ref": "#/definitions/id"},
+        "active_session": {"anyOf": [{"$ref": "#/definitions/capture_session_response"}, {"type": "null"}]}
+      }
+    },
+    "binding_snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["device_id", "camera_id", "device_unique_id", "camera_binding_id", "source_geometry_id", "binding_revision", "width", "height"],
+      "properties": {
+        "device_id": {"$ref": "#/definitions/id"}, "camera_id": {"$ref": "#/definitions/id"}, "device_unique_id": {"$ref": "#/definitions/id"},
+        "camera_binding_id": {"$ref": "#/definitions/uuid"}, "source_geometry_id": {"$ref": "#/definitions/sha"},
+        "binding_revision": {"$ref": "#/definitions/uint"}, "width": {"$ref": "#/definitions/positive"}, "height": {"$ref": "#/definitions/positive"}
+      }
+    },
+    "frame_receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "source", "source_generation_id", "source_capture_seq", "frame_seq", "jpeg_sha256", "received_at", "replayed"],
+      "properties": {
+        "contract_version": {"const": "camera-frame-receipt.v2"}, "source": {"$ref": "#/definitions/binding_snapshot"},
+        "source_generation_id": {"$ref": "#/definitions/uuid"}, "source_capture_seq": {"$ref": "#/definitions/uint"},
+        "frame_seq": {"$ref": "#/definitions/positive"}, "jpeg_sha256": {"$ref": "#/definitions/sha"},
+        "received_at": {"$ref": "#/definitions/time"}, "replayed": {"type": "boolean"}
+      }
+    },
+    "source_frame": {
+      "type": "object", "additionalProperties": false,
+      "required": ["device_id", "camera_id", "device_unique_id", "camera_binding_id", "source_geometry_id", "binding_revision", "source_frame_seq", "source_captured_at", "source_received_at", "source_legacy_mode", "width", "height", "source_generation_id", "source_capture_seq", "source_clock_id", "source_captured_monotonic_ns", "source_capture_uncertainty_ms", "source_timing_provenance"],
+      "properties": {
+        "device_id": {"$ref": "#/definitions/id"}, "camera_id": {"$ref": "#/definitions/id"},
+        "device_unique_id": {"$ref": "#/definitions/id"}, "camera_binding_id": {"$ref": "#/definitions/uuid"},
+        "source_geometry_id": {"$ref": "#/definitions/sha"}, "binding_revision": {"$ref": "#/definitions/uint"},
+        "source_frame_seq": {"$ref": "#/definitions/positive"}, "source_captured_at": {"$ref": "#/definitions/time"},
+        "source_received_at": {"$ref": "#/definitions/time"}, "source_legacy_mode": {"const": false},
+        "width": {"$ref": "#/definitions/positive"}, "height": {"$ref": "#/definitions/positive"},
+        "source_generation_id": {"$ref": "#/definitions/uuid"},
+        "source_capture_seq": {"$ref": "#/definitions/uint"},
+        "source_clock_id": {"type": "string", "pattern": "^mach-absolute:[0-9a-f]{64}$"},
+        "source_captured_monotonic_ns": {"$ref": "#/definitions/ns"},
+        "source_capture_uncertainty_ms": {"type": "number", "minimum": 0, "maximum": 20},
+        "source_timing_provenance": {"const": "camera_pts_host_clock.v1"}
+      }
+    },
+    "source_frame_view": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "evidence_id", "jpeg_sha256", "source_frame"],
+      "properties": {
+        "contract_version": {"const": "camera-source-frame.v2"}, "evidence_id": {"$ref": "#/definitions/id"},
+        "jpeg_sha256": {"$ref": "#/definitions/sha"}, "source_frame": {"$ref": "#/definitions/source_frame"}
+      }
+    },
+    "screen_source_query": {
+      "type": "object", "additionalProperties": false, "required": ["source_evidence_id"],
+      "properties": {"source_evidence_id": {"$ref": "#/definitions/id"}}
+    },
+    "matrix": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}}
+    },
+    "ocr_word": {
+      "type": "object", "additionalProperties": false, "required": ["text", "x", "y", "width", "height", "confidence"],
+      "properties": {
+        "text": {"type": "string", "maxLength": 10000}, "x": {"type": "number"}, "y": {"type": "number"},
+        "width": {"type": "number", "minimum": 0}, "height": {"type": "number", "minimum": 0},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "ocr": {
+      "type": "object", "additionalProperties": false,
+      "required": ["region", "text", "words", "confidence", "truncated", "engine", "engine_version", "request_id", "elapsed_ms", "width", "height"],
+      "properties": {
+        "region": {"$ref": "#/definitions/id"}, "text": {"type": "string", "maxLength": 100000},
+        "words": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/definitions/ocr_word"}},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "truncated": {"type": "boolean"},
+        "engine": {"$ref": "#/definitions/id"}, "engine_version": {"$ref": "#/definitions/id"},
+        "request_id": {"$ref": "#/definitions/id"}, "elapsed_ms": {"$ref": "#/definitions/uint"},
+        "width": {"$ref": "#/definitions/uint"}, "height": {"$ref": "#/definitions/uint"}
+      }
+    },
+    "waiting_ocr": {
+      "type": "object", "additionalProperties": false,
+      "required": ["region", "text", "words", "confidence", "truncated", "engine", "engine_version", "request_id", "elapsed_ms", "width", "height"],
+      "properties": {
+        "region": {"const": "messages"}, "text": {"const": ""},
+        "words": {"type": "array", "maxItems": 0}, "confidence": {"const": 0},
+        "truncated": {"const": false}, "engine": {"const": ""},
+        "engine_version": {"const": ""}, "request_id": {"const": ""},
+        "elapsed_ms": {"const": 0}, "width": {"$ref": "#/definitions/positive"},
+        "height": {"$ref": "#/definitions/positive"}
+      }
+    },
+    "screen_observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "device_id", "camera_id", "daemon_session", "wechat_account_id", "binding_revision", "camera_device_unique_id", "calibration_fingerprint", "motion_calibration_fingerprint", "captured_at", "frame_sha256", "frame_seq", "quality", "frame_width", "frame_height", "screen_width", "screen_height", "screen_to_camera", "image_base64", "image_sha256", "ocr"],
+      "if": {"properties": {"quality": {"const": "clear"}}},
+      "then": {
+        "required": ["screen_to_calibrated_camera"],
+        "properties": {"ocr": {"$ref": "#/definitions/ocr"}}
+      },
+      "else": {
+        "not": {"required": ["screen_to_calibrated_camera"]},
+        "properties": {"ocr": {"$ref": "#/definitions/waiting_ocr"}}
+      },
+      "properties": {
+        "contract_version": {"const": "screen-observation.v1"}, "device_id": {"$ref": "#/definitions/id"},
+        "camera_id": {"$ref": "#/definitions/id"}, "daemon_session": {"$ref": "#/definitions/id"},
+        "wechat_account_id": {"$ref": "#/definitions/nullable_id"}, "binding_revision": {"$ref": "#/definitions/uint"},
+        "camera_device_unique_id": {"$ref": "#/definitions/id"}, "calibration_fingerprint": {"$ref": "#/definitions/sha"},
+        "motion_calibration_fingerprint": {"$ref": "#/definitions/sha"}, "captured_at": {"$ref": "#/definitions/time"},
+        "frame_sha256": {"$ref": "#/definitions/sha"}, "frame_seq": {"$ref": "#/definitions/positive"},
+        "quality": {"enum": ["clear", "waiting"]}, "frame_width": {"$ref": "#/definitions/positive"},
+        "frame_height": {"$ref": "#/definitions/positive"},
+        "screen_width": {"type": "integer", "minimum": 1, "maximum": 720},
+        "screen_height": {"type": "integer", "minimum": 1, "maximum": 1600},
+        "screen_to_camera": {"$ref": "#/definitions/matrix"}, "screen_to_calibrated_camera": {"$ref": "#/definitions/matrix"},
+        "image_base64": {"type": "string", "minLength": 1, "maxLength": 11184812, "contentEncoding": "base64", "contentMediaType": "image/png"},
+        "image_sha256": {"$ref": "#/definitions/sha"}, "ocr": {"type": "object"}
+      }
+    },
+    "screen_source_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "source", "coordinate_frame_hash", "observation"],
+      "properties": {
+        "contract_version": {"const": "screen-source-observation.v2"},
+        "source": {"$ref": "#/definitions/source_frame_view"},
+        "coordinate_frame_hash": {"$ref": "#/definitions/sha"},
+        "observation": {"$ref": "#/definitions/screen_observation"}
+      }
+    },
+    "calibration_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaVersion", "deviceId", "cameraId", "cameraDeviceUniqueId", "cameraBindingId", "sourceGeometryId", "daemonAddr", "daemonSession", "bindingRevision", "frame", "bindingFingerprint"],
+      "properties": {
+        "schemaVersion": {"type": "integer", "const": 3}, "deviceId": {"$ref": "#/definitions/id"}, "cameraId": {"$ref": "#/definitions/id"},
+        "cameraDeviceUniqueId": {"$ref": "#/definitions/id"}, "cameraBindingId": {"$ref": "#/definitions/uuid"},
+        "sourceGeometryId": {"$ref": "#/definitions/sha"}, "daemonAddr": {"$ref": "#/definitions/id"},
+        "daemonSession": {"$ref": "#/definitions/id"}, "bindingRevision": {"$ref": "#/definitions/uint"},
+        "frame": {"$ref": "#/definitions/size"}, "bindingFingerprint": {"$ref": "#/definitions/sha"}
+      }
+    },
+    "debug_context_request": {
+      "type": "object", "additionalProperties": false, "required": ["contract_version", "deviceId"],
+      "properties": {"contract_version": {"const": "debug-device-context.v2"}, "deviceId": {"$ref": "#/definitions/id"}}
+    },
+    "debug_check": {
+      "type": "object", "additionalProperties": false, "required": ["code", "message"],
+      "properties": {"code": {"enum": ["camera_not_ready", "camera_binding_mismatch", "camera_device_mismatch", "source_unavailable", "source_binding_changed", "source_geometry_changed", "camera_resolution_changed", "daemon_unreachable", "device_removed", "device_offline", "device_paused", "device_quarantined", "device_maintenance", "calibration_required"]}, "message": {"$ref": "#/definitions/id"}}
+    },
+    "debug_context_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "contextId", "deviceId", "cameraId", "cameraDeviceUniqueId", "cameraBindingId", "sourceGeometryId", "cameraFrameUrl", "cameraStatusUrl", "daemonAddr", "daemonSession", "bindingRevision", "frameWidth", "frameHeight", "calibrationPath", "readyForRead", "readyForMotion", "expiresInSeconds", "checks"],
+      "properties": {
+        "contract_version": {"const": "debug-device-context.v2"}, "contextId": {"$ref": "#/definitions/id"},
+        "deviceId": {"$ref": "#/definitions/id"}, "cameraId": {"$ref": "#/definitions/id"},
+        "cameraDeviceUniqueId": {"$ref": "#/definitions/id"}, "cameraBindingId": {"$ref": "#/definitions/uuid"},
+        "sourceGeometryId": {"$ref": "#/definitions/sha"}, "cameraFrameUrl": {"type": "string", "format": "uri"},
+        "cameraStatusUrl": {"type": "string", "format": "uri"}, "daemonAddr": {"$ref": "#/definitions/id"},
+        "daemonSession": {"$ref": "#/definitions/nullable_id"}, "bindingRevision": {"$ref": "#/definitions/uint"},
+        "frameWidth": {"$ref": "#/definitions/positive"}, "frameHeight": {"$ref": "#/definitions/positive"},
+        "calibrationPath": {"$ref": "#/definitions/id"}, "readyForRead": {"type": "boolean"}, "readyForMotion": {"type": "boolean"},
+        "expiresInSeconds": {"type": "integer", "minimum": 0, "maximum": 1800},
+        "checks": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/definitions/debug_check"}}
+      }
+    },
+    "clock_sample": {
+      "type": "object", "additionalProperties": false, "required": ["before_ns", "helper_ns", "after_ns"],
+      "properties": {"before_ns": {"$ref": "#/definitions/ns"}, "helper_ns": {"$ref": "#/definitions/ns"}, "after_ns": {"$ref": "#/definitions/ns"}}
+    },
+    "clock_registration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "registration_id", "host_boot_fingerprint", "source_clock_id", "helper_sha256", "python_clock_implementation", "pts_mapping", "pts_uncertainty_ms", "timestamp_proof_evidence_id", "samples", "registered_at"],
+      "properties": {
+        "contract_version": {"const": "camera-clock-registration.v1"}, "registration_id": {"$ref": "#/definitions/uuid"},
+        "host_boot_fingerprint": {"$ref": "#/definitions/sha"}, "source_clock_id": {"type": "string", "pattern": "^mach-absolute:[0-9a-f]{64}$"},
+        "helper_sha256": {"$ref": "#/definitions/sha"}, "python_clock_implementation": {"const": "mach_absolute_time()"},
+        "pts_mapping": {"const": "camera_pts_host_clock.v1"}, "pts_uncertainty_ms": {"type": "number", "minimum": 0, "maximum": 20},
+        "timestamp_proof_evidence_id": {"$ref": "#/definitions/id"},
+        "samples": {"type": "array", "minItems": 20, "maxItems": 20, "items": {"$ref": "#/definitions/clock_sample"}},
+        "registered_at": {"$ref": "#/definitions/time"}
+      }
+    }
+  }
+}

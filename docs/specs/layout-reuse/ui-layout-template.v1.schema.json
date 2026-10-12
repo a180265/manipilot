@@ -1,0 +1,8 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:layout-reuse:template",
+  "$ref": "urn:wx:design:layout-reuse:layout#/definitions/template",
+  "definitions": {
+    "record": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/template"}
+  }
+}

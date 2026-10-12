@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:layout-reuse:checks",
+  "$comment": "Offline trusted-state fixtures, never client-supplied authorization.",
+  "$ref": "#/definitions/graph",
+  "definitions": {
+    "calibration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "geometry_hash", "installation_binding", "source_geometry_id", "mapping_error_bound_px"],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 3},
+        "geometry_hash": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "installation_binding": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/binding"},
+        "source_geometry_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "mapping_error_bound_px": {"type": "number", "minimum": 0}
+      }
+    },
+    "graph": {
+      "type": "object", "additionalProperties": false, "required": ["template", "adaptation", "region", "assets", "calibration"],
+      "properties": {
+        "template": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/template"},
+        "adaptation": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/adaptation"},
+        "region": {"$ref": "urn:wx:design:layout-reuse:region#/definitions/record"},
+        "assets": {"type": "array", "items": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/asset_record"}},
+        "calibration": {"$ref": "#/definitions/calibration"}
+      }
+    },
+    "session_case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["session", "template", "region", "captures", "current_capture", "preview", "accepted_items", "now", "now_ms", "server_instance_id", "current_binding", "current_compatibility", "current_calibration", "device_idle"],
+      "properties": {
+        "session": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
+        "template": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/template"},
+        "region": {"$ref": "urn:wx:design:layout-reuse:region#/definitions/record"},
+        "captures": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/capture"}},
+        "current_capture": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/capture"},
+        "preview": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/preview_record"},
+        "accepted_items": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/item_keys"},
+        "now": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "now_ms": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "server_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "current_binding": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/binding_snapshot"},
+        "current_compatibility": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/compatibility"},
+        "current_calibration": {"$ref": "#/definitions/calibration"},
+        "device_idle": {"type": "boolean"}
+      }
+    },
+    "page_edit_case": {
+      "type": "object", "additionalProperties": false, "required": ["before", "after", "changed_state"],
+      "properties": {
+        "before": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
+        "after": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
+        "changed_state": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/page_state"}
+      }
+    },
+    "inherit_case": {
+      "type": "object", "additionalProperties": false, "required": ["before", "after", "states", "now", "server_instance_id"],
+      "properties": {
+        "before": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
+        "after": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
+        "states": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/page_state"}},
+        "now": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "server_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"}
+      }
+    },
+    "crash_case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation", "intent", "observed_pointer", "durable_files", "store_committed", "result_phase", "result_pointer"],
+      "properties": {
+        "operation": {"$ref": "urn:wx:design:layout-reuse:records#/definitions/operation"},
+        "intent": {"$ref": "urn:wx:design:layout-reuse:records#/definitions/intent"},
+        "observed_pointer": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:region#/definitions/pointer"}, {"type": "null"}]},
+        "durable_files": {"type": "array", "items": {"$ref": "urn:wx:design:layout-reuse:records#/definitions/file_plan"}},
+        "store_committed": {"type": "boolean"},
+        "result_phase": {"enum": ["committed", "aborted", "unknown"]},
+        "result_pointer": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:region#/definitions/pointer"}, {"type": "null"}]}
+      }
+    },
+    "replay_case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation", "intent", "retry_request", "principal_id", "response"],
+      "properties": {
+        "operation": {"$ref": "urn:wx:design:layout-reuse:records#/definitions/operation"},
+        "intent": {"$ref": "urn:wx:design:layout-reuse:records#/definitions/intent"},
+        "retry_request": {"$ref": "urn:wx:design:layout-reuse:wire#/definitions/write_request"},
+        "principal_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "response": {"$ref": "urn:wx:design:layout-reuse:wire#/definitions/write_response"}
+      }
+    },
+    "pagination_case": {
+      "type": "object", "additionalProperties": false, "required": ["cursor", "principal_id", "route_id", "device_id", "limit", "now", "response"],
+      "properties": {
+        "cursor": {"$ref": "urn:wx:design:layout-reuse:records#/definitions/cursor"},
+        "principal_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "route_id": {"enum": ["template_list", "issue_list"]},
+        "device_id": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"}, {"type": "null"}]},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "now": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "response": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:api#/definitions/template_list"}, {"$ref": "urn:wx:design:layout-reuse:api#/definitions/issue_list"}]}
+      }
+    }
+  }
+}

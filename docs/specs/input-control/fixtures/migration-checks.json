@@ -1,0 +1,97 @@
+[
+  {"name": "migration-complete-source-bundle", "check": "source_bundle", "source": "migration-legacy-file", "intent": "migration-prepared-intent", "expect": "valid"},
+  {"name": "migration-do-not-rewrite-raw-old-key", "check": "source_bundle", "source": "migration-legacy-raw-key-preserved", "intent": "migration-prepared-intent", "expect": "semantic", "match": "migration.source_changed"},
+  {"name": "migration-source-device-is-bound", "check": "source_bundle", "source": "migration-wrong-source-device-shape", "intent": "migration-prepared-intent", "expect": "semantic", "match": "migration.source_device"},
+  {"name": "migration-tombstone-hashes-full-entry", "check": "baseline_source", "source": "migration-legacy-file", "file": "migration-wrong-tombstone-shape", "expect": "semantic", "match": "migration.tombstones"},
+  {"name": "migration-full-new-ledger-links-baseline", "check": "file_transition", "before": "migration-closed-file", "after": "migration-first-real-write", "expect": "valid"},
+  {"name": "migration-baseline-is-immutable", "check": "file_transition", "before": "migration-closed-file", "after": "migration-changed-baseline-shape", "expect": "semantic", "match": "migration.baseline_changed"},
+  {"name": "migration-intent-finalize-only", "check": "intent_transition", "before": "migration-prepared-intent", "after": "migration-committed-intent", "expect": "valid"},
+  {"name": "migration-no-uncommit", "check": "intent_transition", "before": "migration-committed-intent", "after": "migration-prepared-intent", "expect": "semantic", "match": "migration.intent_state_reversed"},
+  {"name": "migration-tombstone-before-cas", "check": "put_gate", "file": "migration-closed-file", "request": "migration-old-id-put-stale-cas", "error_key": "legacy_request_replay_unavailable", "http_status": 409, "new_input_actions": 0, "expect": "valid"},
+  {"name": "migration-changed-content-also-tombstone", "check": "put_gate", "file": "migration-closed-file", "request": "migration-old-id-put-different-content", "error_key": "legacy_request_replay_unavailable", "http_status": 409, "new_input_actions": 0, "expect": "valid"},
+  {"name": "migration-permission-before-tombstone", "check": "put_gate", "file": "migration-closed-file", "request": "migration-old-id-put-readonly", "error_key": "permission_denied", "http_status": 403, "new_input_actions": 0, "expect": "valid"},
+  {"name": "migration-old-id-must-not-be-accepted", "check": "put_gate", "file": "migration-closed-file", "request": "migration-old-id-put-different-content", "error_key": null, "http_status": 200, "new_input_actions": 0, "expect": "semantic", "match": "migration.put_order"},
+  {"name": "migration-id-reserved", "check": "put_gate", "file": "migration-closed-file", "request": "migration-reserved-id-put", "error_key": "request_conflict", "http_status": 409, "new_input_actions": 0, "expect": "valid"},
+  {"name": "migration-request-id-reserved", "check": "put_gate", "file": "migration-closed-file", "request": "migration-reserved-maintenance-request-put", "error_key": "request_conflict", "http_status": 409, "new_input_actions": 0, "expect": "valid"},
+  {
+    "name": "migration-resume-before-file", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-legacy-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": null, "mode": "resume", "action": "write_closed_file", "reported_state": "maintenance_required", "startup_gate": "blocked", "expect": "valid"
+  },
+  {
+    "name": "migration-resume-new-file-old-db", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": null, "mode": "resume", "action": "write_checkpoint", "reported_state": "maintenance_required", "startup_gate": "blocked", "expect": "valid"
+  },
+  {
+    "name": "migration-resume-new-file-new-db", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": {"revision": 2, "digest": "17711ff9d434da83dd1e69ba4d2a726e5607a9cdbca04278e58454ba731b441a"},
+    "mode": "resume", "action": "commit_intent", "reported_state": "maintenance_required", "startup_gate": "blocked", "expect": "valid"
+  },
+  {
+    "name": "migration-inspect-does-not-resume", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": null, "mode": "inspect", "action": "lookup_only", "reported_state": "maintenance_required", "startup_gate": "blocked", "expect": "valid"
+  },
+  {
+    "name": "migration-half-commit-must-block-startup", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": null, "mode": "inspect", "action": "lookup_only", "reported_state": "maintenance_required", "startup_gate": "normal_checks", "expect": "semantic", "match": "migration.pending_must_block"
+  },
+  {
+    "name": "migration-half-commit-is-not-success", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": null, "mode": "resume", "action": "write_checkpoint", "reported_state": "committed", "startup_gate": "blocked", "expect": "semantic", "match": "migration.half_commit_reported_success"
+  },
+  {
+    "name": "migration-no-replace-again-after-file", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": null, "mode": "resume", "action": "write_closed_file", "reported_state": "maintenance_required", "startup_gate": "blocked", "expect": "semantic", "match": "migration.resume_action"
+  },
+  {
+    "name": "migration-conflicting-current-file-stops", "check": "observation", "intent": "migration-prepared-intent", "file": "settings-file-open-then-close",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": null, "mode": "resume", "action": "stop", "reported_state": "maintenance_required", "startup_gate": "blocked", "expect": "valid"
+  },
+  {
+    "name": "migration-checkpoint-ahead-old-file-stops", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-legacy-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": {"revision": 2, "digest": "17711ff9d434da83dd1e69ba4d2a726e5607a9cdbca04278e58454ba731b441a"},
+    "mode": "resume", "action": "stop", "reported_state": "maintenance_required", "startup_gate": "blocked", "expect": "valid"
+  },
+  {
+    "name": "migration-same-id-different-source-rejected", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "checkpoint": null, "mode": "resume", "action": "write_checkpoint", "reported_state": "maintenance_required", "startup_gate": "blocked", "expect": "semantic", "match": "migration.source_changed"
+  },
+  {
+    "name": "migration-same-id-different-backup-rejected", "check": "observation", "intent": "migration-prepared-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "backup_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "checkpoint": null, "mode": "resume", "action": "write_checkpoint", "reported_state": "maintenance_required", "startup_gate": "blocked", "expect": "semantic", "match": "migration.backup_changed"
+  },
+  {
+    "name": "migration-committed-idempotent-query", "check": "observation", "intent": "migration-committed-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": {"revision": 2, "digest": "17711ff9d434da83dd1e69ba4d2a726e5607a9cdbca04278e58454ba731b441a"},
+    "mode": "resume", "action": "lookup_only", "reported_state": "committed", "startup_gate": "normal_checks", "expect": "valid"
+  },
+  {
+    "name": "migration-committed-after-new-writes-no-rollback", "check": "observation", "intent": "migration-committed-intent", "file": "migration-first-real-write",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": {"revision": 3, "digest": "cfc26e979aa0ca186bddad64e2b58ad04c6d32648c064547e04f75633920269b"},
+    "mode": "resume", "action": "lookup_only", "reported_state": "committed", "startup_gate": "normal_checks", "expect": "valid"
+  },
+  {
+    "name": "migration-committed-cannot-have-old-checkpoint", "check": "observation", "intent": "migration-committed-intent", "file": "migration-closed-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": null, "mode": "resume", "action": "lookup_only", "reported_state": "committed", "startup_gate": "normal_checks", "expect": "semantic", "match": "migration.committed_checkpoint"
+  },
+  {
+    "name": "migration-committed-file-rollback-rejected", "check": "observation", "intent": "migration-committed-intent", "file": "migration-legacy-file",
+    "migration_id": "迁移-甲", "source_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+    "checkpoint": {"revision": 2, "digest": "17711ff9d434da83dd1e69ba4d2a726e5607a9cdbca04278e58454ba731b441a"},
+    "mode": "resume", "action": "lookup_only", "reported_state": "committed", "startup_gate": "normal_checks", "expect": "semantic", "match": "migration.committed_file_rollback"
+  }
+]

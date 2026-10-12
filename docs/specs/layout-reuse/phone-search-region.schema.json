@@ -1,0 +1,165 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:layout-reuse:region",
+  "$comment": "Not a released API. Main v1.9 includes arm-owned regions with a persistent per-camera binding UUID.",
+  "$ref": "#/definitions/record",
+  "definitions": {
+    "reason_code": {
+      "type": "string",
+      "enum": [
+        "phone_not_located", "multiple_screen_candidates", "screen_outside_region",
+        "dark_screen", "occluded", "source_unavailable", "source_binding_changed",
+        "geometry_changed", "archive_invalid"
+      ]
+    },
+    "reason_codes": {
+      "type": "array", "maxItems": 9, "uniqueItems": true,
+      "items": {"$ref": "#/definitions/reason_code"}
+    },
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "device_id", "version", "installation_binding", "source_size", "source_geometry_id", "rect", "pixel_rect", "reference_evidence_id", "created_at", "created_by", "sha256"],
+      "properties": {
+        "contract_version": {"const": "phone-search-region.v1"},
+        "device_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "version": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/positive"},
+        "installation_binding": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/binding"},
+        "source_size": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/size"},
+        "source_geometry_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "rect": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/rect"},
+        "pixel_rect": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/pixel_rect"},
+        "reference_evidence_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "created_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "created_by": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"}
+      }
+    },
+    "pointer": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "device_id", "kind", "revision", "selected_version", "selected_sha256", "updated_at", "operation_id"],
+      "properties": {
+        "contract_version": {"const": "layout-pointer.v1"},
+        "device_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "kind": {"enum": ["phone_search_region", "layout_adaptation"]},
+        "revision": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "selected_version": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_positive"},
+        "selected_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_sha"},
+        "updated_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_time"},
+        "operation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_uuid"}
+      },
+      "allOf": [{
+        "if": {"properties": {"revision": {"const": 0}}},
+        "then": {"properties": {"selected_version": {"type": "null"}, "selected_sha256": {"type": "null"}, "updated_at": {"type": "null"}, "operation_id": {"type": "null"}}},
+        "else": {"properties": {
+          "selected_version": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/positive"},
+          "selected_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+          "updated_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+          "operation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"}
+        }}
+      }]
+    },
+    "source_binding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["device_id", "installation_binding", "source_size", "source_geometry_id", "evidence_id", "source_session_id", "frame_seq", "source_captured_at", "server_received_at"],
+      "properties": {
+        "device_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "installation_binding": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/binding"},
+        "source_size": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/size"},
+        "source_geometry_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "evidence_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "source_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/text"},
+        "frame_seq": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/positive"},
+        "source_captured_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "server_received_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"}
+      }
+    },
+    "preview_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "correlation_id", "rect", "source_evidence_id"],
+      "properties": {
+        "contract_version": {"const": "phone-search-region-preview.v1"},
+        "correlation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "rect": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/rect"},
+        "source_evidence_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"}
+      }
+    },
+    "preview_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "correlation_id", "preview_id", "region_digest", "rect", "pixel_rect", "source_binding", "detected_quad", "status", "reason_codes", "created_at", "expires_at"],
+      "properties": {
+        "contract_version": {"const": "phone-search-region-preview.v1"},
+        "correlation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "preview_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "region_digest": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "rect": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/rect"},
+        "pixel_rect": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/pixel_rect"},
+        "source_binding": {"$ref": "#/definitions/source_binding"},
+        "detected_quad": {"anyOf": [{"type": "null"}, {"type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/point"}}]},
+        "status": {"enum": ["verified", "needs_review"]},
+        "reason_codes": {"$ref": "#/definitions/reason_codes"},
+        "created_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "expires_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"}
+      },
+      "allOf": [{
+        "if": {"properties": {"status": {"const": "verified"}}},
+        "then": {"properties": {"detected_quad": {"type": "array"}, "reason_codes": {"maxItems": 0}}},
+        "else": {"properties": {"detected_quad": {"type": "null"}, "reason_codes": {"minItems": 1}}}
+      }]
+    },
+    "save_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "correlation_id", "client_request_id", "expected_revision", "preview_id", "region_digest", "publish"],
+      "properties": {
+        "contract_version": {"const": "phone-search-region-write.v1"},
+        "correlation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "client_request_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "expected_revision": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "preview_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "region_digest": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "publish": {"type": "boolean"}
+      }
+    },
+    "save_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "correlation_id", "operation_id", "revision", "saved_version", "selected_version", "status", "replayed"],
+      "properties": {
+        "contract_version": {"const": "phone-search-region-write.v1"},
+        "correlation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "operation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "revision": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "saved_version": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/positive"},
+        "selected_version": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_positive"},
+        "status": {"enum": ["verified", "draft_saved"]},
+        "replayed": {"type": "boolean"}
+      },
+      "allOf": [{"if": {"properties": {"status": {"const": "verified"}}}, "then": {"properties": {"revision": {"minimum": 1}, "selected_version": {"type": "integer"}}}}]
+    },
+    "get_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "correlation_id", "revision", "selected", "pending_draft", "status", "reasons"],
+      "properties": {
+        "contract_version": {"const": "phone-search-region-read.v1"},
+        "correlation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "revision": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "selected": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_ref"},
+        "pending_draft": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_ref"},
+        "status": {"enum": ["unregistered", "verified", "needs_review"]},
+        "reasons": {"$ref": "#/definitions/reason_codes"}
+      }
+    },
+    "publication_case": {
+      "$comment": "Offline success-transition fixture, never an HTTP request or trusted user-supplied context.",
+      "type": "object", "additionalProperties": false,
+      "required": ["before", "preview", "request", "record", "response", "after", "principal_id", "preview_principal_id", "device_idle", "binding_unchanged", "source_fresh", "now"],
+      "properties": {
+        "before": {"$ref": "#/definitions/pointer"}, "after": {"$ref": "#/definitions/pointer"},
+        "preview": {"$ref": "#/definitions/preview_response"}, "request": {"$ref": "#/definitions/save_request"},
+        "record": {"$ref": "#/definitions/record"}, "response": {"$ref": "#/definitions/save_response"},
+        "principal_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "preview_principal_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "device_idle": {"type": "boolean"}, "binding_unchanged": {"type": "boolean"}, "source_fresh": {"type": "boolean"},
+        "now": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"}
+      }
+    }
+  }
+}

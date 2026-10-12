@@ -1,0 +1,438 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:calibrated-scroll-records:v1",
+  "title": "Planned persisted rows, immutable snapshots and evidence closure",
+  "$ref": "#/definitions/action_record",
+  "definitions": {
+    "id": {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/id"},
+    "sha256": {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/sha256"},
+    "time": {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/time"},
+    "nullable_time": {"anyOf": [{"$ref": "#/definitions/time"}, {"type": "null"}]},
+    "nullable_id": {"anyOf": [{"$ref": "#/definitions/id"}, {"type": "null"}]},
+    "binding": {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/binding"},
+    "ref": {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/evidence_ref"},
+    "nullable_ref": {"anyOf": [{"$ref": "#/definitions/ref"}, {"type": "null"}]},
+    "ns": {"type": ["integer", "null"], "minimum": 0},
+    "point": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y"],
+      "properties": {
+        "x": {"type": "number", "minimum": 0, "maximum": 1},
+        "y": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "camera_point": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cameraX", "cameraY", "frameW", "frameH"],
+      "properties": {
+        "cameraX": {"type": "number", "minimum": 0},
+        "cameraY": {"type": "number", "minimum": 0},
+        "frameW": {"type": "integer", "minimum": 1},
+        "frameH": {"type": "integer", "minimum": 1}
+      }
+    },
+    "screen_size": {
+      "type": "object", "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "legacy_flow_params": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_corners", "quality_level", "min_distance", "block_size", "win_size",
+        "max_level", "criteria_count", "criteria_eps", "max_forward_backward_error_px",
+        "min_inliers", "min_retained_ratio", "max_horizontal_ratio", "max_dy_mad_ratio",
+        "min_displacement_ratio", "ocr_row_position_tolerance_ratio", "max_frame_chain", "stationary"],
+      "properties": {
+        "max_corners": {"const": 200}, "quality_level": {"const": 0.01},
+        "min_distance": {"const": 8}, "block_size": {"const": 7},
+        "win_size": {"const": 21}, "max_level": {"const": 3},
+        "criteria_count": {"const": 30}, "criteria_eps": {"const": 0.01},
+        "max_forward_backward_error_px": {"const": 1.5},
+        "min_inliers": {"const": 12}, "min_retained_ratio": {"const": 0.7},
+        "max_horizontal_ratio": {"const": 0.03}, "max_dy_mad_ratio": {"const": 0.02},
+        "min_displacement_ratio": {"const": 0.04},
+        "ocr_row_position_tolerance_ratio": {"const": 0.04},
+        "max_frame_chain": {"const": 30},
+        "stationary": {
+          "type": "object", "additionalProperties": false,
+          "required": ["median_ratio", "frames", "frame_interval_ms", "min_unique_ocr_rows"],
+          "properties": {
+            "median_ratio": {"const": 0.01}, "frames": {"const": 3},
+            "frame_interval_ms": {"const": 300}, "min_unique_ocr_rows": {"const": 3}
+          }
+        }
+      }
+    },
+    "sampling_params": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "sample_interval_ms", "max_pair_gap_ms", "before_wait_timeout_ms",
+        "before_max_age_ms", "capture_timeout_ms", "observation_timeout_ms",
+        "motion_observation_budget_ms", "after_wait_timeout_ms", "settle_pair_count",
+        "max_pair_vertical_ratio", "reverse_noise_ratio", "max_reverse_path_ratio",
+        "max_capture_uncertainty_ms", "observation_roi"],
+      "properties": {
+        "version": {"const": "calibrated-scroll-observation.v1"},
+        "sample_interval_ms": {"const": 200}, "max_pair_gap_ms": {"const": 400},
+        "before_wait_timeout_ms": {"const": 2000}, "before_max_age_ms": {"const": 400},
+        "capture_timeout_ms": {"const": 400}, "observation_timeout_ms": {"const": 5800},
+        "motion_observation_budget_ms": {"const": 4400},
+        "after_wait_timeout_ms": {"const": 1000}, "settle_pair_count": {"const": 2},
+        "max_pair_vertical_ratio": {"const": 0.25}, "reverse_noise_ratio": {"const": 0.002},
+        "max_reverse_path_ratio": {"const": 0.01}, "max_capture_uncertainty_ms": {"const": 20},
+        "observation_roi": {
+          "allOf": [{"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/roi_norm"},
+            {"properties": {"x": {"const": 0.1}, "y": {"const": 0.2},
+              "width": {"const": 0.8}, "height": {"const": 0.6}}}]
+        }
+      }
+    },
+    "parameters": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scroll_observation", "calibrated_scroll_observation"],
+      "properties": {
+        "scroll_observation": {"$ref": "#/definitions/legacy_flow_params"},
+        "calibrated_scroll_observation": {"$ref": "#/definitions/sampling_params"}
+      }
+    },
+    "config_snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record_version", "task_id", "action_instance_id", "device_id",
+        "config_sha256", "parameters"],
+      "properties": {
+        "record_version": {"const": "calibrated-scroll-config.v1"},
+        "task_id": {"$ref": "#/definitions/id"},
+        "action_instance_id": {"$ref": "#/definitions/id"},
+        "device_id": {"$ref": "#/definitions/id"},
+        "config_sha256": {"$ref": "#/definitions/sha256"},
+        "parameters": {"$ref": "#/definitions/parameters"}
+      }
+    },
+    "budget_breakdown": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hover_move_ms", "press_ms", "stroke_ms", "lift_ms",
+        "driver_verification_ms", "safe_cleanup_ms", "margin_ms", "total_ms", "basis_evidence"],
+      "properties": {
+        "hover_move_ms": {"type": "integer", "minimum": 0},
+        "press_ms": {"type": "integer", "minimum": 0},
+        "stroke_ms": {"type": "integer", "minimum": 150, "maximum": 5000},
+        "lift_ms": {"type": "integer", "minimum": 0},
+        "driver_verification_ms": {"type": "integer", "minimum": 0},
+        "safe_cleanup_ms": {"type": "integer", "minimum": 0},
+        "margin_ms": {"type": "integer", "minimum": 0},
+        "total_ms": {"type": "integer", "minimum": 1, "maximum": 4400},
+        "basis_evidence": {"allOf": [{"$ref": "#/definitions/ref"},
+          {"properties": {"kind": {"const": "budget"}}}]}
+      }
+    },
+    "plan_snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record_version", "task_id", "action_instance_id", "device_id", "action",
+        "binding", "planning_version", "calibration_schema_version", "calibration_evidence",
+        "config_sha256", "screen_size", "start", "end", "camera_start", "camera_end",
+        "profile", "duration_ms", "distance_mm", "motion_budget", "safety_checks"],
+      "properties": {
+        "record_version": {"const": "calibrated-scroll-plan.v1"},
+        "task_id": {"$ref": "#/definitions/id"},
+        "action_instance_id": {"$ref": "#/definitions/id"},
+        "device_id": {"$ref": "#/definitions/id"},
+        "action": {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/action"},
+        "binding": {"$ref": "#/definitions/binding"},
+        "planning_version": {"const": "calibrated-scroll-planning.v1"},
+        "calibration_schema_version": {"const": 3},
+        "calibration_evidence": {"allOf": [{"$ref": "#/definitions/ref"},
+          {"properties": {"kind": {"const": "calibration"}}}]},
+        "config_sha256": {"$ref": "#/definitions/sha256"},
+        "screen_size": {"$ref": "#/definitions/screen_size"},
+        "start": {"$ref": "#/definitions/point"}, "end": {"$ref": "#/definitions/point"},
+        "camera_start": {"$ref": "#/definitions/camera_point"},
+        "camera_end": {"$ref": "#/definitions/camera_point"},
+        "profile": {
+          "type": "object", "additionalProperties": false,
+          "required": ["hoverZ", "tapDepth", "tapFeed"],
+          "properties": {
+            "hoverZ": {"type": "number"},
+            "tapDepth": {"type": "number", "exclusiveMinimum": 0},
+            "tapFeed": {"type": "number", "exclusiveMinimum": 0}
+          }
+        },
+        "duration_ms": {"type": "integer", "minimum": 150, "maximum": 5000},
+        "distance_mm": {"type": "number", "exclusiveMinimum": 0},
+        "motion_budget": {"$ref": "#/definitions/budget_breakdown"},
+        "safety_checks": {
+          "type": "object", "additionalProperties": false,
+          "required": ["model_locked", "independent_validation_passed", "path_valid", "pose_valid"],
+          "properties": {
+            "model_locked": {"const": true}, "independent_validation_passed": {"const": true},
+            "path_valid": {"const": true}, "pose_valid": {"const": true}
+          }
+        }
+      }
+    },
+    "timeline": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_clock_id", "before_accepted_ns", "dispatch_claimed_ns", "driver_invoked_ns",
+        "mechanical_completed_ns", "safe_cleanup_confirmed_ns", "completion_fence_ns", "sampling_finished_ns"],
+      "properties": {
+        "source_clock_id": {"anyOf": [
+          {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/source_clock_id"}, {"type": "null"}]},
+        "before_accepted_ns": {"$ref": "#/definitions/ns"},
+        "dispatch_claimed_ns": {"$ref": "#/definitions/ns"},
+        "driver_invoked_ns": {"$ref": "#/definitions/ns"},
+        "mechanical_completed_ns": {"$ref": "#/definitions/ns"},
+        "safe_cleanup_confirmed_ns": {"$ref": "#/definitions/ns"},
+        "completion_fence_ns": {"$ref": "#/definitions/ns"},
+        "sampling_finished_ns": {"$ref": "#/definitions/ns"}
+      }
+    },
+    "sample_diagnostic": {
+      "type": "object", "additionalProperties": false,
+      "required": ["tick", "scheduled_ns", "requested_ns", "finished_ns", "status",
+        "source_frame_seq", "source_capture_seq", "evidence_id", "reason_code"],
+      "properties": {
+        "tick": {"type": "integer", "minimum": 1, "maximum": 29},
+        "scheduled_ns": {"type": "integer", "minimum": 0},
+        "requested_ns": {"$ref": "#/definitions/ns"}, "finished_ns": {"$ref": "#/definitions/ns"},
+        "status": {"enum": ["accepted", "duplicate", "timeout", "cancelled", "skipped", "rejected"]},
+        "source_frame_seq": {"type": ["integer", "null"], "minimum": 0},
+        "source_capture_seq": {"type": ["integer", "null"], "minimum": 0},
+        "evidence_id": {"$ref": "#/definitions/nullable_id"},
+        "reason_code": {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/reason"}
+      }
+    },
+    "review_receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record_version", "device_id", "issue_id", "request_id", "request_sha256",
+        "request", "old_revision", "new_revision", "response"],
+      "properties": {
+        "record_version": {"const": "calibrated-scroll-review-receipt.v1"},
+        "device_id": {"$ref": "#/definitions/id"},
+        "issue_id": {"$ref": "#/definitions/id"},
+        "request_id": {"$ref": "#/definitions/id"},
+        "request_sha256": {"$ref": "#/definitions/sha256"},
+        "request": {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/review_request"},
+        "old_revision": {"type": "integer", "minimum": 1},
+        "new_revision": {"type": "integer", "minimum": 2},
+        "response": {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/review_response"}
+      }
+    },
+    "state": {"enum": ["prepared", "claimed", "completed", "review_required", "reviewed", "aborted_before_motion"]},
+    "action_record": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "record_version", "task_id", "action_instance_id", "device_id", "state", "revision",
+        "origin", "step_key", "request_sha256", "action", "binding", "planning_version",
+        "observation_version", "config_sha256", "plan_evidence", "config_evidence",
+        "clock_registration_evidence", "created_at", "updated_at", "lease_id", "claim_id",
+        "claimed_at", "driver_invoked_at", "swipe_call_count", "motion_started", "mechanical_status",
+        "safe_cleanup_confirmed", "sample_evidence_ids", "timeline", "sampling_diagnostics",
+        "observation_context", "ocr_evidence", "driver_receipt_evidence", "observation",
+        "task_outcome", "reason_code", "pause_issue_id", "pause_scope",
+        "manual_resume_required", "result", "review"
+      ],
+      "properties": {
+        "record_version": {"const": "calibrated-scroll-action.v1"},
+        "task_id": {"$ref": "#/definitions/id"},
+        "action_instance_id": {"$ref": "#/definitions/id"},
+        "device_id": {"$ref": "#/definitions/id"},
+        "state": {"$ref": "#/definitions/state"},
+        "revision": {"type": "integer", "minimum": 1},
+        "origin": {"enum": ["external_task", "parent_step"]},
+        "step_key": {"$ref": "#/definitions/id"},
+        "request_sha256": {"$ref": "#/definitions/sha256"},
+        "action": {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/action"},
+        "binding": {"$ref": "#/definitions/binding"},
+        "planning_version": {"const": "calibrated-scroll-planning.v1"},
+        "observation_version": {"const": "calibrated-scroll-observation.v1"},
+        "config_sha256": {"anyOf": [{"$ref": "#/definitions/sha256"}, {"type": "null"}]},
+        "plan_evidence": {"anyOf": [
+          {"allOf": [{"$ref": "#/definitions/ref"}, {"properties": {"kind": {"const": "plan"}}}]},
+          {"type": "null"}]},
+        "config_evidence": {"anyOf": [
+          {"allOf": [{"$ref": "#/definitions/ref"}, {"properties": {"kind": {"const": "config"}}}]},
+          {"type": "null"}]},
+        "clock_registration_evidence": {"anyOf": [
+          {"allOf": [{"$ref": "#/definitions/ref"}, {"properties": {"kind": {"const": "clock_registration"}}}]},
+          {"type": "null"}]},
+        "created_at": {"$ref": "#/definitions/time"},
+        "updated_at": {"$ref": "#/definitions/time"},
+        "lease_id": {"$ref": "#/definitions/nullable_id"},
+        "claim_id": {"$ref": "#/definitions/nullable_id"},
+        "claimed_at": {"$ref": "#/definitions/nullable_time"},
+        "driver_invoked_at": {"$ref": "#/definitions/nullable_time"},
+        "swipe_call_count": {"type": ["integer", "null"], "minimum": 0, "maximum": 1},
+        "motion_started": {"type": ["boolean", "null"]},
+        "mechanical_status": {"enum": ["not_started", "confirmed", "unknown"]},
+        "safe_cleanup_confirmed": {"type": "boolean"},
+        "sample_evidence_ids": {
+          "type": "array", "maxItems": 30, "uniqueItems": true, "items": {"$ref": "#/definitions/id"}},
+        "timeline": {"$ref": "#/definitions/timeline"},
+        "sampling_diagnostics": {
+          "type": "array", "maxItems": 29, "items": {"$ref": "#/definitions/sample_diagnostic"}},
+        "observation_context": {"anyOf": [
+          {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/observation_context"},
+          {"type": "null"}]},
+        "ocr_evidence": {"anyOf": [
+          {"allOf": [{"$ref": "#/definitions/ref"}, {"properties": {"kind": {"const": "ocr"}}}]},
+          {"type": "null"}]},
+        "driver_receipt_evidence": {"anyOf": [
+          {"allOf": [{"$ref": "#/definitions/ref"}, {"properties": {"kind": {"const": "driver_receipt"}}}]},
+          {"type": "null"}]},
+        "observation": {"anyOf": [
+          {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/chain"},
+          {"type": "null"}]},
+        "task_outcome": {"enum": [null, "confirmed", "failed", "unknown"]},
+        "reason_code": {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/reason_code"},
+        "pause_issue_id": {"$ref": "#/definitions/nullable_id"},
+        "pause_scope": {"enum": [null, "automatic_actions"]},
+        "manual_resume_required": {"type": "boolean"},
+        "result": {"anyOf": [{"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/result"}, {"type": "null"}]},
+        "review": {"anyOf": [{"$ref": "#/definitions/review_receipt"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {"if": {"properties": {"state": {"enum": ["prepared", "claimed"]}}},
+         "then": {"properties": {"task_outcome": {"const": null}, "reason_code": {"const": null},
+           "result": {"const": null}, "pause_issue_id": {"const": null}, "pause_scope": {"const": null},
+           "manual_resume_required": {"const": false}, "review": {"const": null}}}},
+        {"if": {"properties": {"state": {"not": {"const": "aborted_before_motion"}}}},
+         "then": {"properties": {"config_sha256": {"type": "string"}, "plan_evidence": {"type": "object"},
+           "config_evidence": {"type": "object"}, "clock_registration_evidence": {"type": "object"},
+           "lease_id": {"type": "string"}}}},
+        {"if": {"properties": {"state": {"const": "prepared"}}},
+         "then": {"properties": {"claim_id": {"const": null}, "claimed_at": {"const": null},
+           "driver_invoked_at": {"const": null}, "motion_started": {"const": false},
+           "mechanical_status": {"const": "not_started"}, "safe_cleanup_confirmed": {"const": false},
+           "swipe_call_count": {"const": 0}}}},
+        {"if": {"properties": {"state": {"enum": ["claimed", "completed", "review_required", "reviewed"]}}},
+         "then": {"properties": {"claim_id": {"type": "string"}, "claimed_at": {"type": "string"}}}},
+        {"if": {"properties": {"state": {"enum": ["completed", "review_required", "reviewed", "aborted_before_motion"]}}},
+         "then": {"properties": {"result": {"type": "object"}, "task_outcome": {"type": "string"}}}},
+        {"if": {"properties": {"state": {"enum": ["review_required", "reviewed"]}}},
+         "then": {"properties": {"task_outcome": {"const": "unknown"},
+           "pause_issue_id": {"type": "string"}, "pause_scope": {"const": "automatic_actions"}}}},
+        {"if": {"properties": {"state": {"const": "review_required"}}},
+         "then": {"properties": {"review": {"const": null}, "manual_resume_required": {"const": true}}}},
+        {"if": {"properties": {"state": {"const": "reviewed"}}},
+         "then": {"properties": {"review": {"type": "object"}}}},
+        {"if": {"properties": {"state": {"enum": ["completed", "aborted_before_motion"]}}},
+         "then": {"properties": {"pause_issue_id": {"const": null}, "pause_scope": {"const": null},
+           "manual_resume_required": {"const": false}, "review": {"const": null}}}},
+        {"if": {"properties": {"state": {"const": "aborted_before_motion"}}},
+         "then": {"properties": {"task_outcome": {"const": "failed"}, "motion_started": {"const": false},
+           "mechanical_status": {"const": "not_started"}, "swipe_call_count": {"const": 0}}}}
+      ]
+    },
+    "action_row": {
+      "type": "object", "additionalProperties": false,
+      "required": ["task_id", "action_instance_id", "device_id", "state", "revision", "json"],
+      "properties": {
+        "task_id": {"$ref": "#/definitions/id"}, "action_instance_id": {"$ref": "#/definitions/id"},
+        "device_id": {"$ref": "#/definitions/id"}, "state": {"$ref": "#/definitions/state"},
+        "revision": {"type": "integer", "minimum": 1},
+        "json": {"$ref": "#/definitions/action_record"}
+      }
+    },
+    "review_row": {
+      "type": "object", "additionalProperties": false,
+      "required": ["device_id", "request_id", "issue_id", "request_sha256", "json"],
+      "properties": {
+        "device_id": {"$ref": "#/definitions/id"}, "request_id": {"$ref": "#/definitions/id"},
+        "issue_id": {"$ref": "#/definitions/id"}, "request_sha256": {"$ref": "#/definitions/sha256"},
+        "json": {"$ref": "#/definitions/review_receipt"}
+      }
+    },
+    "normalized_point": {
+      "type": "object", "additionalProperties": false, "required": ["source", "x", "y"],
+      "properties": {
+        "source": {"const": "screen_normalized"},
+        "x": {"type": "number", "minimum": 0, "maximum": 1},
+        "y": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "swipe_call": {
+      "type": "object", "additionalProperties": false,
+      "required": ["binding", "start", "end", "durationMs"],
+      "properties": {
+        "binding": {"$ref": "#/definitions/binding"},
+        "start": {"$ref": "#/definitions/normalized_point"},
+        "end": {"$ref": "#/definitions/normalized_point"},
+        "durationMs": {"type": "integer", "minimum": 150, "maximum": 5000}
+      }
+    },
+    "driver_receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record_version", "task_id", "action_instance_id", "device_id", "claim_id",
+        "controller_completed", "motion_verified", "swipe_executed", "stopped", "cancelled",
+        "mechanical_confirmed", "safe_cleanup_confirmed", "driver_error_code", "timeline"],
+      "properties": {
+        "record_version": {"const": "calibrated-scroll-driver-receipt.v1"},
+        "task_id": {"$ref": "#/definitions/id"}, "action_instance_id": {"$ref": "#/definitions/id"},
+        "device_id": {"$ref": "#/definitions/id"}, "claim_id": {"$ref": "#/definitions/id"},
+        "controller_completed": {"type": ["boolean", "null"]},
+        "motion_verified": {"type": ["boolean", "null"]},
+        "swipe_executed": {"type": ["boolean", "null"]},
+        "stopped": {"type": ["boolean", "null"]}, "cancelled": {"type": ["boolean", "null"]},
+        "mechanical_confirmed": {"type": "boolean"},
+        "safe_cleanup_confirmed": {"type": "boolean"},
+        "driver_error_code": {"$ref": "#/definitions/nullable_id"},
+        "timeline": {"$ref": "#/definitions/timeline"}
+      }
+    },
+    "aggregate_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pairs", "frame_count", "roi_px", "expected_direction", "params", "ocr_endpoint"],
+      "properties": {
+        "pairs": {"type": "array", "maxItems": 29,
+          "items": {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/pair"}},
+        "frame_count": {"type": "integer", "minimum": 1, "maximum": 30},
+        "roi_px": {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/roi_px"},
+        "expected_direction": {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/action"},
+        "params": {"$ref": "#/definitions/parameters"},
+        "ocr_endpoint": {"anyOf": [
+          {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/ocr_endpoint"}, {"type": "null"}]}
+      }
+    },
+    "aggregate_result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["flow_status", "effect_status", "direction_consistent", "dx_px", "dy_px",
+        "horizontal_path_px", "vertical_path_px", "reverse_path_px", "valid_points",
+        "inlier_ratio", "mad_dy_px", "ocr_summary", "failure_pair_index", "reason_code"],
+      "properties": {
+        "flow_status": {"enum": ["displaced", "stationary", "unknown"]},
+        "effect_status": {"enum": ["displaced", "stationary", "unknown"]},
+        "direction_consistent": {"type": ["boolean", "null"]},
+        "dx_px": {"type": ["number", "null"]}, "dy_px": {"type": ["number", "null"]},
+        "horizontal_path_px": {"type": ["number", "null"], "minimum": 0},
+        "vertical_path_px": {"type": ["number", "null"], "minimum": 0},
+        "reverse_path_px": {"type": ["number", "null"], "minimum": 0},
+        "valid_points": {"type": ["integer", "null"], "minimum": 0, "maximum": 200},
+        "inlier_ratio": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "mad_dy_px": {"type": ["number", "null"], "minimum": 0},
+        "ocr_summary": {"anyOf": [
+          {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/ocr_summary"},
+          {"type": "null"}]},
+        "failure_pair_index": {"type": ["integer", "null"], "minimum": 0, "maximum": 28},
+        "reason_code": {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/reason"}
+      }
+    },
+    "evidence_bundle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record", "plan", "config", "frames", "current_binding",
+        "calibration_schema_version", "clock_registration_id", "ocr_endpoint"],
+      "properties": {
+        "record": {"$ref": "#/definitions/action_record"},
+        "plan": {"$ref": "#/definitions/plan_snapshot"},
+        "config": {"$ref": "#/definitions/config_snapshot"},
+        "frames": {
+          "type": "array", "maxItems": 30,
+          "items": {"$ref": "urn:wx:design:calibrated-scroll-observation:v1#/definitions/frame"}},
+        "current_binding": {"$ref": "#/definitions/binding"},
+        "calibration_schema_version": {"const": 3},
+        "clock_registration_id": {"$ref": "#/definitions/id"},
+        "ocr_endpoint": {"anyOf": [
+          {"$ref": "urn:wx:design:calibrated-scroll:v1#/definitions/ocr_endpoint"}, {"type": "null"}]}
+      }
+    }
+  }
+}

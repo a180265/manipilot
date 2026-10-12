@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/wx-auto-navigation.v1.schema.json",
+  "title": "WeChat auto navigation task v1",
+  "description": "自动导航任务（规范第 12.2/22.5/22.6 节）。target 仅 search_* 可带；session_ref 仅 back_to_list 必带；expires_at 必须为有效 UTC 时间。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "task_type", "contract_version", "device_id", "idempotency_key", "payload", "expires_at", "correlation_id"],
+  "properties": {
+    "task_id": {"$ref": "#/$defs/text"},
+    "task_type": {"const": "wx_auto_navigate"},
+    "contract_version": {"const": "wx-auto-navigation.v1"},
+    "device_id": {"$ref": "#/$defs/text"},
+    "idempotency_key": {"$ref": "#/$defs/text"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "correlation_id": {"$ref": "#/$defs/text"},
+    "policy_context": {"type": "object"}
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "unsignedInt": {"type": "integer", "minimum": 0},
+    "positiveInt": {"type": "integer", "minimum": 1},
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "daemon_session", "camera_id", "camera_device_unique_id", "binding_revision", "calibration_fingerprint", "frame_width", "frame_height", "coordinate_frame_hash", "gesture_profile_version", "recipe_version"],
+      "properties": {
+        "device_id": {"$ref": "#/$defs/text"},
+        "daemon_session": {"$ref": "#/$defs/text"},
+        "camera_id": {"$ref": "#/$defs/text"},
+        "camera_device_unique_id": {"$ref": "#/$defs/text"},
+        "binding_revision": {"$ref": "#/$defs/unsignedInt"},
+        "calibration_fingerprint": {"$ref": "#/$defs/sha256"},
+        "frame_width": {"$ref": "#/$defs/positiveInt"},
+        "frame_height": {"$ref": "#/$defs/positiveInt"},
+        "coordinate_frame_hash": {"$ref": "#/$defs/sha256"},
+        "gesture_profile_version": {"$ref": "#/$defs/positiveInt"},
+        "recipe_version": {"$ref": "#/$defs/text"}
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["navigation_id", "binding", "navigation_profile", "action", "step_index"],
+      "properties": {
+        "navigation_id": {"$ref": "#/$defs/uuid"},
+        "binding": {"$ref": "#/$defs/binding"},
+        "navigation_profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile_id", "version", "contract_version"],
+          "properties": {
+            "profile_id": {"$ref": "#/$defs/text"},
+            "version": {"$ref": "#/$defs/positiveInt"},
+            "contract_version": {"const": "automatic-gesture-profile.v1"}
+          }
+        },
+        "action": {"enum": ["search_next", "search_previous", "return_top", "back_to_list", "home"]},
+        "step_index": {"$ref": "#/$defs/positiveInt"},
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["visible_name", "external_conversation_id"],
+          "properties": {
+            "visible_name": {"$ref": "#/$defs/text"},
+            "external_conversation_id": {"$ref": "#/$defs/text"}
+          }
+        },
+        "session_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["session_id", "control_mode", "external_conversation_id"],
+          "properties": {
+            "session_id": {"$ref": "#/$defs/text"},
+            "control_mode": {"enum": ["manual", "automatic"]},
+            "external_conversation_id": {"$ref": "#/$defs/text"}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"action": {"enum": ["search_next", "search_previous"]}}},
+          "then": true,
+          "else": {"not": {"required": ["target"]}}
+        },
+        {
+          "if": {"properties": {"action": {"const": "back_to_list"}}},
+          "then": {"required": ["session_ref"]},
+          "else": {"not": {"required": ["session_ref"]}}
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/chat-send.v1.schema.json",
+  "title": "WX to Arm Fleet chat send task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "task_type", "idempotency_key", "device_id", "wechat_account_id", "external_conversation_id", "expires_at", "payload", "contract_version", "correlation_id"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "task_type": {"const": "chat_send"},
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "device_id": {"type": "string", "minLength": 1},
+    "wechat_account_id": {"type": "string", "minLength": 1},
+    "external_conversation_id": {"type": "string", "minLength": 1},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "contract_version": {"const": "chat-send.v1"},
+    "correlation_id": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "not": {"required": ["navigation", "navigation_profile"]},
+      "required": ["outbox_id", "conversation_id", "draft_id", "text", "text_hash", "approved_at", "opportunity_bindings", "fact_snapshot_ids", "client_request_id"],
+      "properties": {
+        "outbox_id": {"type": "string", "minLength": 1},
+        "conversation_id": {"type": "string", "minLength": 1},
+        "conversation_title": {"type": "string", "minLength": 1},
+        "navigation_profile": {
+          "type": "object",
+          "required": ["profile_id", "version"],
+          "properties": {
+            "profile_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+            "version": {"type": "integer", "minimum": 1}
+          },
+          "additionalProperties": false
+        },
+        "session_id": {"type": "string", "minLength": 1, "description": "可选执行会话编号；只能复用已持有的自动会话，人工会话禁止自动发送"},
+        "draft_id": {"type": "string", "minLength": 1},
+        "text": {"type": "string", "minLength": 1},
+        "text_hash": {"type": "string", "minLength": 1},
+        "approved_at": {"type": "string", "format": "date-time"},
+        "opportunity_bindings": {"type": "array"},
+        "fact_snapshot_ids": {"type": "array", "items": {"type": "string"}},
+        "client_request_id": {"type": "string", "minLength": 1},
+        "navigation": {
+          "type": "object",
+          "description": "可选聊天列表导航；坐标必须来自当前摄像头画面",
+          "properties": {
+            "max_swipes": {"type": "integer", "minimum": 0, "maximum": 10, "default": 0},
+            "top_max_swipes": {"type": "integer", "minimum": 0, "maximum": 10, "default": 5},
+            "swipe_duration_ms": {"type": "number", "minimum": 150, "maximum": 5000, "default": 700},
+            "settle_ms": {"type": "integer", "minimum": 100, "maximum": 2000, "default": 600},
+            "return_to_top": {"type": "boolean", "default": false},
+            "top_anchor_text": {"type": "string", "minLength": 1},
+            "list_region": {"$ref": "#/$defs/cameraRegion"},
+            "top_anchor_region": {"$ref": "#/$defs/cameraRegion"},
+            "search_gesture": {"$ref": "#/$defs/cameraGesture"},
+            "top_gesture": {"$ref": "#/$defs/cameraGesture"}
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "cameraRegion": {
+      "type": "object",
+      "required": ["x1", "y1", "x2", "y2", "frameW", "frameH"],
+      "properties": {
+        "x1": {"type": "number", "minimum": 0},
+        "y1": {"type": "number", "minimum": 0},
+        "x2": {"type": "number", "minimum": 0},
+        "y2": {"type": "number", "minimum": 0},
+        "frameW": {"type": "integer", "minimum": 1},
+        "frameH": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "cameraGesture": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"$ref": "#/$defs/cameraPoint"},
+        "end": {"$ref": "#/$defs/cameraPoint"}
+      },
+      "additionalProperties": false
+    },
+    "cameraPoint": {
+      "type": "object",
+      "required": ["cameraX", "cameraY", "frameW", "frameH"],
+      "properties": {
+        "cameraX": {"type": "number", "minimum": 0},
+        "cameraY": {"type": "number", "minimum": 0},
+        "frameW": {"type": "number", "exclusiveMinimum": 0},
+        "frameH": {"type": "number", "exclusiveMinimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

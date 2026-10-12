@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:layout-reuse:package",
+  "$ref": "#/definitions/manifest",
+  "definitions": {
+    "resource": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "ref"],
+      "properties": {
+        "kind": {"enum": ["template", "region", "adaptation"]},
+        "ref": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/ref"}
+      }
+    },
+    "resources": {"type": "array", "minItems": 1, "maxItems": 4999, "uniqueItems": true, "items": {"$ref": "#/definitions/resource"}},
+    "path": {"type": "string", "maxLength": 512, "pattern": "^(?:templates|regions|adaptations)/[A-Za-z0-9][A-Za-z0-9_-]{0,63}/[1-9][0-9]*/(?:record\\.json|assets/(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}/)*[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\\.(?:png|jpg|jpeg))$"},
+    "entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "kind", "resource", "owner", "asset", "byte_size", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/definitions/path"}, "kind": {"enum": ["record", "asset"]},
+        "resource": {"anyOf": [{"$ref": "#/definitions/resource"}, {"type": "null"}]},
+        "owner": {"anyOf": [{"$ref": "#/definitions/resource"}, {"type": "null"}]},
+        "asset": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:common#/definitions/asset"}, {"type": "null"}]},
+        "byte_size": {"type": "integer", "minimum": 1, "maximum": 209715200},
+        "sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"}
+      }
+    },
+    "manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "package_id", "roots", "entries", "file_count", "total_bytes", "created_at", "created_by", "privacy_scope", "sha256"],
+      "properties": {
+        "contract_version": {"const": "layout-package-manifest.v1"},
+        "package_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "roots": {"$ref": "#/definitions/resources"},
+        "entries": {"type": "array", "minItems": 1, "maxItems": 4999, "items": {"$ref": "#/definitions/entry"}},
+        "file_count": {"type": "integer", "minimum": 2, "maximum": 5000},
+        "total_bytes": {"type": "integer", "minimum": 1, "maximum": 209715200},
+        "created_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "created_by": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "privacy_scope": {"const": "sanitized_layout_only"},
+        "sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"}
+      }
+    },
+    "export_request": {
+      "type": "object", "additionalProperties": false, "required": ["client_request_id", "roots"],
+      "properties": {
+        "client_request_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "roots": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "export_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation_id", "package_id", "manifest", "archive_sha256", "archive_byte_size", "replayed"],
+      "properties": {
+        "operation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "package_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "manifest": {"$ref": "#/definitions/manifest"},
+        "archive_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "archive_byte_size": {"type": "integer", "minimum": 1, "maximum": 209715200},
+        "replayed": {"type": "boolean"}
+      }
+    },
+    "import_preview_request": {
+      "type": "object", "additionalProperties": false, "required": ["archive_sha256", "archive_base64", "privacy_confirmed"],
+      "properties": {
+        "archive_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "archive_base64": {"$ref": "urn:wx:design:layout-reuse:api#/definitions/base64"},
+        "privacy_confirmed": {"const": true}
+      }
+    },
+    "import_item": {
+      "type": "object", "additionalProperties": false, "required": ["resource", "status"],
+      "properties": {"resource": {"$ref": "#/definitions/resource"}, "status": {"enum": ["new", "reuse", "conflict"]}}
+    },
+    "import_preview_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["preview_id", "manifest", "archive_sha256", "items", "can_import", "created_at", "expires_at"],
+      "properties": {
+        "preview_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "manifest": {"$ref": "#/definitions/manifest"},
+        "archive_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "items": {"type": "array", "minItems": 1, "maxItems": 4999, "items": {"$ref": "#/definitions/import_item"}},
+        "can_import": {"type": "boolean"},
+        "created_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "expires_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"}
+      }
+    },
+    "import_request": {
+      "type": "object", "additionalProperties": false, "required": ["client_request_id", "preview_id", "archive_sha256"],
+      "properties": {
+        "client_request_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "preview_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "archive_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"}
+      }
+    },
+    "import_response": {
+      "type": "object", "additionalProperties": false, "required": ["operation_id", "package_id", "items", "pointers_changed", "replayed"],
+      "properties": {
+        "operation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "package_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "items": {"type": "array", "minItems": 1, "maxItems": 4999, "items": {"$ref": "#/definitions/import_item"}},
+        "pointers_changed": {"const": false}, "replayed": {"type": "boolean"}
+      }
+    },
+    "preview_record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["preview_id", "principal_id", "request_hash", "archive_sha256", "manifest", "items", "created_at", "expires_at", "server_instance_id", "created_monotonic_ms", "consumed_by"],
+      "properties": {
+        "preview_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "principal_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "request_hash": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "archive_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "manifest": {"$ref": "#/definitions/manifest"},
+        "items": {"type": "array", "minItems": 1, "maxItems": 4999, "items": {"$ref": "#/definitions/import_item"}},
+        "created_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "expires_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "server_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "created_monotonic_ms": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "consumed_by": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_uuid"}
+      }
+    },
+    "export_record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["package_id", "principal_id", "operation_id", "manifest", "archive_sha256", "archive_byte_size", "created_at"],
+      "properties": {
+        "package_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "principal_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "operation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "manifest": {"$ref": "#/definitions/manifest"},
+        "archive_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "archive_byte_size": {"type": "integer", "minimum": 1, "maximum": 209715200},
+        "created_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"}
+      }
+    }
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/screen-observation.v1.schema.json",
+  "title": "Arm Fleet screen evidence response v1",
+  "description": "HTTP 200 response from GET /v1/devices/{device_id}/screen-observation. Raw evidence only, not customer messages or action authorization.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "contract_version", "device_id", "camera_id", "daemon_session",
+    "wechat_account_id", "binding_revision", "calibration_fingerprint",
+    "captured_at", "frame_sha256", "frame_seq", "quality", "frame_width", "frame_height",
+    "screen_width", "screen_height", "screen_to_camera",
+    "image_base64", "image_sha256", "ocr"
+  ],
+  "properties": {
+    "contract_version": {"const": "screen-observation.v1"},
+    "device_id": {"type": "string", "minLength": 1},
+    "camera_id": {"type": "string", "minLength": 1},
+    "daemon_session": {"type": "string", "minLength": 1},
+    "wechat_account_id": {"type": ["string", "null"]},
+    "binding_revision": {"type": "integer", "minimum": 0},
+    "camera_device_unique_id": {"type": "string", "minLength": 1},
+    "calibration_fingerprint": {"$ref": "#/$defs/sha256"},
+    "motion_calibration_fingerprint": {"$ref": "#/$defs/sha256"},
+    "captured_at": {
+      "type": "string", "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "frame_sha256": {"$ref": "#/$defs/sha256"},
+    "frame_seq": {"type": "integer", "minimum": 0},
+    "quality": {"enum": ["clear", "waiting"]},
+    "frame_width": {"type": "integer", "minimum": 1},
+    "frame_height": {"type": "integer", "minimum": 1},
+    "screen_width": {"type": "integer", "minimum": 1, "maximum": 720},
+    "screen_height": {"type": "integer", "minimum": 1, "maximum": 1600},
+    "screen_to_camera": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "array", "minItems": 3, "maxItems": 3,
+        "items": {"type": "number"}
+      }
+    },
+    "screen_to_calibrated_camera": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "array", "minItems": 3, "maxItems": 3,
+        "items": {"type": "number"}
+      }
+    },
+    "image_base64": {
+      "type": "string", "minLength": 1,
+      "contentEncoding": "base64", "contentMediaType": "image/png"
+    },
+    "image_sha256": {"$ref": "#/$defs/sha256"},
+    "ocr": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "region", "text", "words", "confidence", "truncated", "engine",
+        "engine_version", "request_id", "elapsed_ms", "width", "height"
+      ],
+      "properties": {
+        "region": {"type": "string"},
+        "text": {"type": "string"},
+        "words": {"type": "array", "items": {"$ref": "#/$defs/ocrWord"}},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "truncated": {"type": "boolean"},
+        "engine": {"type": "string"},
+        "engine_version": {"type": "string"},
+        "request_id": {"type": "string"},
+        "elapsed_ms": {"type": "integer", "minimum": 0},
+        "width": {"type": "integer", "minimum": 0},
+        "height": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "$defs": {
+    "apiError": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["key", "title", "suggestion", "trace_id"],
+          "properties": {
+            "key": {"type": "string", "minLength": 1},
+            "title": {"type": "string", "minLength": 1},
+            "suggestion": {"type": "string", "minLength": 1},
+            "trace_id": {"type": "string", "minLength": 1},
+            "detail": {"type": "string"}
+          }
+        }
+      }
+    },
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "ocrWord": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["text", "x", "y", "width", "height", "confidence"],
+      "properties": {
+        "text": {"type": "string"},
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number", "minimum": 0},
+        "height": {"type": "number", "minimum": 0},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    }
+  }
+}

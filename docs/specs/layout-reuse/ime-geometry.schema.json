@@ -1,0 +1,173 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:layout-reuse:ime",
+  "$comment": "Proposed read-only geometry protocol. No text, input permission or actuator command.",
+  "$ref": "#/definitions/snapshot",
+  "definitions": {
+    "handshake_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "client_instance_id", "imeGeometryVersion"],
+      "properties": {
+        "contract_version": {"const": "ime-geometry.v1"},
+        "client_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "imeGeometryVersion": {"type": "integer", "const": 1}
+      }
+    },
+    "handshake_response": {
+      "type": "object", "additionalProperties": false, "required": ["contract_version", "runtime_session_id"],
+      "properties": {"contract_version": {"const": "ime-geometry.v1"}, "runtime_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"}}
+    },
+    "poll_query": {
+      "$comment": "Normalized query parameters. runtime_session_id is a proposed addition to prevent old pollers consuming new requests.",
+      "type": "object", "additionalProperties": false, "required": ["runtime_session_id", "waitSeconds"],
+      "properties": {
+        "runtime_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "waitSeconds": {"type": "integer", "minimum": 0, "maximum": 20}
+      }
+    },
+    "poll_response": {
+      "type": "object", "additionalProperties": false, "required": ["contract_version", "runtime_session_id", "request_nonce"],
+      "properties": {
+        "contract_version": {"const": "ime-geometry.v1"},
+        "runtime_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "request_nonce": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"}
+      }
+    },
+    "display": {
+      "type": "object", "additionalProperties": false, "required": ["display_id", "width_px", "height_px", "rotation", "density"],
+      "properties": {
+        "display_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "width_px": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/positive"},
+        "height_px": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/positive"},
+        "rotation": {"type": "integer", "enum": [0, 90, 180, 270]},
+        "density": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "target": {
+      "type": "object", "additionalProperties": false, "required": ["id", "bounds", "visible", "enabled", "clickable"],
+      "properties": {
+        "id": {"enum": ["ime_candidate_bar", "ime_delete_key"]},
+        "bounds": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:common#/definitions/bounds"}, {"type": "null"}]},
+        "visible": {"type": "boolean"}, "enabled": {"type": "boolean"}, "clickable": {"type": "boolean"}
+      },
+      "allOf": [
+        {"if": {"properties": {"visible": {"const": false}}}, "then": {"properties": {"bounds": {"type": "null"}, "clickable": {"const": false}}}, "else": {"properties": {"bounds": {"type": "object"}}}},
+        {"if": {"properties": {"clickable": {"const": true}}}, "then": {"properties": {"visible": {"const": true}, "enabled": {"const": true}, "bounds": {"type": "object"}}}}
+      ]
+    },
+    "snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "ime_device_id", "runtime_session_id", "view_instance_id", "seq", "request_nonce", "captured_uptime_ms", "display", "layout_version", "keyboard_active", "geometry_valid", "keyboard_bounds", "current_task_id", "targets", "reason"],
+      "properties": {
+        "contract_version": {"const": "ime-geometry.v1"},
+        "ime_device_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "runtime_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "view_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "seq": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/positive"},
+        "request_nonce": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_uuid"},
+        "captured_uptime_ms": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "display": {"$ref": "#/definitions/display"},
+        "layout_version": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/text"},
+        "keyboard_active": {"type": "boolean"}, "geometry_valid": {"type": "boolean"},
+        "keyboard_bounds": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:common#/definitions/bounds"}, {"type": "null"}]},
+        "current_task_id": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"}, {"type": "null"}]},
+        "targets": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/definitions/target"}},
+        "reason": {"enum": ["layout_ready", "layout_changed", "task_changed", "hidden", "destroyed", "snapshot"]}
+      },
+      "allOf": [
+        {"if": {"properties": {"reason": {"const": "snapshot"}}}, "then": {"properties": {"request_nonce": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"}}}, "else": {"properties": {"request_nonce": {"type": "null"}}}},
+        {"if": {"properties": {"geometry_valid": {"const": true}}}, "then": {"properties": {"keyboard_active": {"const": true}, "keyboard_bounds": {"type": "object"}}}, "else": {"properties": {"keyboard_bounds": {"type": "null"}, "targets": {"items": {"properties": {"bounds": {"type": "null"}, "visible": {"const": false}, "clickable": {"const": false}}}}}}},
+        {"if": {"properties": {"reason": {"enum": ["hidden", "destroyed"]}}}, "then": {"properties": {"keyboard_active": {"const": false}, "geometry_valid": {"const": false}}}}
+      ]
+    },
+    "report_response": {
+      "type": "object", "additionalProperties": false, "required": ["contract_version", "accepted_seq", "geometry_valid", "server_received_at"],
+      "properties": {
+        "contract_version": {"const": "ime-geometry.v1"},
+        "accepted_seq": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/positive"},
+        "geometry_valid": {"type": "boolean"},
+        "server_received_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"}
+      }
+    },
+    "nonce_context": {
+      "$comment": "Server memory/test context, not supplied by an IME or browser.",
+      "type": "object", "additionalProperties": false,
+      "required": ["request_nonce", "runtime_session_id", "view_instance_id", "operation_id", "issued_at_ms"],
+      "properties": {
+        "request_nonce": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "runtime_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "view_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "operation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "issued_at_ms": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"}
+      }
+    },
+    "receipt": {
+      "$comment": "Immutable first acceptance record per runtime session and seq. Not a client request.",
+      "type": "object", "additionalProperties": false,
+      "required": ["runtime_session_id", "view_instance_id", "seq", "snapshot_sha256", "server_received_at", "received_monotonic_ms", "request_nonce", "nonce_issued_at_ms", "nonce_expires_at_ms"],
+      "properties": {
+        "runtime_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "view_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "seq": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/positive"},
+        "snapshot_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/sha"},
+        "server_received_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "received_monotonic_ms": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "request_nonce": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_uuid"},
+        "nonce_issued_at_ms": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"}, {"type": "null"}]},
+        "nonce_expires_at_ms": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"}, {"type": "null"}]}
+      },
+      "allOf": [{
+        "if": {"properties": {"request_nonce": {"type": "null"}}},
+        "then": {"properties": {"nonce_issued_at_ms": {"type": "null"}, "nonce_expires_at_ms": {"type": "null"}}},
+        "else": {"properties": {"nonce_issued_at_ms": {"type": "integer"}, "nonce_expires_at_ms": {"type": "integer"}}}
+      }]
+    },
+    "acceptance_case": {
+      "$comment": "Offline valid report acceptance, including contextual freshness; never an API.",
+      "type": "object", "additionalProperties": false,
+      "required": ["snapshot", "authenticated_device_id", "active_runtime_session_id", "current_view_instance_id", "retired_view_ids", "max_seq", "previous_snapshot_sha256", "max_captured_uptime_ms", "pending_nonce", "now_ms", "server_now", "first_receipt", "receipt_after", "report_response"],
+      "properties": {
+        "snapshot": {"$ref": "#/definitions/snapshot"},
+        "authenticated_device_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"},
+        "active_runtime_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "current_view_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_uuid"},
+        "retired_view_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"}},
+        "max_seq": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "previous_snapshot_sha256": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_sha"},
+        "max_captured_uptime_ms": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "pending_nonce": {"anyOf": [{"$ref": "#/definitions/nonce_context"}, {"type": "null"}]},
+        "now_ms": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "server_now": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
+        "first_receipt": {"anyOf": [{"$ref": "#/definitions/receipt"}, {"type": "null"}]},
+        "receipt_after": {"$ref": "#/definitions/receipt"},
+        "report_response": {"$ref": "#/definitions/report_response"}
+      }
+    },
+    "contact_case": {
+      "$comment": "Offline last-contact geometry checks; does not assert input permission or mechanical safety.",
+      "type": "object", "additionalProperties": false,
+      "required": ["acceptance", "now_ms", "operation_id", "target_id", "owner_task_id", "camera_matches", "expected_display", "expected_layout_version", "input_claim_valid"],
+      "properties": {
+        "acceptance": {"$ref": "#/definitions/acceptance_case"},
+        "now_ms": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
+        "operation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
+        "target_id": {"enum": ["ime_candidate_bar", "ime_delete_key"]},
+        "owner_task_id": {"anyOf": [{"$ref": "urn:wx:design:layout-reuse:common#/definitions/id"}, {"type": "null"}]},
+        "camera_matches": {"type": "boolean"},
+        "expected_display": {"$ref": "#/definitions/display"},
+        "expected_layout_version": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/text"},
+        "input_claim_valid": {"type": "boolean"}
+      }
+    },
+    "handshake_case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["request", "response", "active_client_instance_id", "active_runtime_session_id", "retired_client_instance_ids"],
+      "properties": {
+        "request": {"$ref": "#/definitions/handshake_request"}, "response": {"$ref": "#/definitions/handshake_response"},
+        "active_client_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_uuid"},
+        "active_runtime_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_uuid"},
+        "retired_client_instance_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"}}
+      }
+    }
+  }
+}

@@ -1,0 +1,501 @@
+{
+  "plugin_id": "screen-gesture-adapter",
+  "name_display": "屏幕单次手势适配插件",
+  "version": "1.1.0",
+  "vendor": "外部屏幕手势适配",
+  "description": "screen-gesture.v1 执行一次归一化双击/滑动（只确认机械）；calibrated-scroll.v1 由 schemaVersion=3 校准直驱上下滑动并逐次光流判定内容效果。不读取手势证书、导航模板或 automatic_gestures.json。",
+  "entry_module": "plugin.py",
+  "test_fixture": "fake-screen-gesture",
+  "screen_context_guards": [
+    {
+      "plugin_id": "wx-wechat-adapter",
+      "state_key": "manual_session"
+    }
+  ],
+  "task_types": [
+    {
+      "task_type": "screen_gesture",
+      "name_display": "屏幕单次手势任务",
+      "confirmed_display": "机械动作已完成，手机效果未核验",
+      "capability": "screen.gesture",
+      "risk_level": "高",
+      "description": "完整绑定校验后，动作前取证、单次双击或滑动、动作后取证",
+      "entry_conditions": "当前设备及校准绑定有效，所需动作特性可用；运行时确认无持有的外部执行会话并取得本任务租约",
+      "exit_conditions": "双击宏完成两次下压或滑动已执行，机械动作已核验，前后证据完整；平台负责安全收尾",
+      "failure_handling": "动作前参数或证据失败拒绝执行；动作异常、停止、不完整或证据不足为结果未知，不重试，不推断手机效果",
+      "request_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "task_type",
+          "contract_version",
+          "device_id",
+          "idempotency_key",
+          "payload",
+          "expires_at",
+          "correlation_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "task_type": {
+            "const": "screen_gesture"
+          },
+          "contract_version": {
+            "const": "screen-gesture.v1"
+          },
+          "device_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "correlation_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "policy_context": {
+            "type": "object"
+          }
+        }
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "binding"
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "double_tap",
+              "swipe"
+            ]
+          },
+          "binding": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "device_id",
+              "daemon_session",
+              "camera_id",
+              "camera_device_unique_id",
+              "binding_revision",
+              "calibration_fingerprint",
+              "frame_width",
+              "frame_height"
+            ],
+            "properties": {
+              "device_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "daemon_session": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "camera_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "camera_device_unique_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "binding_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "calibration_fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "frame_width": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "frame_height": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "point": {
+            "$ref": "#/$defs/point"
+          },
+          "start": {
+            "$ref": "#/$defs/point"
+          },
+          "end": {
+            "$ref": "#/$defs/point"
+          },
+          "interval_ms": {
+            "type": "number",
+            "minimum": 50,
+            "maximum": 500
+          },
+          "duration_ms": {
+            "type": "number",
+            "minimum": 150,
+            "maximum": 5000
+          }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "const": "double_tap"
+              }
+            },
+            "required": [
+              "point"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "start"
+                  ]
+                },
+                {
+                  "required": [
+                    "end"
+                  ]
+                },
+                {
+                  "required": [
+                    "duration_ms"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "swipe"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "point"
+                  ]
+                },
+                {
+                  "required": [
+                    "interval_ms"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "$defs": {
+          "point": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "x",
+              "y"
+            ],
+            "properties": {
+              "x": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "y": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "task_type": "calibrated_scroll",
+      "name_display": "校准直驱上下滑动任务",
+      "confirmed_display": "机械滑动完成，内容已按方向滚动",
+      "capability": "screen.calibrated_scroll",
+      "risk_level": "高",
+      "description": "由当前 schemaVersion=3 校准计算一次上滑或下滑，机械执行后按当次光流判定内容效果；机械结论与效果结论分开表达。不读手势证书、导航模板、顶部模板。",
+      "entry_conditions": "设备存在 v3 校准绑定；请求 binding 与当前校准语义一致；运行时确认无冲突租约",
+      "exit_conditions": "只执行一次滑动；机械收尾确认后按光流给出 displaced/stationary/unknown 效果结论",
+      "failure_handling": "动作前校准/帧/绑定失败零动作失败返回；机械未确认为结果未知；内容静止为 failed(scroll_no_displacement)；任何效果未知禁止重试",
+      "request_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "task_type",
+          "contract_version",
+          "device_id",
+          "idempotency_key",
+          "payload",
+          "expires_at",
+          "correlation_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "task_type": {
+            "const": "calibrated_scroll"
+          },
+          "contract_version": {
+            "const": "calibrated-scroll.v1"
+          },
+          "device_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action",
+              "binding"
+            ],
+            "properties": {
+              "action": {
+                "enum": [
+                  "swipe_up",
+                  "swipe_down"
+                ]
+              },
+              "binding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "device_id",
+                  "daemon_session",
+                  "camera_id",
+                  "camera_device_unique_id",
+                  "camera_binding_id",
+                  "source_geometry_id",
+                  "binding_revision",
+                  "calibration_fingerprint",
+                  "frame_width",
+                  "frame_height"
+                ],
+                "properties": {
+                  "device_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "daemon_session": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "camera_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "camera_device_unique_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "camera_binding_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "source_geometry_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "binding_revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "calibration_fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "frame_width": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "frame_height": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "correlation_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "policy_context": {
+            "type": "object"
+          }
+        }
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "binding"
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "swipe_up",
+              "swipe_down"
+            ]
+          },
+          "binding": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "device_id",
+              "daemon_session",
+              "camera_id",
+              "camera_device_unique_id",
+              "camera_binding_id",
+              "source_geometry_id",
+              "binding_revision",
+              "calibration_fingerprint",
+              "frame_width",
+              "frame_height"
+            ],
+            "properties": {
+              "device_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "daemon_session": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "camera_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "camera_device_unique_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "camera_binding_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "source_geometry_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "binding_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "calibration_fingerprint": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "frame_width": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "frame_height": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "capabilities": [
+    "arm.double_tap",
+    "arm.stop",
+    "arm.swipe",
+    "camera.capture",
+    "camera.measure_scroll"
+  ],
+  "resources": {
+    "devices": {
+      "mode": "assigned",
+      "description": "只访问本任务设备，绑定由平台再次核验"
+    },
+    "camera": true,
+    "input": false,
+    "arm": true,
+    "external_services": [],
+    "data_scope": {
+      "reads_customer_message_text": false,
+      "writes_customer_data": false,
+      "sends_external_messages": false,
+      "note": "不解释截图中的客户或应用内容；任意屏幕动作仍可能触发手机应用效果，调用方必须自行授权"
+    }
+  },
+  "evidence": {
+    "screenshot_required": true,
+    "home_check_required": true
+  },
+  "limits": {
+    "max_actions_per_task": 1
+  }
+}

@@ -1,0 +1,222 @@
+{
+  "description": "Synthetic documentation-only examples, not captured hardware evidence.",
+  "positive": [
+    {
+      "name": "fresh_before_frame",
+      "record": {
+        "record_type": "frame",
+        "task_id": "task-fixture-01",
+        "action_instance_id": "scroll-fixture-01",
+        "sample_index": 0,
+        "phase": "before",
+        "binding": {
+          "device_id": "arm-fixture",
+          "daemon_session": "daemon-fixture-01",
+          "camera_id": "cam-fixture",
+          "camera_device_unique_id": "physical-fixture-camera",
+          "camera_binding_id": "12345678-1234-4234-8234-123456789abc",
+          "source_geometry_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "binding_revision": 3,
+          "calibration_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "frame_width": 1280,
+          "frame_height": 720
+        },
+        "planning_version": "fixture-planning.v1",
+        "observation_version": "calibrated-scroll-observation.v1",
+        "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "source_frame": {
+          "device_id": "arm-fixture",
+          "camera_id": "cam-fixture",
+          "device_unique_id": "physical-fixture-camera",
+          "camera_binding_id": "12345678-1234-4234-8234-123456789abc",
+          "source_geometry_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "binding_revision": 3,
+          "source_frame_seq": 100,
+          "source_captured_at": "2026-10-01T01:00:00.000Z",
+          "source_received_at": "2026-10-01T01:00:00.020Z",
+          "source_legacy_mode": false,
+          "width": 1280,
+          "height": 720,
+          "source_generation_id": "87654321-1234-4234-8234-123456789abc",
+          "source_capture_seq": 80,
+          "source_clock_id": "mach-absolute:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "source_captured_monotonic_ns": 1000000000,
+          "source_capture_uncertainty_ms": 1,
+          "source_timing_provenance": "camera_pts_host_clock.v1"
+        },
+        "evidence_id": "evd-fixture-0",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "accepted_monotonic_ns": 1030000000,
+        "accepted_at": "2026-10-01T01:00:00.030Z",
+        "freshness_checked_at": "2026-10-01T01:00:00.030Z"
+      }
+    },
+    {
+      "name": "small_valid_pair",
+      "record": {
+        "record_type": "pair",
+        "pair_index": 0,
+        "from_sample_index": 0,
+        "to_sample_index": 1,
+        "corners": 20,
+        "valid_points": 16,
+        "inlier_ratio": 0.8,
+        "forward_backward_max_px": 1,
+        "dx_px": 0.5,
+        "dy_px": -12,
+        "mad_dy_px": 0.5,
+        "quality_ok": true,
+        "reason_code": null
+      }
+    },
+    {
+      "name": "insufficient_features_pair",
+      "record": {
+        "record_type": "pair",
+        "pair_index": 0,
+        "from_sample_index": 0,
+        "to_sample_index": 1,
+        "corners": 7,
+        "valid_points": 0,
+        "inlier_ratio": 0,
+        "forward_backward_max_px": null,
+        "dx_px": null,
+        "dy_px": null,
+        "mad_dy_px": null,
+        "quality_ok": false,
+        "reason_code": "insufficient_features"
+      }
+    },
+    {
+      "name": "confirmed_chain",
+      "record": {
+        "record_type": "chain",
+        "task_id": "task-fixture-01",
+        "action_instance_id": "scroll-fixture-01",
+        "device_id": "arm-fixture",
+        "binding": {
+          "device_id": "arm-fixture",
+          "daemon_session": "daemon-fixture-01",
+          "camera_id": "cam-fixture",
+          "camera_device_unique_id": "physical-fixture-camera",
+          "camera_binding_id": "12345678-1234-4234-8234-123456789abc",
+          "source_geometry_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "binding_revision": 3,
+          "calibration_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "frame_width": 1280,
+          "frame_height": 720
+        },
+        "planning_version": "calibrated-scroll-planning.v1",
+        "source_clock_id": "mach-absolute:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frame_evidence_ids": ["evd-fixture-0", "evd-fixture-1", "evd-fixture-2", "evd-fixture-3", "evd-fixture-4"],
+        "observation_version": "calibrated-scroll-observation.v1",
+        "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "expected_direction": "swipe_up",
+        "frame_count": 5,
+        "roi_px": {"x": 100, "y": 200, "width": 800, "height": 600},
+        "pairs": [
+          {
+            "record_type": "pair", "pair_index": 0, "from_sample_index": 0, "to_sample_index": 1,
+            "corners": 20, "valid_points": 16, "inlier_ratio": 0.8,
+            "forward_backward_max_px": 1, "dx_px": 0.5, "dy_px": -30,
+            "mad_dy_px": 0.5, "quality_ok": true, "reason_code": null
+          },
+          {
+            "record_type": "pair", "pair_index": 1, "from_sample_index": 1, "to_sample_index": 2,
+            "corners": 20, "valid_points": 16, "inlier_ratio": 0.8,
+            "forward_backward_max_px": 1, "dx_px": 0.5, "dy_px": -30,
+            "mad_dy_px": 0.5, "quality_ok": true, "reason_code": null
+          },
+          {
+            "record_type": "pair", "pair_index": 2, "from_sample_index": 2, "to_sample_index": 3,
+            "corners": 20, "valid_points": 16, "inlier_ratio": 0.8,
+            "forward_backward_max_px": 1, "dx_px": 0, "dy_px": 0,
+            "mad_dy_px": 0.5, "quality_ok": true, "reason_code": null
+          },
+          {
+            "record_type": "pair", "pair_index": 3, "from_sample_index": 3, "to_sample_index": 4,
+            "corners": 20, "valid_points": 16, "inlier_ratio": 0.8,
+            "forward_backward_max_px": 1, "dx_px": 0, "dy_px": 0,
+            "mad_dy_px": 0.5, "quality_ok": true, "reason_code": null
+          }
+        ],
+        "sampling_status": "complete",
+        "settled_tail_pairs": 2,
+        "before_evidence_id": "evd-fixture-0",
+        "after_evidence_id": "evd-fixture-4",
+        "flow_status": "displaced",
+        "effect_status": "displaced",
+        "direction_consistent": true,
+        "dx_px": 1,
+        "dy_px": -60,
+        "horizontal_path_px": 1,
+        "vertical_path_px": 60,
+        "reverse_path_px": 0,
+        "valid_points": 16,
+        "inlier_ratio": 0.8,
+        "mad_dy_px": 0.5,
+        "ocr_summary": null,
+        "failure_pair_index": null,
+        "reason_code": null
+      }
+    },
+    {
+      "name": "review_no_motion",
+      "record": {
+        "record_type": "review_request",
+        "contract_version": "calibrated-scroll-review.v1",
+        "request_id": "review-fixture-01",
+        "expected_revision": 4,
+        "task_id": "task-fixture-01",
+        "action_instance_id": "scroll-fixture-01",
+        "acknowledge_no_replay": true,
+        "note": "Reviewed original evidence; do not replay the action."
+      }
+    },
+    {
+      "name": "global_revision_changed_same_channel",
+      "base": "fresh_before_frame",
+      "set": {"source_frame.binding_revision": 99}
+    }
+  ],
+  "negative": [
+    {"name": "missing_binding_instance", "base": "fresh_before_frame", "stage": "schema", "remove": ["binding.camera_binding_id"]},
+    {"name": "missing_source_instance", "base": "fresh_before_frame", "stage": "schema", "remove": ["source_frame.camera_binding_id"]},
+    {"name": "missing_binding_geometry", "base": "fresh_before_frame", "stage": "schema", "remove": ["binding.source_geometry_id"]},
+    {"name": "missing_source_geometry", "base": "fresh_before_frame", "stage": "schema", "remove": ["source_frame.source_geometry_id"]},
+    {"name": "uppercase_instance", "base": "fresh_before_frame", "stage": "schema", "set": {"source_frame.camera_binding_id": "12345678-1234-4234-8234-123456789ABC"}},
+    {"name": "source_instance_changed", "base": "fresh_before_frame", "stage": "semantic", "set": {"source_frame.camera_binding_id": "99999999-1234-4234-8234-123456789abc"}},
+    {"name": "source_geometry_changed", "base": "fresh_before_frame", "stage": "semantic", "set": {"source_frame.source_geometry_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}},
+    {"name": "nested_binding_contract_forbidden", "base": "fresh_before_frame", "stage": "schema", "set": {"binding.binding_contract": "camera-binding.v1"}},
+    {"name": "frame_boolean_sequence", "base": "fresh_before_frame", "stage": "schema", "set": {"source_frame.source_frame_seq": true}},
+    {"name": "frame_fractional_sequence", "base": "fresh_before_frame", "stage": "schema", "set": {"source_frame.source_capture_seq": 1.2}},
+    {"name": "frame_legacy_mode", "base": "fresh_before_frame", "stage": "schema", "set": {"source_frame.source_legacy_mode": true}},
+    {"name": "frame_upload_clock", "base": "fresh_before_frame", "stage": "schema", "set": {"source_frame.source_timing_provenance": "upload_time"}},
+    {"name": "frame_uncertainty_too_high", "base": "fresh_before_frame", "stage": "schema", "set": {"source_frame.source_capture_uncertainty_ms": 21}},
+    {"name": "frame_missing_source", "base": "fresh_before_frame", "stage": "schema", "remove": ["source_frame.source_generation_id"]},
+    {"name": "frame_bad_time", "base": "fresh_before_frame", "stage": "schema", "set": {"source_frame.source_captured_at": "2026-10-01T01:00:00"}},
+    {"name": "frame_extra_source", "base": "fresh_before_frame", "stage": "schema", "set": {"source_frame.ready": true}},
+    {"name": "frame_cross_device", "base": "fresh_before_frame", "stage": "semantic", "set": {"source_frame.device_id": "another-arm"}},
+    {"name": "frame_cross_dimensions", "base": "fresh_before_frame", "stage": "semantic", "set": {"source_frame.width": 720}},
+    {"name": "frame_capture_in_future", "base": "fresh_before_frame", "stage": "semantic", "set": {"source_frame.source_captured_monotonic_ns": 9000000000}},
+    {"name": "frame_before_wrong_index", "base": "fresh_before_frame", "stage": "schema", "set": {"sample_index": 1}},
+    {"name": "pair_missing_mad", "base": "small_valid_pair", "stage": "schema", "remove": ["mad_dy_px"]},
+    {"name": "pair_fake_points", "base": "small_valid_pair", "stage": "schema", "set": {"valid_points": true}},
+    {"name": "pair_failed_without_reason", "base": "small_valid_pair", "stage": "schema", "set": {"quality_ok": false}},
+    {"name": "pair_quality_without_metrics", "base": "small_valid_pair", "stage": "schema", "set": {"dx_px": null}},
+    {"name": "pair_bad_ratio", "base": "small_valid_pair", "stage": "semantic", "set": {"inlier_ratio": 0.9}},
+    {"name": "pair_skipped_index", "base": "small_valid_pair", "stage": "semantic", "set": {"to_sample_index": 2}},
+    {"name": "pair_more_valid_than_corners", "base": "small_valid_pair", "stage": "semantic", "set": {"valid_points": 21}},
+    {"name": "chain_over_limit", "base": "confirmed_chain", "stage": "schema", "set": {"frame_count": 31}},
+    {"name": "chain_bad_pair_count", "base": "confirmed_chain", "stage": "semantic", "set": {"frame_count": 6}},
+    {"name": "chain_fake_summary", "base": "confirmed_chain", "stage": "semantic", "set": {"dy_px": -80}},
+    {"name": "chain_wrong_direction", "base": "confirmed_chain", "stage": "semantic", "set": {"expected_direction": "swipe_down"}},
+    {"name": "chain_missing_after", "base": "confirmed_chain", "stage": "schema", "set": {"after_evidence_id": null}},
+    {"name": "chain_unsettled_success", "base": "confirmed_chain", "stage": "schema", "set": {"settled_tail_pairs": 0}},
+    {"name": "chain_false_stationary", "base": "confirmed_chain", "stage": "semantic", "set": {"flow_status": "stationary", "effect_status": "stationary", "direction_consistent": null}},
+    {"name": "review_boolean_revision", "base": "review_no_motion", "stage": "schema", "set": {"expected_revision": true}},
+    {"name": "review_no_acknowledgment", "base": "review_no_motion", "stage": "schema", "set": {"acknowledge_no_replay": false}},
+    {"name": "review_extra_motion", "base": "review_no_motion", "stage": "schema", "set": {"retry": true}},
+    {"name": "review_blank_note", "base": "review_no_motion", "stage": "schema", "set": {"note": "   "}}
+  ]
+}

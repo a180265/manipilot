@@ -1,0 +1,265 @@
+{
+  "note": "Synthetic documentation data, not physical observations or operator credentials.",
+  "values": {
+    "geometry": {
+      "contract_version": "source-geometry.v1",
+      "input_size": {"width": 1280, "height": 720},
+      "format_id": "fourcc:34323076;size:1280x720;pixel-aspect:1/1",
+      "crop": {"left": 0, "top": 0, "right": 1280, "bottom": 720},
+      "rotation_degrees": 0, "mirror_x": false, "mirror_y": false,
+      "output_size": {"width": 1280, "height": 720},
+      "resampler": "none", "zoom_milli": 1000, "stabilization": "off"
+    },
+    "legacy_record": {
+      "cameraId": "cam-01", "deviceUniqueId": "fixture-camera-A", "displayName": "测试摄像头",
+      "boundAt": null, "boundBy": null
+    },
+    "record": {
+      "cameraId": "cam-01", "deviceUniqueId": "fixture-camera-A",
+      "cameraBindingId": "10000000-0000-4000-8000-000000000001",
+      "displayName": "测试摄像头", "boundAt": null, "boundBy": null
+    },
+    "legacy_file": {"schemaVersion": 1, "revision": 7, "bindings": [{"$sample": "legacy_record"}]},
+    "file": {"schemaVersion": 2, "revision": 8, "bindings": [{"$sample": "record"}]},
+    "view": {
+      "contract_version": "camera-binding.v2", "camera_id": "cam-01", "device_id": "arm-01",
+      "revision": 8, "binding": {"$sample": "record"}, "status": "bound"
+    },
+    "write_request": {
+      "contract_version": "camera-binding-write.v2", "request_id": "20000000-0000-4000-8000-000000000001",
+      "expected_revision": 8, "expected_binding_id": "10000000-0000-4000-8000-000000000001",
+      "device_unique_id": "fixture-camera-A", "display_name": "测试摄像头"
+    },
+    "renew_request": {
+      "contract_version": "camera-binding-renew.v2", "request_id": "20000000-0000-4000-8000-000000000002",
+      "expected_revision": 8, "expected_binding_id": "10000000-0000-4000-8000-000000000001", "reason": "installation_moved"
+    },
+    "remove_request": {
+      "contract_version": "camera-binding-remove.v2", "request_id": "20000000-0000-4000-8000-000000000003",
+      "expected_revision": 8, "expected_binding_id": "10000000-0000-4000-8000-000000000001"
+    },
+    "write_response": {
+      "contract_version": "camera-binding-write-result.v2", "request_id": "20000000-0000-4000-8000-000000000001",
+      "camera_id": "cam-01", "revision": 8, "binding": {"$sample": "record"}, "status": "unchanged", "replayed": false
+    },
+    "error": {
+      "contract_version": "camera-binding-error.v2", "request_id": null,
+      "code": "camera_archive_invalid", "message": "绑定档案损坏，保留原文件并停止新动作",
+      "motion_started": false, "retryable": false
+    },
+    "operation": {
+      "contract_version": "camera-binding-operation.v2", "request_id": "20000000-0000-4000-8000-000000000004",
+      "camera_id": null, "principal_id": "fixture-maintainer",
+      "request_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "migrate", "before": {"$sample": "legacy_file"}, "after": {"$sample": "file"},
+      "before_sha256": "6a077188539bb0f0c94e8ef56c5ab5061a7babe6d31d716cbe7116a2adcaa35f",
+      "after_sha256": "253b5a70fddf25122de680f322bf1fd4dc543b993faaf7aa03294d8dfcc79964",
+      "phase": "prepared", "response": null, "error": null,
+      "created_at": "2026-10-02T00:00:00Z", "updated_at": "2026-10-02T00:00:00Z"
+    },
+    "operation_view": {
+      "contract_version": "camera-binding-operation-view.v2", "request_id": "20000000-0000-4000-8000-000000000004",
+      "kind": "migrate", "phase": "prepared", "response": null, "error": null
+    },
+    "capture_request": {
+      "contract_version": "camera-capture-session.v2", "request_id": "20000000-0000-4000-8000-000000000005",
+      "server_instance_id": "60000000-0000-4000-8000-000000000001", "replaces_generation_id": null,
+      "client_instance_id": "30000000-0000-4000-8000-000000000001", "device_unique_id": "fixture-camera-A",
+      "camera_binding_id": "10000000-0000-4000-8000-000000000001", "geometry": {"$sample": "geometry"},
+      "clock_registration_id": "40000000-0000-4000-8000-000000000001"
+    },
+    "capture_response": {
+      "contract_version": "camera-capture-session.v2", "request_id": "20000000-0000-4000-8000-000000000005",
+      "server_instance_id": "60000000-0000-4000-8000-000000000001",
+      "camera_id": "cam-01", "device_id": "arm-01", "camera_binding_id": "10000000-0000-4000-8000-000000000001",
+      "source_geometry_id": "e36e354641501900b66a66887d9c1e27aff7f0038d9b6d7772b5369701d7d58d",
+      "source_generation_id": "50000000-0000-4000-8000-000000000001",
+      "source_clock_id": "mach-absolute:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "created_at": "2026-10-02T00:00:01Z"
+    },
+    "capture_view": {
+      "contract_version": "camera-capture-session-view.v2",
+      "server_instance_id": "60000000-0000-4000-8000-000000000001",
+      "camera_id": "cam-01", "active_session": {"$sample": "capture_response"}
+    },
+    "snapshot": {
+      "device_id": "arm-01", "camera_id": "cam-01", "device_unique_id": "fixture-camera-A",
+      "camera_binding_id": "10000000-0000-4000-8000-000000000001",
+      "source_geometry_id": "e36e354641501900b66a66887d9c1e27aff7f0038d9b6d7772b5369701d7d58d",
+      "binding_revision": 8, "width": 1280, "height": 720
+    },
+    "frame_receipt": {
+      "contract_version": "camera-frame-receipt.v2", "source": {"$sample": "snapshot"},
+      "source_generation_id": "50000000-0000-4000-8000-000000000001", "source_capture_seq": 2, "frame_seq": 2,
+      "jpeg_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "received_at": "2026-10-02T00:00:02Z", "replayed": false
+    },
+    "source_frame": {
+      "device_id": "arm-01", "camera_id": "cam-01", "device_unique_id": "fixture-camera-A",
+      "camera_binding_id": "10000000-0000-4000-8000-000000000001",
+      "source_geometry_id": "e36e354641501900b66a66887d9c1e27aff7f0038d9b6d7772b5369701d7d58d",
+      "binding_revision": 8, "source_frame_seq": 2,
+      "source_captured_at": "2026-10-02T00:00:02Z", "source_received_at": "2026-10-02T00:00:02Z",
+      "source_legacy_mode": false, "width": 1280, "height": 720,
+      "source_generation_id": "50000000-0000-4000-8000-000000000001", "source_capture_seq": 2,
+      "source_clock_id": "mach-absolute:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_captured_monotonic_ns": 2000000000, "source_capture_uncertainty_ms": 1,
+      "source_timing_provenance": "camera_pts_host_clock.v1"
+    },
+    "source_view": {
+      "contract_version": "camera-source-frame.v2", "evidence_id": "fixture-source-02",
+      "jpeg_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_frame": {"$sample": "source_frame"}
+    },
+    "screen_query": {"source_evidence_id": "fixture-source-02"},
+    "screen_observation": {
+      "contract_version": "screen-observation.v1", "device_id": "arm-01", "camera_id": "cam-01",
+      "daemon_session": "fixture-daemon-01", "wechat_account_id": "fixture-account",
+      "binding_revision": 8, "camera_device_unique_id": "fixture-camera-A",
+      "calibration_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "motion_calibration_fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "captured_at": "2026-10-02T00:00:02Z",
+      "frame_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "frame_seq": 2, "quality": "waiting", "frame_width": 1280, "frame_height": 720,
+      "screen_width": 4, "screen_height": 8,
+      "screen_to_camera": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+      "image_base64": "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAICAIAAABRUclSAAAAE0lEQVR4nGOsmLaFAQaY4CyqcwC2uAHS2lSe4wAAAABJRU5ErkJggg==",
+      "image_sha256": "8bb8d408bb8eeb28597a17b7334aa016462bf5231aac8ce4dabfb5cc30bce93a",
+      "ocr": {
+        "region": "messages", "text": "", "words": [], "confidence": 0, "truncated": false,
+        "engine": "", "engine_version": "", "request_id": "",
+        "elapsed_ms": 0, "width": 4, "height": 8
+      }
+    },
+    "screen_source": {
+      "contract_version": "screen-source-observation.v2", "source": {"$sample": "source_view"},
+      "coordinate_frame_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "observation": {"$sample": "screen_observation"}
+    },
+    "calibration_identity": {
+      "schemaVersion": 3, "deviceId": "arm-01", "cameraId": "cam-01", "cameraDeviceUniqueId": "fixture-camera-A",
+      "cameraBindingId": "10000000-0000-4000-8000-000000000001",
+      "sourceGeometryId": "e36e354641501900b66a66887d9c1e27aff7f0038d9b6d7772b5369701d7d58d",
+      "daemonAddr": "127.0.0.1:8795", "daemonSession": "fixture-daemon-01", "bindingRevision": 8,
+      "frame": {"width": 1280, "height": 720},
+      "bindingFingerprint": "4beb6cee1ef215af60ef613834ea8383338f45f8031a7339fa1b63d3a44d0a78"
+    },
+    "debug_request": {"contract_version": "debug-device-context.v2", "deviceId": "arm-01"},
+    "debug_response": {
+      "contract_version": "debug-device-context.v2", "contextId": "ctx-fixture-01", "deviceId": "arm-01",
+      "cameraId": "cam-01", "cameraDeviceUniqueId": "fixture-camera-A",
+      "cameraBindingId": "10000000-0000-4000-8000-000000000001",
+      "sourceGeometryId": "e36e354641501900b66a66887d9c1e27aff7f0038d9b6d7772b5369701d7d58d",
+      "cameraFrameUrl": "http://127.0.0.1:8790/cameras/cam-01/latest.jpg",
+      "cameraStatusUrl": "http://127.0.0.1:8790/cameras/cam-01/status",
+      "daemonAddr": "127.0.0.1:8795", "daemonSession": null, "bindingRevision": 8,
+      "frameWidth": 1280, "frameHeight": 720, "calibrationPath": "/fixture/devices/arm-01/calibration_bundle.json",
+      "readyForRead": true, "readyForMotion": false, "expiresInSeconds": 1800,
+      "checks": [{"code": "calibration_required", "message": "新来源已就绪，机械校准待完成"}]
+    },
+    "clock": {
+      "contract_version": "camera-clock-registration.v1", "registration_id": "40000000-0000-4000-8000-000000000001",
+      "host_boot_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_clock_id": "mach-absolute:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "helper_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "python_clock_implementation": "mach_absolute_time()", "pts_mapping": "camera_pts_host_clock.v1",
+      "pts_uncertainty_ms": 1, "timestamp_proof_evidence_id": "fixture-clock-proof",
+      "samples": [
+        {"before_ns": 100000000, "helper_ns": 101000000, "after_ns": 102000000},
+        {"before_ns": 110000000, "helper_ns": 111000000, "after_ns": 112000000},
+        {"before_ns": 120000000, "helper_ns": 121000000, "after_ns": 122000000},
+        {"before_ns": 130000000, "helper_ns": 131000000, "after_ns": 132000000},
+        {"before_ns": 140000000, "helper_ns": 141000000, "after_ns": 142000000},
+        {"before_ns": 150000000, "helper_ns": 151000000, "after_ns": 152000000},
+        {"before_ns": 160000000, "helper_ns": 161000000, "after_ns": 162000000},
+        {"before_ns": 170000000, "helper_ns": 171000000, "after_ns": 172000000},
+        {"before_ns": 180000000, "helper_ns": 181000000, "after_ns": 182000000},
+        {"before_ns": 190000000, "helper_ns": 191000000, "after_ns": 192000000},
+        {"before_ns": 200000000, "helper_ns": 201000000, "after_ns": 202000000},
+        {"before_ns": 210000000, "helper_ns": 211000000, "after_ns": 212000000},
+        {"before_ns": 220000000, "helper_ns": 221000000, "after_ns": 222000000},
+        {"before_ns": 230000000, "helper_ns": 231000000, "after_ns": 232000000},
+        {"before_ns": 240000000, "helper_ns": 241000000, "after_ns": 242000000},
+        {"before_ns": 250000000, "helper_ns": 251000000, "after_ns": 252000000},
+        {"before_ns": 260000000, "helper_ns": 261000000, "after_ns": 262000000},
+        {"before_ns": 270000000, "helper_ns": 271000000, "after_ns": 272000000},
+        {"before_ns": 280000000, "helper_ns": 281000000, "after_ns": 282000000},
+        {"before_ns": 290000000, "helper_ns": 291000000, "after_ns": 292000000}
+      ],
+      "registered_at": "2026-10-02T00:00:00Z"
+    }
+  },
+  "positive": [
+    {"name": "source-geometry", "definition": "source_geometry", "base": "geometry"},
+    {"name": "legacy-binding", "definition": "legacy_binding", "base": "legacy_record"},
+    {"name": "binding-record", "definition": "binding_record", "base": "record"},
+    {"name": "legacy-file", "definition": "legacy_binding_file", "base": "legacy_file"},
+    {"name": "binding-file", "definition": "binding_file", "base": "file"},
+    {"name": "binding-view", "definition": "binding_view", "base": "view"},
+    {"name": "bind-request", "definition": "binding_write_request", "base": "write_request"},
+    {"name": "renew-request", "definition": "binding_renew_request", "base": "renew_request"},
+    {"name": "unbind-request", "definition": "binding_remove_request", "base": "remove_request"},
+    {"name": "write-result", "definition": "binding_write_response", "base": "write_response"},
+    {"name": "error", "definition": "error", "base": "error"},
+    {"name": "migration-operation", "definition": "binding_operation", "base": "operation"},
+    {"name": "operation-query", "definition": "binding_operation_view", "base": "operation_view"},
+    {"name": "capture-request", "definition": "capture_session_request", "base": "capture_request"},
+    {"name": "capture-response", "definition": "capture_session_response", "base": "capture_response"},
+    {"name": "capture-query", "definition": "capture_session_view", "base": "capture_view"},
+    {"name": "capture-query-empty", "definition": "capture_session_view", "base": "capture_view", "set": {"/active_session": null}},
+    {"name": "snapshot", "definition": "binding_snapshot", "base": "snapshot"},
+    {"name": "frame-receipt", "definition": "frame_receipt", "base": "frame_receipt"},
+    {"name": "source-frame", "definition": "source_frame", "base": "source_frame"},
+    {"name": "source-query", "definition": "source_frame_view", "base": "source_view"},
+    {"name": "screen-query", "definition": "screen_source_query", "base": "screen_query"},
+    {"name": "screen-source-query", "definition": "screen_source_response", "base": "screen_source"},
+    {"name": "screen-source-clear", "definition": "screen_source_response", "base": "screen_source", "set": {"/observation/quality": "clear", "/observation/screen_to_calibrated_camera": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "/observation/ocr/engine": "fixture-only", "/observation/ocr/engine_version": "1", "/observation/ocr/request_id": "fixture-ocr"}},
+    {"name": "calibration-identity", "definition": "calibration_identity", "base": "calibration_identity"},
+    {"name": "debug-request", "definition": "debug_context_request", "base": "debug_request"},
+    {"name": "debug-response", "definition": "debug_context_response", "base": "debug_response"},
+    {"name": "clock-registration", "definition": "clock_registration", "base": "clock"}
+  ],
+  "negative": [
+    {"name": "waiting-must-not-offer-calibrated-target", "definition": "screen_source_response", "base": "screen_source", "set": {"/observation/screen_to_calibrated_camera": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}, "error": "schema"},
+    {"name": "waiting-must-not-offer-old-ocr", "definition": "screen_source_response", "base": "screen_source", "set": {"/observation/ocr/text": "old"}, "error": "schema"},
+    {"name": "clear-still-requires-matrix", "definition": "screen_source_response", "base": "screen_source", "set": {"/observation/quality": "clear", "/observation/ocr/engine": "fixture-only", "/observation/ocr/engine_version": "1", "/observation/ocr/request_id": "fixture-ocr"}, "error": "schema"},
+    {"name": "float-version", "definition": "calibration_identity", "base": "calibration_identity", "set": {"/schemaVersion": 3.0}, "error": "schema"},
+    {"name": "float-rotation", "definition": "source_geometry", "base": "geometry", "set": {"/rotation_degrees": 0.0}, "error": "schema"},
+    {"name": "unknown-operation-without-error", "definition": "binding_operation_view", "base": "operation_view", "set": {"/phase": "unknown"}, "error": "operation"},
+    {"name": "screen-query-unknown", "definition": "screen_source_query", "base": "screen_query", "set": {"/camera_id": "cam-02"}, "error": "schema"},
+    {"name": "screen-query-missing", "definition": "screen_source_query", "base": "screen_query", "delete": ["/source_evidence_id"], "error": "schema"},
+    {"name": "capture-missing-boot", "definition": "capture_session_request", "base": "capture_request", "delete": ["/server_instance_id"], "error": "schema"},
+    {"name": "capture-view-wrong-boot", "definition": "capture_session_view", "base": "capture_view", "set": {"/server_instance_id": "60000000-0000-4000-8000-000000000002"}, "error": "capture"},
+    {"name": "screen-source-wrong-device", "definition": "screen_source_response", "base": "screen_source", "set": {"/observation/device_id": "arm-02"}, "error": "source"},
+    {"name": "screen-source-wrong-frame", "definition": "screen_source_response", "base": "screen_source", "set": {"/observation/frame_seq": 3}, "error": "source"},
+    {"name": "screen-source-wrong-hash", "definition": "screen_source_response", "base": "screen_source", "set": {"/observation/frame_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "error": "source"},
+    {"name": "screen-image-wrong-hash", "definition": "screen_source_response", "base": "screen_source", "set": {"/observation/image_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "error": "image"},
+    {"name": "screen-image-wrong-size", "definition": "screen_source_response", "base": "screen_source", "set": {"/observation/screen_width": 5}, "error": "image"},
+    {"name": "source-old-with-new-label", "definition": "source_frame", "base": "source_frame", "set": {"/source_legacy_mode": true}, "error": "schema"},
+    {"name": "missing-instance", "definition": "binding_record", "base": "record", "delete": ["/cameraBindingId"], "error": "schema"},
+    {"name": "instance-not-global-revision", "definition": "binding_record", "base": "record", "set": {"/cameraBindingId": 9}, "error": "schema"},
+    {"name": "unknown-field", "definition": "binding_record", "base": "record", "set": {"/ready": true}, "error": "schema"},
+    {"name": "bool-revision", "definition": "binding_file", "base": "file", "set": {"/revision": true}, "error": "schema"},
+    {"name": "float-revision", "definition": "binding_file", "base": "file", "set": {"/revision": 8.0}, "error": "schema"},
+    {"name": "crop-outside-input", "definition": "source_geometry", "base": "geometry", "set": {"/crop/right": 1281}, "error": "geometry"},
+    {"name": "rotation-size-mismatch", "definition": "source_geometry", "base": "geometry", "set": {"/rotation_degrees": 90}, "error": "geometry"},
+    {"name": "format-size-mismatch", "definition": "source_geometry", "base": "geometry", "set": {"/format_id": "fourcc:34323076;size:640x480;pixel-aspect:1/1"}, "error": "geometry"},
+    {"name": "stabilization-unsupported", "definition": "source_geometry", "base": "geometry", "set": {"/stabilization": "on"}, "error": "schema"},
+    {"name": "client-sets-principal", "definition": "binding_write_request", "base": "write_request", "set": {"/operator": "admin"}, "error": "schema"},
+    {"name": "renew-null-instance", "definition": "binding_renew_request", "base": "renew_request", "set": {"/expected_binding_id": null}, "error": "schema"},
+    {"name": "bound-without-record", "definition": "binding_view", "base": "view", "set": {"/binding": null}, "error": "binding"},
+    {"name": "result-wrong-camera", "definition": "binding_write_response", "base": "write_response", "set": {"/camera_id": "cam-02"}, "error": "binding"},
+    {"name": "migration-hash-corrupt", "definition": "binding_operation", "base": "operation", "set": {"/after/revision": 9}, "error": "operation"},
+    {"name": "old-calibration-not-v3", "definition": "calibration_identity", "base": "calibration_identity", "set": {"/schemaVersion": 2}, "error": "schema"},
+    {"name": "calibration-instance-corrupt", "definition": "calibration_identity", "base": "calibration_identity", "set": {"/cameraBindingId": "10000000-0000-4000-8000-000000000002"}, "error": "calibration"},
+    {"name": "calibration-geometry-corrupt", "definition": "calibration_identity", "base": "calibration_identity", "set": {"/sourceGeometryId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}, "error": "calibration"},
+    {"name": "context-missing-instance", "definition": "debug_context_response", "base": "debug_response", "delete": ["/cameraBindingId"], "error": "schema"},
+    {"name": "context-ready-with-block", "definition": "debug_context_response", "base": "debug_response", "set": {"/readyForMotion": true}, "error": "context"},
+    {"name": "clock-helper-outside-bracket", "definition": "clock_registration", "base": "clock", "set": {"/samples/0/helper_ns": 99000000}, "error": "clock"},
+    {"name": "clock-bracket-too-wide", "definition": "clock_registration", "base": "clock", "set": {"/samples/0/after_ns": 121000000}, "error": "clock"},
+    {"name": "clock-boot-mismatch", "definition": "clock_registration", "base": "clock", "set": {"/host_boot_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "error": "clock"},
+    {"name": "clock-unproven", "definition": "clock_registration", "base": "clock", "delete": ["/timestamp_proof_evidence_id"], "error": "schema"},
+    {"name": "clock-wrong-implementation", "definition": "clock_registration", "base": "clock", "set": {"/python_clock_implementation": "wall_clock"}, "error": "schema"},
+    {"name": "clock-error-too-large", "definition": "clock_registration", "base": "clock", "set": {"/pts_uncertainty_ms": 21}, "error": "schema"}
+  ]
+}

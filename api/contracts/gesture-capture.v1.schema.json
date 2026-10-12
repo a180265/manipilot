@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/gesture-capture.v1.schema.json",
+  "title": "Gesture capture protocol v1",
+  "description": "手机连续触摸采样协议（规范第 5 节）。手机侧只采样上报，不请求机械动作；所有对象默认 additionalProperties=false，除明确 nullable 外不得传 null。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "sessionId", "trialId", "clientInstanceId", "nonce", "traceId", "pageGeneration", "resetId", "coordinateSpace", "clockDomain", "events", "endReason", "droppedSampleCount", "scroll", "recognition"],
+  "properties": {
+    "contractVersion": {"const": "gesture-capture.v1"},
+    "sessionId": {"$ref": "#/$defs/uuid"},
+    "trialId": {"$ref": "#/$defs/uuid"},
+    "clientInstanceId": {"$ref": "#/$defs/uuid"},
+    "nonce": {"$ref": "#/$defs/hex64"},
+    "traceId": {"$ref": "#/$defs/uuid"},
+    "pageGeneration": {"$ref": "#/$defs/positiveInt"},
+    "resetId": {"$ref": "#/$defs/uuid"},
+    "coordinateSpace": {"const": "calibration_root_px.v1"},
+    "clockDomain": {"const": "android_uptime_ms"},
+    "events": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/TouchEvent"}},
+    "endReason": {"enum": ["up", "cancel", "overflow", "multi_touch", "page_lost", "timeout"]},
+    "droppedSampleCount": {"$ref": "#/$defs/unsignedInt"},
+    "scroll": {"anyOf": [{"$ref": "#/$defs/ScrollEvidence"}, {"type": "null"}]},
+    "recognition": {"anyOf": [{"$ref": "#/$defs/DoubleTapRecognition"}, {"type": "null"}]}
+  },
+  "$defs": {
+    "uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "hex64": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "unsignedInt": {"type": "integer", "minimum": 0},
+    "positiveInt": {"type": "integer", "minimum": 1},
+    "insets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": {"$ref": "#/$defs/unsignedInt"},
+        "top": {"$ref": "#/$defs/unsignedInt"},
+        "right": {"$ref": "#/$defs/unsignedInt"},
+        "bottom": {"$ref": "#/$defs/unsignedInt"}
+      }
+    },
+    "PageMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pageId", "pageGeneration", "resumed", "hasFocus", "rotation", "rootWidthPx", "rootHeightPx", "displayWidthPx", "displayHeightPx", "rootOriginDisplayPx", "density", "systemGestureInsets", "systemBarInsets", "legacyCalibrationSessionId", "coordinateSpaceVersion"],
+      "properties": {
+        "pageId": {"$ref": "#/$defs/text"},
+        "pageGeneration": {"$ref": "#/$defs/positiveInt"},
+        "resumed": {"type": "boolean"},
+        "hasFocus": {"type": "boolean"},
+        "rotation": {"type": "integer", "minimum": 0, "maximum": 359},
+        "rootWidthPx": {"$ref": "#/$defs/positiveInt"},
+        "rootHeightPx": {"$ref": "#/$defs/positiveInt"},
+        "displayWidthPx": {"$ref": "#/$defs/positiveInt"},
+        "displayHeightPx": {"$ref": "#/$defs/positiveInt"},
+        "rootOriginDisplayPx": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": {"type": "integer"}
+        },
+        "density": {"type": "number", "exclusiveMinimum": 0},
+        "systemGestureInsets": {"$ref": "#/$defs/insets"},
+        "systemBarInsets": {"$ref": "#/$defs/insets"},
+        "legacyCalibrationSessionId": {
+          "anyOf": [{"type": "null"},
+                    {"type": "string", "pattern": "^cal-[0-9a-fA-F0-9a-fA-F-]+$"}]
+        },
+        "coordinateSpaceVersion": {"const": 2}
+      }
+    },
+    "ClientHello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "deviceId", "clientInstanceId", "heartbeatSeq", "apkVersionCode", "capabilities", "page"],
+      "properties": {
+        "contractVersion": {"const": "gesture-capture.v1"},
+        "deviceId": {"$ref": "#/$defs/text"},
+        "clientInstanceId": {"$ref": "#/$defs/uuid"},
+        "heartbeatSeq": {"$ref": "#/$defs/positiveInt"},
+        "apkVersionCode": {"$ref": "#/$defs/positiveInt"},
+        "capabilities": {
+          "type": "array", "uniqueItems": true,
+          "items": {"enum": ["gesture_trace.v1", "scroll_fixture.v1", "back_fixture.v1", "double_tap_fixture.v1", "home_fixture.v1"]}
+        },
+        "page": {"$ref": "#/$defs/PageMetadata"}
+      }
+    },
+    "CoordinateFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "binding", "calibration_run_id", "root_width_px", "root_height_px", "display_width_px", "display_height_px", "root_origin_display_px", "rotation", "density", "coordinate_space_version", "source_client_instance_id", "coordinate_frame_hash"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "binding": {"$ref": "#/$defs/gestureBinding"},
+        "calibration_run_id": {"$ref": "#/$defs/text"},
+        "root_width_px": {"$ref": "#/$defs/positiveInt"},
+        "root_height_px": {"$ref": "#/$defs/positiveInt"},
+        "display_width_px": {"$ref": "#/$defs/positiveInt"},
+        "display_height_px": {"$ref": "#/$defs/positiveInt"},
+        "root_origin_display_px": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": {"type": "integer"}
+        },
+        "rotation": {"const": 0},
+        "density": {"type": "number", "exclusiveMinimum": 0},
+        "coordinate_space_version": {"const": 2},
+        "source_client_instance_id": {"$ref": "#/$defs/uuid"},
+        "coordinate_frame_hash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "gestureBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "daemon_session", "camera_id", "camera_device_unique_id", "binding_revision", "calibration_fingerprint", "frame_width", "frame_height"],
+      "properties": {
+        "device_id": {"$ref": "#/$defs/text"},
+        "daemon_session": {"$ref": "#/$defs/text"},
+        "camera_id": {"$ref": "#/$defs/text"},
+        "camera_device_unique_id": {"$ref": "#/$defs/text"},
+        "binding_revision": {"$ref": "#/$defs/unsignedInt"},
+        "calibration_fingerprint": {"$ref": "#/$defs/sha256"},
+        "frame_width": {"$ref": "#/$defs/positiveInt"},
+        "frame_height": {"$ref": "#/$defs/positiveInt"}
+      }
+    },
+    "Command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "trialId", "commandId", "commandSeq", "clientInstanceId", "calibrationFingerprint", "coordinateFrame", "nonce", "kind", "payload", "issuedAt", "expiresAt"],
+      "properties": {
+        "sessionId": {"$ref": "#/$defs/uuid"},
+        "trialId": {"$ref": "#/$defs/uuid"},
+        "commandId": {"$ref": "#/$defs/uuid"},
+        "commandSeq": {"$ref": "#/$defs/positiveInt"},
+        "clientInstanceId": {"$ref": "#/$defs/uuid"},
+        "calibrationFingerprint": {"$ref": "#/$defs/sha256"},
+        "coordinateFrame": {"$ref": "#/$defs/CoordinateFrame"},
+        "nonce": {"$ref": "#/$defs/hex64"},
+        "kind": {"enum": ["open_fixture", "reset_list", "prepare_back", "prepare_home", "prepare_double_tap", "finish"]},
+        "payload": {"type": "object"},
+        "issuedAt": {"type": "string", "format": "date-time"},
+        "expiresAt": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "open_fixture"}}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["fixture"], "properties": {"fixture": {"const": "list"}}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "reset_list"}}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["offsetFraction"],
+            "properties": {"offsetFraction": {"const": 0.5}}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "prepare_back"}}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["parentId", "childId"],
+            "properties": {"parentId": {"const": "gesture-parent"},
+                           "childId": {"const": "gesture-child"}}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "prepare_double_tap"}}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["targetX", "targetY"],
+            "properties": {"targetX": {"type": "integer", "minimum": 0},
+                           "targetY": {"type": "integer", "minimum": 0}}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"enum": ["prepare_home", "finish"]}}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false, "maxProperties": 0}}}
+        }
+      ]
+    },
+    "fixtureRegion": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["leftPx", "topPx", "widthPx", "heightPx"],
+      "properties": {
+        "leftPx": {"$ref": "#/$defs/unsignedInt"},
+        "topPx": {"$ref": "#/$defs/unsignedInt"},
+        "widthPx": {"$ref": "#/$defs/positiveInt"},
+        "heightPx": {"$ref": "#/$defs/positiveInt"}
+      }
+    },
+    "Ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "trialId", "commandId", "commandSeq", "clientInstanceId", "nonce", "page", "coordinateFrameHash", "fixtureVersion", "fixtureRegion", "resetId", "scrollY", "contentHeightPx", "viewportHeightPx", "ready"],
+      "properties": {
+        "sessionId": {"$ref": "#/$defs/uuid"},
+        "trialId": {"$ref": "#/$defs/uuid"},
+        "commandId": {"$ref": "#/$defs/uuid"},
+        "commandSeq": {"$ref": "#/$defs/positiveInt"},
+        "clientInstanceId": {"$ref": "#/$defs/uuid"},
+        "nonce": {"$ref": "#/$defs/hex64"},
+        "page": {"$ref": "#/$defs/PageMetadata"},
+        "coordinateFrameHash": {"$ref": "#/$defs/sha256"},
+        "fixtureVersion": {"$ref": "#/$defs/text"},
+        "fixtureRegion": {"$ref": "#/$defs/fixtureRegion"},
+        "resetId": {"$ref": "#/$defs/uuid"},
+        "scrollY": {"anyOf": [{"$ref": "#/$defs/unsignedInt"}, {"type": "null"}]},
+        "contentHeightPx": {"anyOf": [{"$ref": "#/$defs/positiveInt"}, {"type": "null"}]},
+        "viewportHeightPx": {"anyOf": [{"$ref": "#/$defs/positiveInt"}, {"type": "null"}]},
+        "ready": {"const": true}
+      }
+    },
+    "TouchEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "contactIndex", "action", "pointerId", "tMs", "xPx", "yPx", "historical"],
+      "properties": {
+        "index": {"$ref": "#/$defs/unsignedInt"},
+        "contactIndex": {"$ref": "#/$defs/unsignedInt"},
+        "action": {"enum": ["down", "move", "up", "cancel"]},
+        "pointerId": {"type": "integer"},
+        "tMs": {"$ref": "#/$defs/unsignedInt"},
+        "xPx": {"type": "number"},
+        "yPx": {"type": "number"},
+        "historical": {"type": "boolean"}
+      }
+    },
+    "ScrollEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["beforeY", "afterY", "minY", "maxY", "contentHeightPx", "viewportHeightPx", "rowHeightPx", "firstVisibleRowBefore", "firstVisibleRowAfter", "rowOffsetBeforePx", "rowOffsetAfterPx", "settled", "settleWindowMs", "resetCounterBefore", "resetCounterAfter", "boundaryBefore", "boundaryAfter"],
+      "properties": {
+        "beforeY": {"type": "number"},
+        "afterY": {"type": "number"},
+        "minY": {"type": "number"},
+        "maxY": {"type": "number"},
+        "contentHeightPx": {"$ref": "#/$defs/positiveInt"},
+        "viewportHeightPx": {"$ref": "#/$defs/positiveInt"},
+        "rowHeightPx": {"$ref": "#/$defs/positiveInt"},
+        "firstVisibleRowBefore": {"$ref": "#/$defs/unsignedInt"},
+        "firstVisibleRowAfter": {"$ref": "#/$defs/unsignedInt"},
+        "rowOffsetBeforePx": {"$ref": "#/$defs/unsignedInt"},
+        "rowOffsetAfterPx": {"$ref": "#/$defs/unsignedInt"},
+        "settled": {"type": "boolean"},
+        "settleWindowMs": {"$ref": "#/$defs/unsignedInt"},
+        "resetCounterBefore": {"$ref": "#/$defs/unsignedInt"},
+        "resetCounterAfter": {"$ref": "#/$defs/unsignedInt"},
+        "boundaryBefore": {"enum": ["top", "bottom", "neither"]},
+        "boundaryAfter": {"enum": ["top", "bottom", "neither"]}
+      }
+    },
+    "DoubleTapRecognition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "recognized", "firstUpMs", "secondDownMs", "systemDoubleTapTimeoutMs", "systemDoubleTapSlopPx"],
+      "properties": {
+        "kind": {"const": "double_tap"},
+        "recognized": {"type": "boolean"},
+        "firstUpMs": {"anyOf": [{"$ref": "#/$defs/unsignedInt"}, {"type": "null"}]},
+        "secondDownMs": {"anyOf": [{"$ref": "#/$defs/unsignedInt"}, {"type": "null"}]},
+        "systemDoubleTapTimeoutMs": {"$ref": "#/$defs/unsignedInt"},
+        "systemDoubleTapSlopPx": {"type": "number", "minimum": 0}
+      }
+    },
+    "PageEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "trialId", "clientInstanceId", "nonce", "eventId", "eventSeq", "pageGeneration", "kind", "pageId", "uptimeMs", "callbackSource", "committed"],
+      "properties": {
+        "sessionId": {"$ref": "#/$defs/uuid"},
+        "trialId": {"$ref": "#/$defs/uuid"},
+        "clientInstanceId": {"$ref": "#/$defs/uuid"},
+        "nonce": {"$ref": "#/$defs/hex64"},
+        "eventId": {"$ref": "#/$defs/uuid"},
+        "eventSeq": {"$ref": "#/$defs/positiveInt"},
+        "pageGeneration": {"$ref": "#/$defs/positiveInt"},
+        "kind": {"enum": ["page_resumed", "page_paused", "page_stopped", "page_destroyed", "back_started", "back_cancelled", "back_committed"]},
+        "pageId": {"$ref": "#/$defs/text"},
+        "uptimeMs": {"$ref": "#/$defs/unsignedInt"},
+        "callbackSource": {"enum": ["lifecycle", "on_back_invoked", "on_back_animation", "on_back_pressed"]},
+        "committed": {"type": "boolean"}
+      }
+    },
+    "Receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceId", "trialId", "payloadHash", "received", "acceptedForEvaluation", "reasonCode"],
+      "properties": {
+        "traceId": {"$ref": "#/$defs/uuid"},
+        "trialId": {"$ref": "#/$defs/uuid"},
+        "payloadHash": {"$ref": "#/$defs/sha256"},
+        "received": {"const": true},
+        "acceptedForEvaluation": {"type": "boolean"},
+        "reasonCode": {"anyOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]}
+      }
+    }
+  }
+}

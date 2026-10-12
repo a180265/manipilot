@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/task-result.v1.schema.json",
+  "title": "Arm Fleet task result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "status", "status_display", "reported_at", "contract_version"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["confirmed", "failed", "unknown"]},
+    "status_display": {"type": "string", "minLength": 1},
+    "reported_at": {"type": "string", "format": "date-time"},
+    "contract_version": {"const": "task-result.v1"},
+    "provider_message_id": {"type": "string"},
+    "sent_at": {"type": "string", "format": "date-time"},
+    "evidence_hash": {"type": "string"},
+    "home_check": {"type": "object"},
+    "error_category": {"type": "string"},
+    "retryable": {"type": "boolean"},
+    "uncertainty_reason": {"type": "string"}
+  },
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "confirmed"}}}, "then": {"required": ["provider_message_id", "sent_at", "evidence_hash", "home_check"]}},
+    {"if": {"properties": {"status": {"const": "unknown"}}}, "then": {"required": ["uncertainty_reason"]}}
+  ]
+}

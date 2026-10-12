@@ -1,0 +1,34 @@
+{
+  "plugin_id": "demo-selfcheck",
+  "name_display": "设备自检示例插件",
+  "version": "1.0.0",
+  "vendor": "Arm Fleet 平台示例",
+  "description": "演示插件清单、生命周期和能力声明的硬件无关示例插件：截图取证、识别界面状态、归位检查。不含任何具体应用业务。",
+  "entry_module": "plugin.py",
+  "test_fixture": "fake-device",
+  "task_types": [
+    {
+      "task_type": "device_selfcheck",
+      "name_display": "设备自检任务",
+      "confirmed_display": "已完成",
+      "capability": "demo.selfcheck",
+      "risk_level": "低",
+      "input_schema": {"type": "object", "additionalProperties": false},
+      "description": "对指定设备执行一次通用自检：截图、识别界面状态、归位检查",
+      "entry_conditions": "设备处于可用或降级状态",
+      "exit_conditions": "三个步骤完成并回到安全位置",
+      "failure_handling": "任一步骤失败按明确失败处理；无法确认的动作为结果未知并进入人工路径"
+    }
+  ],
+  "capabilities": ["camera.capture", "camera.identify_ui_state", "arm.home", "arm.stop"],
+  "resources": {
+    "devices": {"mode": "assigned", "description": "由任务指定设备，不得访问其他设备"},
+    "camera": true,
+    "input": false,
+    "arm": true,
+    "external_services": [],
+    "data_scope": {"reads_customer_message_text": false, "writes_customer_data": false, "sends_external_messages": false}
+  },
+  "evidence": {"screenshot_required": true, "home_check_required": true},
+  "limits": {"max_actions_per_task": 10, "max_tasks_per_hour": 120}
+}

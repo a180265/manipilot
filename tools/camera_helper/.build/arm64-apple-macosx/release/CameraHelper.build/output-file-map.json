@@ -1,0 +1,13 @@
+{
+  "": {
+    "dependencies": "/Users/ye/Desktop/manipilot/tools/camera_helper/.build/arm64-apple-macosx/release/CameraHelper.build/CameraHelper.d",
+    "object": "/Users/ye/Desktop/manipilot/tools/camera_helper/.build/arm64-apple-macosx/release/CameraHelper.build/CameraHelper.o",
+    "swift-dependencies": "/Users/ye/Desktop/manipilot/tools/camera_helper/.build/arm64-apple-macosx/release/CameraHelper.build/primary.swiftdeps"
+  },
+  "/Users/ye/Desktop/manipilot/tools/camera_helper/Sources/CameraHelper/main.swift": {
+    "object": "/Users/ye/Desktop/manipilot/tools/camera_helper/.build/arm64-apple-macosx/release/CameraHelper.build/main.swift.o",
+    "swiftmodule": "/Users/ye/Desktop/manipilot/tools/camera_helper/.build/arm64-apple-macosx/release/CameraHelper.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/ye/Desktop/manipilot/tools/camera_helper/.build/arm64-apple-macosx/release/CameraHelper.build/main.swiftdeps",
+    "diagnostics": "/Users/ye/Desktop/manipilot/tools/camera_helper/.build/arm64-apple-macosx/release/CameraHelper.build/main.dia"
+  }
+}

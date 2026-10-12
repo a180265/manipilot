@@ -1,0 +1,256 @@
+{
+  "plugin_id": "gesture-validation-adapter",
+  "name_display": "自动手势自检插件",
+  "version": "1.0.11",
+  "vendor": "Arm Fleet 平台方（外部插件）",
+  "description": "校准后自动手势自检：按 gesture-validation.v1 执行内置动作状态机（规范第 8/22.10 节），收集手机轨迹证据并把有效证书发布到自动档案。插件只通过 StepContext 能力调用访问硬件，不连串口、不联网。",
+  "entry_module": "plugin.py",
+  "test_fixture": "fake-camera + fake 手势采样页",
+  "task_types": [
+    {
+      "task_type": "gesture_self_test",
+      "name_display": "校准后自动手势自检",
+      "confirmed_display": "已完成自检",
+      "capability": "gesture.self_test",
+      "requires_input": false,
+      "risk_level": "高",
+      "request_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "task_type",
+          "contract_version",
+          "device_id",
+          "idempotency_key",
+          "payload",
+          "expires_at",
+          "correlation_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "task_type": {
+            "const": "gesture_self_test"
+          },
+          "contract_version": {
+            "const": "gesture-validation.v1"
+          },
+          "device_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "payload": {
+            "$ref": "#/$defs/payload"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "correlation_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "policy_context": {
+            "type": "object"
+          }
+        },
+        "$defs": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "binding",
+              "actions",
+              "rules_version"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/$defs/binding"
+              },
+              "actions": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "scroll_up",
+                    "scroll_down",
+                    "system_back_left",
+                    "system_back_right",
+                    "system_home",
+                    "double_tap"
+                  ]
+                }
+              },
+              "rules_version": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "vision_only": {
+                "type": "boolean",
+                "description": "视觉优先（2026-09-30 拍板）：跳过手势页会话，滑动效果以相机前后帧光流判定；仅纯滑动集生效，混合集强制页面采样路径",
+                "default": false
+              }
+            }
+          },
+          "binding": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "device_id",
+              "daemon_session",
+              "camera_id",
+              "camera_device_unique_id",
+              "binding_revision",
+              "calibration_fingerprint",
+              "frame_width",
+              "frame_height",
+              "coordinate_frame_hash",
+              "gesture_profile_version",
+              "recipe_version"
+            ],
+            "properties": {
+              "device_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "daemon_session": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "camera_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "camera_device_unique_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "binding_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "calibration_fingerprint": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "frame_width": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "frame_height": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "coordinate_frame_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "gesture_profile_version": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "recipe_version": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            }
+          }
+        }
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "binding",
+          "actions",
+          "rules_version"
+        ],
+        "properties": {
+          "binding": {
+            "type": "object",
+            "description": "与 api/contracts/gesture-validation.v1.schema.json 的 payload.binding 一致（第 7 节新完整绑定）"
+          },
+          "actions": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "scroll_up",
+                "scroll_down",
+                "system_back_left",
+                "system_back_right",
+                "system_home",
+                "double_tap"
+              ]
+            },
+            "description": "内置动作唯一数组；完整结构见 gesture-validation.v1 契约副本"
+          },
+          "rules_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "vision_only": {
+            "type": "boolean",
+            "description": "视觉优先（2026-09-30 拍板）：跳过手势页会话，滑动效果以相机前后帧光流判定；仅纯滑动集生效，混合集强制页面采样路径",
+            "default": false
+          }
+        }
+      },
+      "description": "对已完成校准的设备执行自动手势自检：按固定候选顺序连续 3 次验证，收集手机轨迹与画面证据，并把有效动作证书发布到自动档案（规范第 7/8/22.10 节）",
+      "entry_conditions": "设备存在可用校准档案与坐标桥旁档；自动手势开关已开启；测试页（gesture-capture.v1）可建立采样会话；无其他任务占用",
+      "exit_conditions": "run 进入终态（passed/partial/failed/unknown/cancelled），结果与证据已持久化，有效证书已发布或明确未发布",
+      "failure_handling": "缺坐标桥/绑定不一致等前置失败为明确失败且零动作；物理未知立即结束 run 并按结果未知处理，不自动续跑或重放；预算耗尽按 partial/failed 收尾"
+    }
+  ],
+  "capabilities": [
+    "device.automatic_gesture_profile",
+    "device.gesture_capture",
+    "arm.execute_gesture_program",
+    "arm.test_calibrated_double_tap",
+    "camera.capture",
+    "camera.measure_scroll",
+    "arm.stop"
+  ],
+  "resources": {
+    "devices": {
+      "mode": "assigned",
+      "description": "只访问任务指定设备"
+    },
+    "camera": true,
+    "input": false,
+    "arm": true,
+    "external_services": [],
+    "data_scope": {
+      "reads_customer_message_text": false,
+      "writes_customer_data": false,
+      "sends_external_messages": false
+    }
+  },
+  "evidence": {
+    "screenshot_required": true,
+    "home_check_required": true
+  },
+  "limits": {
+    "max_actions_per_task": 36,
+    "max_tasks_per_hour": 6
+  }
+}

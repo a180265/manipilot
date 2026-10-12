@@ -1,0 +1,16 @@
+[
+  {"name": "owner-revoke-only", "before": "owner-active", "after": "owner-revoked", "expect": "valid"},
+  {"name": "owner-never-reactivate", "before": "owner-revoked", "after": "owner-reactivated-shape", "expect": "semantic", "match": "transition.owner_resurrected"},
+  {"name": "owner-never-refresh-permit", "before": "owner-revoked", "after": "owner-refreshed-permit-shape", "expect": "semantic", "match": "transition.owner_immutable"},
+  {"name": "effect-claim-once", "before": "effect-prepared", "after": "effect-claimed", "expect": "valid"},
+  {"name": "effect-interrupted-is-unknown", "before": "effect-claimed", "after": "effect-unknown-waiting-phone", "expect": "valid"},
+  {"name": "effect-no-reprepare-after-claim", "before": "effect-unknown-waiting-phone", "after": "effect-reprepared-shape", "expect": "semantic", "match": "transition.effect_replay"},
+  {"name": "phone-ack-preserves-unknown-effect", "before": "effect-unknown-waiting-phone", "after": "effect-phone-confirmed", "expect": "valid"},
+  {"name": "effect-no-lost-receipt", "before": "effect-phone-confirmed", "after": "effect-lost-receipt-shape", "expect": "semantic", "match": "transition.receipt_lost"},
+  {"name": "guard-review-resolves-keeps-issues", "before": "guard-open", "after": "guard-reviewed-no-phone-ack", "expect": "valid"},
+  {"name": "guard-never-delete-issues", "before": "guard-open", "after": "guard-cleared-shape", "expect": "semantic", "match": "transition.issue_deleted"},
+  {"name": "guard-never-reset-checkpoint", "before": "guard-reviewed-no-phone-ack", "after": "guard-rollback-shape", "expect": "semantic", "match": "transition.checkpoint_rollback"},
+  {"name": "intent-apply", "before": "intent-prepared-first-close", "after": "intent-applied", "expect": "valid"},
+  {"name": "intent-abort-before-replace", "before": "intent-prepared-first-close", "after": "intent-aborted", "expect": "valid"},
+  {"name": "intent-never-retry-aborted", "before": "intent-aborted", "after": "intent-reprepared-shape", "expect": "semantic", "match": "transition.intent_replay"}
+]

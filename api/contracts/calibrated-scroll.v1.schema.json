@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "calibrated-scroll.v1.schema.json",
+  "title": "calibrated-scroll.v1",
+  "type": "object",
+  "$defs": {
+    "binding_v3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "daemon_session", "camera_id", "camera_device_unique_id",
+        "camera_binding_id", "source_geometry_id", "binding_revision",
+        "calibration_fingerprint", "frame_width", "frame_height"],
+      "properties": {
+        "device_id": {"type": "string", "minLength": 1},
+        "daemon_session": {"type": "string", "minLength": 1},
+        "camera_id": {"type": "string", "minLength": 1},
+        "camera_device_unique_id": {"type": "string", "minLength": 1},
+        "camera_binding_id": {"type": "string", "minLength": 1},
+        "source_geometry_id": {"type": "string", "minLength": 1},
+        "binding_revision": {"type": "integer", "minimum": 0},
+        "calibration_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "frame_width": {"type": "integer", "minimum": 1},
+        "frame_height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "blocking": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {"code": {"type": "string"}, "message": {"type": "string"}}
+    },
+    "action_capability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["usable", "blocking_reasons"],
+      "properties": {"usable": {"type": "boolean"},
+                     "blocking_reasons": {"type": "array", "items": {"$ref": "#/$defs/blocking"}}}
+    }
+  },
+  "properties": {
+    "task": {
+      "type": "object", "additionalProperties": false,
+      "required": ["task_id", "task_type", "contract_version", "device_id",
+        "idempotency_key", "payload", "expires_at", "correlation_id"],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1},
+        "task_type": {"const": "calibrated_scroll"},
+        "contract_version": {"const": "calibrated-scroll.v1"},
+        "device_id": {"type": "string", "minLength": 1},
+        "idempotency_key": {"type": "string", "minLength": 1},
+        "payload": {
+          "type": "object", "additionalProperties": false,
+          "required": ["action", "binding"],
+          "properties": {
+            "action": {"enum": ["swipe_up", "swipe_down"]},
+            "binding": {"$ref": "#/$defs/binding_v3"}
+          }
+        },
+        "expires_at": {"type": ["string", "null"], "format": "date-time"},
+        "correlation_id": {"type": "string", "minLength": 1},
+        "policy_context": {"type": "object"}
+      }
+    },
+    "capability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "device_id", "binding", "usable", "actions",
+        "blocking_reasons", "planning_version"],
+      "properties": {
+        "contract_version": {"const": "calibrated-scroll.v1"},
+        "device_id": {"type": "string"},
+        "binding": {"oneOf": [{"$ref": "#/$defs/binding_v3"}, {"type": "null"}]},
+        "usable": {"type": "boolean"},
+        "actions": {
+          "type": "object", "additionalProperties": false,
+          "required": ["swipe_up", "swipe_down"],
+          "properties": {"swipe_up": {"$ref": "#/$defs/action_capability"},
+                          "swipe_down": {"$ref": "#/$defs/action_capability"}}
+        },
+        "blocking_reasons": {"type": "array", "items": {"$ref": "#/$defs/blocking"}},
+        "planning_version": {"type": "string"},
+        "calibration_version": {"type": ["integer", "null"]},
+        "round_budget": {
+          "type": "object", "additionalProperties": false,
+          "required": ["max_actions", "window_seconds"],
+          "properties": {"max_actions": {"const": 8}, "window_seconds": {"const": 90}}
+        },
+        "sampling_support": {"type": "object"}
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["contract_version", "action", "mechanical_status", "effect_status",
+        "motion_started", "retryable"],
+      "properties": {
+        "contract_version": {"const": "calibrated-scroll.v1"},
+        "action": {"enum": ["swipe_up", "swipe_down"]},
+        "mechanical_status": {"enum": ["not_started", "confirmed", "unknown"]},
+        "effect_status": {"enum": ["not_started", "displaced", "stationary", "unknown"]},
+        "direction_consistent": {"type": ["boolean", "null"]},
+        "dy_px": {"type": ["number", "null"]},
+        "dx_px": {"type": ["number", "null"]},
+        "motion_started": {"type": ["boolean", "null"]},
+        "retryable": {"const": false},
+        "reason_code": {"type": ["string", "null"]},
+        "observation_roi": {
+          "type": "object", "additionalProperties": false,
+          "required": ["x", "y", "width", "height"],
+          "properties": {"x": {"const": 0.10}, "y": {"const": 0.20},
+                          "width": {"const": 0.80}, "height": {"const": 0.60}}
+        }
+      }
+    }
+  }
+}

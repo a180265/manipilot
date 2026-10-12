@@ -1,0 +1,323 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:calibrated-scroll-observation:v1",
+  "title": "G03 planned observation attachments; not a published API",
+  "oneOf": [
+    {"$ref": "#/definitions/frame"},
+    {"$ref": "#/definitions/pair"},
+    {"$ref": "#/definitions/chain"},
+    {"$ref": "#/definitions/review_request"}
+  ],
+  "definitions": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "uuid": {"type": "string", "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"},
+    "source_clock_id": {"type": "string", "pattern": "^mach-absolute:[a-f0-9]{64}$"},
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "nullable_number": {"type": ["number", "null"]},
+    "nullable_nonnegative": {"type": ["number", "null"], "minimum": 0},
+    "nullable_points": {"type": ["integer", "null"], "minimum": 0, "maximum": 200},
+    "nullable_ratio": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "reason": {
+      "enum": [
+        null, "scroll_observation_window_insufficient", "source_metadata_missing",
+        "source_timing_unproven", "source_binding_mismatch", "source_frame_replayed",
+        "source_frame_stale", "evidence_action_mismatch", "evidence_hash_mismatch",
+        "frame_chain_invalid", "frame_gap_exceeded", "capture_timeout",
+        "observation_timeout", "frame_chain_limit", "after_frame_missing",
+        "after_not_settled", "sampling_cancelled", "screen_pose_unavailable",
+        "roi_invalid", "insufficient_features", "insufficient_inliers",
+        "tracking_error", "incoherent_motion", "pair_displacement_exceeded",
+        "accumulated_horizontal_motion", "bidirectional_motion", "between_thresholds",
+        "ocr_endpoint_invalid", "ocr_rows_insufficient", "ocr_rows_not_consistent",
+        "direction_mismatch", "scroll_no_displacement", "interrupted_after_claim",
+        "scroll_review_required"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device_id", "daemon_session", "camera_id", "camera_device_unique_id",
+        "camera_binding_id", "source_geometry_id", "binding_revision",
+        "calibration_fingerprint", "frame_width", "frame_height"
+      ],
+      "properties": {
+        "device_id": {"$ref": "#/definitions/id"},
+        "daemon_session": {"$ref": "#/definitions/id"},
+        "camera_id": {"$ref": "#/definitions/id"},
+        "camera_device_unique_id": {"$ref": "#/definitions/id"},
+        "camera_binding_id": {"$ref": "#/definitions/uuid"},
+        "source_geometry_id": {"$ref": "#/definitions/sha256"},
+        "binding_revision": {"type": "integer", "minimum": 0},
+        "calibration_fingerprint": {"$ref": "#/definitions/sha256"},
+        "frame_width": {"type": "integer", "minimum": 1},
+        "frame_height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "source_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device_id", "camera_id", "device_unique_id", "camera_binding_id",
+        "source_geometry_id", "binding_revision",
+        "source_frame_seq", "source_captured_at", "source_received_at",
+        "source_legacy_mode", "width", "height", "source_generation_id",
+        "source_capture_seq", "source_clock_id", "source_captured_monotonic_ns",
+        "source_capture_uncertainty_ms", "source_timing_provenance"
+      ],
+      "properties": {
+        "device_id": {"$ref": "#/definitions/id"},
+        "camera_id": {"$ref": "#/definitions/id"},
+        "device_unique_id": {"$ref": "#/definitions/id"},
+        "camera_binding_id": {"$ref": "#/definitions/uuid"},
+        "source_geometry_id": {"$ref": "#/definitions/sha256"},
+        "binding_revision": {"type": "integer", "minimum": 0},
+        "source_frame_seq": {"type": "integer", "minimum": 1},
+        "source_captured_at": {"$ref": "#/definitions/time"},
+        "source_received_at": {"$ref": "#/definitions/time"},
+        "source_legacy_mode": {"type": "boolean", "const": false},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "source_generation_id": {"$ref": "#/definitions/uuid"},
+        "source_capture_seq": {"type": "integer", "minimum": 0},
+        "source_clock_id": {"$ref": "#/definitions/source_clock_id"},
+        "source_captured_monotonic_ns": {"type": "integer", "minimum": 0},
+        "source_capture_uncertainty_ms": {"type": "number", "minimum": 0, "maximum": 20},
+        "source_timing_provenance": {"const": "camera_pts_host_clock.v1"}
+      }
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type", "task_id", "action_instance_id", "sample_index", "phase",
+        "binding", "planning_version", "observation_version", "config_sha256",
+        "source_frame", "evidence_id", "sha256", "accepted_monotonic_ns",
+        "accepted_at", "freshness_checked_at"
+      ],
+      "properties": {
+        "record_type": {"const": "frame"},
+        "task_id": {"$ref": "#/definitions/id"},
+        "action_instance_id": {"$ref": "#/definitions/id"},
+        "sample_index": {"type": "integer", "minimum": 0, "maximum": 29},
+        "phase": {"enum": ["before", "during", "after"]},
+        "binding": {"$ref": "#/definitions/binding"},
+        "planning_version": {"$ref": "#/definitions/id"},
+        "observation_version": {"const": "calibrated-scroll-observation.v1"},
+        "config_sha256": {"$ref": "#/definitions/sha256"},
+        "source_frame": {"$ref": "#/definitions/source_frame"},
+        "evidence_id": {"$ref": "#/definitions/id"},
+        "sha256": {"$ref": "#/definitions/sha256"},
+        "accepted_monotonic_ns": {"type": "integer", "minimum": 0},
+        "accepted_at": {"$ref": "#/definitions/time"},
+        "freshness_checked_at": {"$ref": "#/definitions/time"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"phase": {"const": "before"}}},
+          "then": {"properties": {"sample_index": {"const": 0}}}
+        },
+        {
+          "if": {"properties": {"phase": {"enum": ["during", "after"]}}},
+          "then": {"properties": {"sample_index": {"minimum": 1}}}
+        }
+      ]
+    },
+    "pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type", "pair_index", "from_sample_index", "to_sample_index",
+        "corners", "valid_points", "inlier_ratio", "forward_backward_max_px",
+        "dx_px", "dy_px", "mad_dy_px", "quality_ok", "reason_code"
+      ],
+      "properties": {
+        "record_type": {"const": "pair"},
+        "pair_index": {"type": "integer", "minimum": 0, "maximum": 28},
+        "from_sample_index": {"type": "integer", "minimum": 0, "maximum": 28},
+        "to_sample_index": {"type": "integer", "minimum": 1, "maximum": 29},
+        "corners": {"type": "integer", "minimum": 0, "maximum": 200},
+        "valid_points": {"type": "integer", "minimum": 0, "maximum": 200},
+        "inlier_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+        "forward_backward_max_px": {"$ref": "#/definitions/nullable_nonnegative"},
+        "dx_px": {"$ref": "#/definitions/nullable_number"},
+        "dy_px": {"$ref": "#/definitions/nullable_number"},
+        "mad_dy_px": {"$ref": "#/definitions/nullable_nonnegative"},
+        "quality_ok": {"type": "boolean"},
+        "reason_code": {"$ref": "#/definitions/reason"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"quality_ok": {"const": true}}},
+          "then": {
+            "properties": {
+              "corners": {"minimum": 12},
+              "valid_points": {"minimum": 12},
+              "inlier_ratio": {"minimum": 0.7},
+              "forward_backward_max_px": {"type": "number", "maximum": 1.5},
+              "dx_px": {"type": "number"},
+              "dy_px": {"type": "number"},
+              "mad_dy_px": {"type": "number"},
+              "reason_code": {"const": null}
+            }
+          },
+          "else": {"properties": {"reason_code": {"not": {"type": "null"}}}}
+        }
+      ]
+    },
+    "roi_px": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {"type": "integer", "minimum": 0},
+        "y": {"type": "integer", "minimum": 0},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "ocr_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before_evidence_id", "after_evidence_id", "coordinate_frame",
+        "comparable_unique_rows", "matched_rows", "contradictory_rows", "status"
+      ],
+      "properties": {
+        "before_evidence_id": {"$ref": "#/definitions/id"},
+        "after_evidence_id": {"$ref": "#/definitions/id"},
+        "coordinate_frame": {"const": "screen_px"},
+        "comparable_unique_rows": {"type": "integer", "minimum": 0},
+        "matched_rows": {"type": "integer", "minimum": 0},
+        "contradictory_rows": {"type": "integer", "minimum": 0},
+        "status": {"enum": ["consistent", "insufficient", "contradictory", "invalid"]}
+      }
+    },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type", "task_id", "action_instance_id", "device_id",
+        "observation_version", "config_sha256", "expected_direction", "binding",
+        "planning_version", "source_clock_id", "frame_evidence_ids",
+        "frame_count", "roi_px", "pairs", "sampling_status", "settled_tail_pairs",
+        "before_evidence_id", "after_evidence_id", "flow_status", "effect_status",
+        "direction_consistent", "dx_px", "dy_px", "horizontal_path_px",
+        "vertical_path_px", "reverse_path_px", "valid_points", "inlier_ratio",
+        "mad_dy_px", "ocr_summary", "failure_pair_index", "reason_code"
+      ],
+      "properties": {
+        "record_type": {"const": "chain"},
+        "task_id": {"$ref": "#/definitions/id"},
+        "action_instance_id": {"$ref": "#/definitions/id"},
+        "device_id": {"$ref": "#/definitions/id"},
+        "binding": {"$ref": "#/definitions/binding"},
+        "planning_version": {"$ref": "#/definitions/id"},
+        "source_clock_id": {"$ref": "#/definitions/source_clock_id"},
+        "frame_evidence_ids": {
+          "type": "array", "minItems": 1, "maxItems": 30, "uniqueItems": true,
+          "items": {"$ref": "#/definitions/id"}
+        },
+        "observation_version": {"const": "calibrated-scroll-observation.v1"},
+        "config_sha256": {"$ref": "#/definitions/sha256"},
+        "expected_direction": {"enum": ["swipe_up", "swipe_down"]},
+        "frame_count": {"type": "integer", "minimum": 1, "maximum": 30},
+        "roi_px": {"$ref": "#/definitions/roi_px"},
+        "pairs": {"type": "array", "maxItems": 29, "items": {"$ref": "#/definitions/pair"}},
+        "sampling_status": {"enum": ["complete", "incomplete"]},
+        "settled_tail_pairs": {"type": "integer", "minimum": 0, "maximum": 29},
+        "before_evidence_id": {"$ref": "#/definitions/id"},
+        "after_evidence_id": {"anyOf": [{"$ref": "#/definitions/id"}, {"type": "null"}]},
+        "flow_status": {"enum": ["displaced", "stationary", "unknown"]},
+        "effect_status": {"enum": ["displaced", "stationary", "unknown"]},
+        "direction_consistent": {"type": ["boolean", "null"]},
+        "dx_px": {"$ref": "#/definitions/nullable_number"},
+        "dy_px": {"$ref": "#/definitions/nullable_number"},
+        "horizontal_path_px": {"$ref": "#/definitions/nullable_nonnegative"},
+        "vertical_path_px": {"$ref": "#/definitions/nullable_nonnegative"},
+        "reverse_path_px": {"$ref": "#/definitions/nullable_nonnegative"},
+        "valid_points": {"$ref": "#/definitions/nullable_points"},
+        "inlier_ratio": {"$ref": "#/definitions/nullable_ratio"},
+        "mad_dy_px": {"$ref": "#/definitions/nullable_nonnegative"},
+        "ocr_summary": {"anyOf": [{"$ref": "#/definitions/ocr_summary"}, {"type": "null"}]},
+        "failure_pair_index": {"type": ["integer", "null"], "minimum": 0, "maximum": 28},
+        "reason_code": {"$ref": "#/definitions/reason"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"effect_status": {"enum": ["displaced", "stationary"]}}},
+          "then": {
+            "properties": {
+              "sampling_status": {"const": "complete"},
+              "frame_count": {"minimum": 4},
+              "settled_tail_pairs": {"minimum": 2},
+              "after_evidence_id": {"type": "string"},
+              "dx_px": {"type": "number"},
+              "dy_px": {"type": "number"},
+              "horizontal_path_px": {"type": "number"},
+              "vertical_path_px": {"type": "number"},
+              "reverse_path_px": {"type": "number"},
+              "valid_points": {"type": "integer", "minimum": 12},
+              "inlier_ratio": {"type": "number", "minimum": 0.7},
+              "mad_dy_px": {"type": "number"},
+              "failure_pair_index": {"const": null},
+              "reason_code": {"const": null}
+            }
+          },
+          "else": {"properties": {"reason_code": {"not": {"type": "null"}}}}
+        },
+        {
+          "if": {"properties": {"effect_status": {"const": "displaced"}}},
+          "then": {
+            "properties": {
+              "flow_status": {"const": "displaced"},
+              "direction_consistent": {"const": true}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"effect_status": {"const": "stationary"}}},
+          "then": {
+            "properties": {
+              "flow_status": {"const": "stationary"},
+              "direction_consistent": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"reason_code": {"const": "direction_mismatch"}}},
+          "then": {
+            "properties": {
+              "flow_status": {"const": "displaced"},
+              "effect_status": {"const": "unknown"},
+              "direction_consistent": {"const": false}
+            }
+          }
+        }
+      ]
+    },
+    "review_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type", "contract_version", "request_id", "expected_revision",
+        "task_id", "action_instance_id", "acknowledge_no_replay", "note"
+      ],
+      "properties": {
+        "record_type": {"const": "review_request"},
+        "contract_version": {"const": "calibrated-scroll-review.v1"},
+        "request_id": {"$ref": "#/definitions/id"},
+        "expected_revision": {"type": "integer", "minimum": 1},
+        "task_id": {"$ref": "#/definitions/id"},
+        "action_instance_id": {"$ref": "#/definitions/id"},
+        "acknowledge_no_replay": {"type": "boolean", "const": true},
+        "note": {"type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S"}
+      }
+    }
+  }
+}

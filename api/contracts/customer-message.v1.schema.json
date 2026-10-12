@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/customer-message.v1.schema.json",
+  "title": "Arm Fleet customer message observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["device_id", "wechat_account_id", "external_conversation_id", "external_message_id", "message_type", "content_hash", "observed_at", "captured_at", "capture_confidence", "ui_state", "ui_state_display", "agent_version"],
+  "properties": {
+    "device_id": {"type": "string", "minLength": 1},
+    "wechat_account_id": {"type": "string", "minLength": 1},
+    "external_conversation_id": {"type": "string", "minLength": 1},
+    "external_sender_id": {"type": "string"},
+    "sender_display_name": {"type": "string"},
+    "sender_role": {"type": "string", "enum": ["customer", "operator", "unknown"]},
+    "conversation_kind": {"type": "string", "enum": ["one_to_one", "group", "unknown"]},
+    "participants": {"type": "array", "items": {"type": "object"}},
+    "external_message_id": {"type": "string", "minLength": 1},
+    "message_type": {"type": "string", "enum": ["text", "image", "voice", "video", "file", "sticker", "link", "contact_card", "location", "mini_program", "quote", "transfer", "red_packet", "payment", "unknown", "other"]},
+    "text": {"type": "string"},
+    "attachment_refs": {"type": "array", "items": {"type": "string"}},
+    "content_hash": {"type": "string", "minLength": 1},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "captured_at": {"type": "string", "format": "date-time"},
+    "capture_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "ui_state": {"type": "string", "minLength": 1},
+    "ui_state_display": {"type": "string", "minLength": 1},
+    "screenshot_evidence_hash": {"type": "string"},
+    "agent_version": {"type": "string", "minLength": 1}
+  }
+}

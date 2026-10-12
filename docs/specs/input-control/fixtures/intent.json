@@ -1,0 +1,82 @@
+[
+  {
+    "name": "intent-prepared-first-close",
+    "schema": "input-record.schema.json",
+    "value": {
+      "record_version": "input-control-record.v1",
+      "record_id": "write:98a4fd27ce55d77e106813c2836c94215157d186e635c01fdecc23f2eda740ff",
+      "device_id": "机械臂-乙", "kind": "settings_write", "revision": 1,
+      "created_at": "2026-10-03T11:00:00+08:00", "updated_at": "2026-10-03T11:00:00+08:00",
+      "normalized_request": {
+        "contract_version": "device-input-settings.v1", "enabled": false, "expected_revision": 0,
+        "ime_device_id": null, "operator_id": "值班员乙", "role": "operator",
+        "reason": "保持关闭", "correlation_id": "关联-初次关", "client_request_id": "请求-初次关"
+      },
+      "call_context": {"origin": "human_put", "operator_id": "值班员乙", "role": "operator", "operation_id": null},
+      "before_digest": "de07810f1dd9208dee992b5a9bd9afe74374f6349705afc6efbd35a7ea5dba58",
+      "after_digest": "07da9f91b939dc8864cc679f4d85791280c909725a78ae07055b213a27f29042",
+      "before_revision": 0, "after_revision": 1,
+      "proposed_file": {
+        "contract_version": "device-input-settings.v1", "device_id": "机械臂-乙",
+        "ime_device_id": null, "enabled": false, "revision": 1, "revoked_through_revision": 1,
+        "updated_at": "2026-10-03T11:00:00+08:00", "operator_id": "值班员乙", "reason": "保持关闭",
+        "client_request_id": "请求-初次关",
+        "requests": {
+          "请求-初次关": {
+            "request_digest": "0afdc8b90d7b1bfaee89bedad4d2c9767fa099e55ab92aa0bce7c0844fb32461",
+            "normalized_request": {
+              "contract_version": "device-input-settings.v1", "enabled": false, "expected_revision": 0,
+              "ime_device_id": null, "operator_id": "值班员乙", "role": "operator",
+              "reason": "保持关闭", "correlation_id": "关联-初次关", "client_request_id": "请求-初次关"
+            },
+            "call_context": {"origin": "human_put", "operator_id": "值班员乙", "role": "operator", "operation_id": null},
+            "before": {"enabled": false, "ime_device_id": null, "revision": 0, "revoked_through_revision": 0, "updated_at": null},
+            "after": {"enabled": false, "ime_device_id": null, "revision": 1, "revoked_through_revision": 1, "updated_at": "2026-10-03T11:00:00+08:00"},
+            "audit": {
+              "device_id": "机械臂-乙", "requested_ime_device_id": null, "authorized_ime_device_id": null,
+              "operator_id": "值班员乙", "role": "operator", "reason": "保持关闭",
+              "correlation_id": "关联-初次关", "client_request_id": "请求-初次关", "committed_at": "2026-10-03T11:00:00+08:00"
+            },
+            "original_response": {
+              "settings": {
+                "contract_version": "device-input-settings.v1", "device_id": "机械臂-乙",
+                "ime_device_id": null, "current_ime_device_id": null, "enabled": false,
+                "revision": 1, "revoked_through_revision": 1, "updated_at": "2026-10-03T11:00:00+08:00",
+                "observed_at": "2026-10-03T11:00:00+08:00", "effective": false,
+                "blocking_reasons": [
+                  {"code": "input_switch_disabled", "message": "输入与发送未允许"},
+                  {"code": "input_binding_unavailable", "message": "尚未确定唯一输入法手机"},
+                  {"code": "calibration_not_ready", "message": "机械校准未就绪"},
+                  {"code": "ime_offline", "message": "输入法未在线"},
+                  {"code": "ime_keyboard_inactive", "message": "输入法键盘未展开"}
+                ],
+                "calibration_ready": false, "ime_online": false, "keyboard_active": false,
+                "pending_cancellation_count": 0, "input_recovery_required": false
+              },
+              "replayed": false
+            }
+          }
+        }
+      },
+      "original_response": {
+        "settings": {
+          "contract_version": "device-input-settings.v1", "device_id": "机械臂-乙",
+          "ime_device_id": null, "current_ime_device_id": null, "enabled": false,
+          "revision": 1, "revoked_through_revision": 1, "updated_at": "2026-10-03T11:00:00+08:00",
+          "observed_at": "2026-10-03T11:00:00+08:00", "effective": false,
+          "blocking_reasons": [
+            {"code": "input_switch_disabled", "message": "输入与发送未允许"},
+            {"code": "input_binding_unavailable", "message": "尚未确定唯一输入法手机"},
+            {"code": "calibration_not_ready", "message": "机械校准未就绪"},
+            {"code": "ime_offline", "message": "输入法未在线"},
+            {"code": "ime_keyboard_inactive", "message": "输入法键盘未展开"}
+          ],
+          "calibration_ready": false, "ime_online": false, "keyboard_active": false,
+          "pending_cancellation_count": 0, "input_recovery_required": false
+        },
+        "replayed": false
+      },
+      "state": "prepared", "failure": null
+    }
+  }
+]

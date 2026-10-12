@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/camera-view.v1.schema.json",
+  "title": "Arm Fleet camera read-only view session",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["view_session_id", "device_id", "camera_id", "purpose", "stream_protocol", "stream_url", "started_at", "expires_at", "status", "status_display", "contract_version"],
+  "properties": {
+    "view_session_id": {"type": "string", "minLength": 1},
+    "device_id": {"type": "string", "minLength": 1},
+    "camera_id": {"type": "string", "minLength": 1},
+    "purpose": {"type": "string", "enum": ["主动查看", "接管查看"]},
+    "stream_protocol": {"type": "string", "enum": ["webrtc", "mjpeg"]},
+    "stream_url": {"type": "string", "format": "uri"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "width": {"type": "integer", "minimum": 1},
+    "height": {"type": "integer", "minimum": 1},
+    "frame_rate": {"type": "number", "exclusiveMinimum": 0},
+    "status": {"type": "string", "enum": ["valid", "expiring", "waiting", "closed", "expired", "unavailable"], "description": "waiting 表示正在接收新鲜黑帧，等待画面恢复；继续只读流、轮询和续期，计入并发上限。冻结或采集异常仍为 unavailable；关闭或过期不自动恢复。"},
+    "status_display": {"type": "string", "enum": ["有效", "即将过期", "等待画面恢复", "已关闭", "已过期", "画面不可用"]},
+    "last_frame_at": {"type": ["string", "null"], "format": "date-time"},
+    "closed_at": {"type": ["string", "null"], "format": "date-time"},
+    "close_reason": {"type": ["string", "null"], "minLength": 1},
+    "contract_version": {"const": "camera-view.v1"}
+  }
+}

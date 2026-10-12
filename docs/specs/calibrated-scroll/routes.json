@@ -1,0 +1,130 @@
+{
+  "version": "calibrated-scroll-routes.design.v1",
+  "entries": [
+    {
+      "id": "capability", "transport": "http",
+      "entrypoint": "GET /v1/devices/{device_id}/calibrated-scroll",
+      "request_schema": null, "response_schema": "contract.schema.json#/definitions/capability",
+      "http_success": [200], "http_errors": [
+        {"status": 403, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 404, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 503, "schema": "contract.schema.json#/definitions/http_error"}],
+      "authority": "read", "side_effect": "none"
+    },
+    {
+      "id": "submit", "transport": "http", "entrypoint": "POST /v1/tasks [calibrated_scroll]",
+      "request_schema": "contract.schema.json#/definitions/task_request",
+      "response_schema": "contract.schema.json#/definitions/task_ack",
+      "http_success": [200], "http_errors": [
+        {"status": 400, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 403, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 404, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 409, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 410, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 503, "schema": "contract.schema.json#/definitions/http_error"}],
+      "authority": "task_submit", "side_effect": "enqueue_once"
+    },
+    {
+      "id": "task", "transport": "http", "entrypoint": "GET /v1/tasks/{task_id} [calibrated_scroll]",
+      "request_schema": null, "response_schema": "contract.schema.json#/definitions/task_view",
+      "http_success": [200], "http_errors": [
+        {"status": 403, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 404, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 503, "schema": "contract.schema.json#/definitions/http_error"}],
+      "authority": "read", "side_effect": "none"
+    },
+    {
+      "id": "reviews", "transport": "http",
+      "entrypoint": "GET /v1/devices/{device_id}/calibrated-scroll/reviews",
+      "request_schema": null, "response_schema": "contract.schema.json#/definitions/review_list",
+      "http_success": [200], "http_errors": [
+        {"status": 403, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 404, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 503, "schema": "contract.schema.json#/definitions/http_error"}],
+      "authority": "read", "side_effect": "none"
+    },
+    {
+      "id": "review", "transport": "http",
+      "entrypoint": "POST /v1/devices/{device_id}/calibrated-scroll/reviews/{issue_id}/review",
+      "request_schema": "contract.schema.json#/definitions/review_request",
+      "response_schema": "contract.schema.json#/definitions/review_response",
+      "http_success": [200], "http_errors": [
+        {"status": 403, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 404, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 409, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 422, "schema": "contract.schema.json#/definitions/http_error"},
+        {"status": 503, "schema": "contract.schema.json#/definitions/http_error"}],
+      "authority": "human_review", "side_effect": "review_only"
+    },
+    {
+      "id": "execute", "transport": "trusted_call",
+      "entrypoint": "runtime.calibrated_scroll.execute_calibrated_scroll(ctx=trusted_context, **request)",
+      "request_schema": "contract.schema.json#/definitions/internal_call",
+      "response_schema": "contract.schema.json#/definitions/result",
+      "http_success": [], "http_errors": [], "authority": "original_task_lease", "side_effect": "swipe_at_most_once"
+    },
+    {
+      "id": "swipe", "transport": "trusted_call",
+      "entrypoint": "ctx.call_capability('arm.swipe', server_plan)",
+      "request_schema": "records.schema.json#/definitions/swipe_call",
+      "response_schema": "records.schema.json#/definitions/driver_receipt",
+      "http_success": [], "http_errors": [], "authority": "original_task_lease", "side_effect": "swipe_at_most_once"
+    },
+    {
+      "id": "measure", "transport": "trusted_call",
+      "entrypoint": "ctx.call_capability('camera.measure_scroll', request) [new measurement_contract]",
+      "request_schema": "contract.schema.json#/definitions/measurement_request",
+      "response_schema": "observation.schema.json#/definitions/chain",
+      "http_success": [], "http_errors": [], "authority": "original_task_lease", "side_effect": "none"
+    },
+    {
+      "id": "aggregate", "transport": "trusted_call",
+      "entrypoint": "drivers.scroll_observation.aggregate_scroll_chain(**request)",
+      "request_schema": "records.schema.json#/definitions/aggregate_request",
+      "response_schema": "records.schema.json#/definitions/aggregate_result",
+      "http_success": [], "http_errors": [], "authority": "archive_only", "side_effect": "none"
+    },
+    {
+      "id": "ocr", "transport": "trusted_call",
+      "entrypoint": "ctx.scroll_ocr_endpoints(measurement_request) [trusted optional provider]",
+      "request_schema": "contract.schema.json#/definitions/measurement_request",
+      "response_schema": "contract.schema.json#/definitions/ocr_endpoint",
+      "http_success": [], "http_errors": [], "authority": "original_task_lease", "side_effect": "none"
+    },
+    {
+      "id": "action_store", "transport": "store",
+      "entrypoint": "Store.prepare_scroll_action/claim_scroll_action/finalize_scroll_action",
+      "request_schema": "records.schema.json#/definitions/action_record",
+      "response_schema": "records.schema.json#/definitions/action_row",
+      "http_success": [], "http_errors": [], "authority": "store_only", "side_effect": "persist_only"
+    },
+    {
+      "id": "review_store", "transport": "store",
+      "entrypoint": "Store.review_scroll_action [atomic receipt and action row]",
+      "request_schema": "contract.schema.json#/definitions/review_request",
+      "response_schema": "records.schema.json#/definitions/review_row",
+      "http_success": [], "http_errors": [], "authority": "store_only", "side_effect": "review_only"
+    },
+    {
+      "id": "frame_archive", "transport": "artifact",
+      "entrypoint": "evidence.json.scroll_observation",
+      "request_schema": null, "response_schema": "observation.schema.json#/definitions/frame",
+      "http_success": [], "http_errors": [], "authority": "archive_only", "side_effect": "persist_only"
+    },
+    {
+      "id": "plan_archive", "transport": "artifact", "entrypoint": "scroll_action_records.json.plan_evidence",
+      "request_schema": null, "response_schema": "records.schema.json#/definitions/plan_snapshot",
+      "http_success": [], "http_errors": [], "authority": "archive_only", "side_effect": "persist_only"
+    },
+    {
+      "id": "config_archive", "transport": "artifact", "entrypoint": "scroll_action_records.json.config_evidence",
+      "request_schema": null, "response_schema": "records.schema.json#/definitions/config_snapshot",
+      "http_success": [], "http_errors": [], "authority": "archive_only", "side_effect": "persist_only"
+    },
+    {
+      "id": "closure", "transport": "artifact", "entrypoint": "offline evidence closure validation input",
+      "request_schema": null, "response_schema": "records.schema.json#/definitions/evidence_bundle",
+      "http_success": [], "http_errors": [], "authority": "archive_only", "side_effect": "none"
+    }
+  ]
+}

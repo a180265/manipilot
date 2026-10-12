@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/human-takeover.v1.schema.json",
+  "title": "Arm Fleet human takeover request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["device_id", "conversation_id", "customer_id", "operator_id", "reason", "correlation_id", "client_request_id", "confirmation_token", "contract_version"],
+  "properties": {
+    "device_id": {"type": "string", "minLength": 1},
+    "conversation_id": {"type": "string", "minLength": 1},
+    "customer_id": {"type": "string", "minLength": 1},
+    "operator_id": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "enum": ["operator", "responder"]},
+    "reason": {"type": "string", "minLength": 1},
+    "correlation_id": {"type": "string", "minLength": 1},
+    "client_request_id": {"type": "string", "minLength": 1},
+    "confirmation_token": {"const": "确认执行"},
+    "context": {"type": "object"},
+    "contract_version": {"const": "human-takeover.v1"}
+  }
+}

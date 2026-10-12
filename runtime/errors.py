@@ -1,0 +1,205 @@
+"""统一错误字典：内部错误键 + HTTP 状态 + 中文标题 + 中文处理建议。
+
+所有 API 错误必须返回：HTTP 状态、内部错误键、中文错误标题、中文处理建议和链路编号。
+"""
+from __future__ import annotations
+
+from runtime.util import new_id
+
+# key -> (http_status, 中文标题, 中文处理建议)
+ERROR_DICT: dict[str, tuple[int, str, str]] = {
+    "invalid_request": (400, "请求参数无效", "请检查请求字段名称和取值范围后重试。"),
+    "missing_field": (400, "缺少必填字段", "请补充必填字段后重试。"),
+    "confirmation_required": (400, "该操作需要二次确认", "危险操作必须携带 confirmation_token 二次确认后才能执行。"),
+    "device_not_found": (404, "设备不存在", "请核对设备编号后重试。"),
+    "gesture_profile_not_found": (404, "手势档案未登记", "请在调试台登记、测试并启用手势档案。"),
+    "task_not_found": (404, "任务不存在", "请核对任务编号后重试。"),
+    "plugin_not_found": (404, "插件不存在", "请核对插件编号后重试。"),
+    "view_session_not_found": (404, "查看会话不存在", "请核对查看会话编号，或重新创建查看会话。"),
+    "alert_not_found": (404, "告警不存在", "请核对告警编号后重试。"),
+    "device_offline": (409, "设备离线", "请检查设备驱动和连接，设备恢复心跳后才能执行任务。"),
+    "device_paused": (409, "设备已暂停", "请先恢复设备，设备才能领取新任务。"),
+    "device_quarantined": (409, "设备已隔离", "设备处于隔离状态，需要人工解除隔离并确认归位。"),
+    "device_busy": (409, "设备忙碌", "同一设备同一时刻只允许一个任务，请等待当前任务完成。"),
+    "device_degraded": (409, "设备处于降级状态", "请先完成设备检查并恢复可用状态，再开始微信托管。"),
+    "lease_conflict": (409, "租约冲突", "设备已被其他任务租用，请稍后重试。"),
+    "device_binding_conflict": (409, "设备绑定冲突", "摄像头、串口、daemon、输入法或微信账号已被其他设备占用；一台机械臂一个 daemon、一条串口一个持有者，请先解除旧绑定。"),
+    "device_already_registered": (409, "设备已注册", "设备编号已存在，更新绑定请使用挂载接口。"),
+    "device_removed": (409, "设备已移除", "设备处于移除状态，请重新挂载并完成自检后再操作。"),
+    "device_not_eligible": (409, "设备不具备任务资格", "设备未校准、输入法未绑定、绑定被禁用或状态不可接单；任务被明确拒绝且未执行，请先在设备菜单完成校准/绑定。"),
+    "device_binding_disabled": (409, "设备绑定已禁用", "该设备绑定被禁用，不能接收任务；请先恢复绑定并重新校准。"),
+    "device_not_registered": (404, "设备未注册", "该设备没有注册配置，请先在设备菜单登记。"),
+    "device_config_conflict": (400, "绑定表冲突", "设备绑定表存在重复的编号/槽位/串口/daemon/摄像头/输入法/微信账号，请修正 configs/devices.json 后重启。"),
+    "device_config_invalid": (400, "绑定表无效", "设备绑定表格式无效，请检查 configs/devices.json。"),
+    "task_expired": (410, "任务已过期", "过期任务不得取得租约，请由业务方重新提交。"),
+    "idempotency_conflict": (409, "幂等键冲突", "同一幂等键提交了不同内容，请核对业务侧幂等键生成规则。"),
+    "task_id_conflict": (409, "任务编号冲突", "任务编号已绑定原请求，请查询原任务；不得覆盖或重新执行。"),
+    "capability_unknown": (400, "能力未注册", "任务引用的能力未在平台注册，请先注册能力。"),
+    "capability_not_allowed": (403, "能力未声明", "插件未声明该能力，禁止执行；请在插件清单中声明并通过审查。"),
+    "capability_unavailable": (409, "能力暂不可用", "当前设备驱动未提供该能力，请检查摄像头 OCR 配置。"),
+    "resource_not_declared": (403, "资源未声明", "插件试图访问未声明的资源，已拒绝并记录审计。"),
+    "permission_denied": (403, "权限不足", "当前角色无权执行该操作，请切换到有权限的角色。"),
+    "ime_pairing_unavailable": (503, "配对服务未就绪", "手机配对身份库未初始化：先经离线工具 init_ime_pairing 建立。"),
+    "estop_active": (503, "系统急停中", "全局急停已触发，平台停止领取新任务；需人工现场确认后复位。"),
+    "pre_enable_maintenance": (503, "启用前维护冻结中", "当前仅允许只读检查与紧急停止；完成现场验收并获准启用前，不接纳或恢复任务。"),
+    "camera_unavailable": (409, "摄像头不可用", "摄像头断开或画面异常，请检查摄像头后重试。"),
+    "camera_waiting": (409, "等待画面恢复", "画面恢复后将重新核对当前页面与动作资格；请勿重复提交原动作。"),
+    "calibration_invalid": (409, "校准档案无效", "请在调试台完成本设备的摄像头、机械臂和输入法校准后重试。"),
+    "region_context_invalid": (409, "粗框上下文无效", "本台生效搜索范围缺失、损坏或与当前校准不一致；请在调试台重新核验粗框，不回退全图路径。"),
+    "region_context_changed": (409, "粗框已变化", "搜索范围在操作过程中被修改；原上下文失效，请基于新范围重新执行。"),
+    "calibration_unavailable": (409, "当前校准不可用", "校准档案尚未通过验收或已失效，请先在调试台完成校准验收。"),
+    "coordinate_frame_invalid": (409, "坐标桥档案无效", "坐标桥档案结构无效，需在下一次校准时重新采集。"),
+    "invalid_program": (400, "手势程序不符合契约", "程序未通过 gesture-program.v1 校验，请修正后重新提交。"),
+    "wechat_not_logged_in": (409, "微信未登录", "外部应用未登录，请人工登录后再执行任务。"),
+    "captcha_or_risk": (409, "验证码或风控页", "检测到验证码或风控页面，禁止自动操作，请人工处理。"),
+    "account_mismatch": (409, "账号不匹配", "当前设备账号与任务要求不一致，已拒绝执行，请核对设备绑定表。"),
+    "conversation_mismatch": (409, "会话不匹配", "打开的会话与任务指定会话不一致，已停止执行并归位。"),
+    "text_hash_mismatch": (400, "文字哈希不匹配", "正文哈希与任务不一致，禁止改写文本，请业务方重新下发。"),
+    "view_session_expired": (410, "查看会话已过期", "查看会话已过期或已关闭，请重新创建查看会话。"),
+    "identity_unverified": (403, "身份未核实", "该操作需要可信代理身份（X-WX-Operator），不接受客户端自报身份；请经正式入口访问。"),
+    "internal_unauthorized": (403, "内部接口未授权", "内部撤销通知未授权：令牌缺失、不匹配或本节点未配置；不接受无令牌模式。"),
+    "view_session_limit": (429, "查看会话达到上限", "同一设备同时最多 2 个查看会话，请先关闭现有会话。"),
+    "view_session_device_mismatch": (400, "设备或摄像头不匹配", "查看会话与当前页面设备不一致，请返回设备页面重新打开。"),
+    "wx_callback_not_configured": (503, "WX 接管回调未配置", "请配置 Arm Fleet 到 WX 的回调地址后再发起人工接管。"),
+    "takeover_rejected": (409, "人工接管被 WX 拒绝", "WX 未接受本次接管请求，请核对会话、客户和当前业务状态。"),
+    "takeover_unknown": (503, "人工接管结果未知", "无法确认 WX 是否已收到接管请求，请先人工核对，禁止重复盲目接管。"),
+    "plugin_task_type_unknown": (400, "任务类型未注册", "任务类型未由任何已启用插件注册，平台不内置具体业务任务。"),
+    "plugin_already_installed": (409, "插件已安装", "该插件编号已存在，如需升级请使用升级接口。"),
+    "plugin_tasks_running": (409, "插件存在执行中任务", "请等待插件任务完成或取消后，再执行卸载或停用。"),
+    "plugin_manifest_invalid": (400, "插件清单无效", "插件清单缺少必填声明或格式不合法，请修正后重试。"),
+    "state_transition_invalid": (409, "状态迁移不允许", "当前状态不允许该操作，请刷新状态后重试。"),
+    "result_unknown_pending": (409, "结果未知待人工", "该任务结果未知，已暂停设备并进入人工处理队列，禁止自动重试。"),
+    "home_not_confirmed": (409, "归位未确认", "设备归位失败或未确认，人工处理前不能领取新任务。"),
+    "hardware_unconfirmed": (409, "硬件参数待确认", "真机硬件参数未由项目方确认，系统保持在仿真模式。"),
+    "task_not_cancellable": (409, "任务不可取消", "任务已结束，不能再取消。"),
+    "driver_error": (500, "驱动错误", "设备驱动返回错误，请查看设备详情和结构化错误类别。"),
+    # 人工唤醒单次现场确认（screen-wake-manual-confirm.v1，规范 §9.3）
+    "screen_wake_manual_confirm_disabled": (403, "人工唤醒确认接口未启用", "当前部署未隔离本地操作员控制通道，人工无姿态确认默认禁用；请等待画面恢复或由操作员点亮手机。"),
+    "screen_wake_manual_confirm_conflict": (409, "人工唤醒确认冲突", "任务、绑定、参考证据或幂等键与本次确认不一致，已拒绝且不产生任何动作。"),
+    "screen_wake_manual_confirm_expired": (410, "人工唤醒确认已过期", "确认或其准备的引用已过期，需重新发起准备与确认；过期确认不授权任何动作。"),
+    # 屏幕输入法适配（screen_ime）新增错误
+    "ime_input_failed": (409, "输入法输入失败", "手机输入法回报输入失败，已输入内容保持原样，请人工确认后处理。"),
+    "ime_task_cancelled": (409, "输入法任务已取消", "输入法任务在显示或输入阶段被取消，请确认屏幕残留内容后重新下发。"),
+    "calibration_page_closed": (409, "校准页面未打开", "手机校准页未回报打开状态，布防被拒绝；请先在手机上打开校准页。"),
+    "calibration_residual_exceeded": (409, "校准残差超限", "仿射拟合残差超过阈值，映射未保存；请检查机械坐标与手机摆放后重新校准。"),
+    "mapping_not_found": (404, "校准映射不存在", "该设备尚无屏幕校准映射，请先完成屏幕校准再执行坐标类操作。"),
+    "supervision_running": (409, "设备正在托管", "请先停止当前托管，或直接使用已有托管配置。"),
+    "supervision_unavailable": (409, "微信托管暂不可用", "请检查微信观测配置、OCR 引擎和设备摄像头后重试。"),
+    "wx_compat_disabled": (409, "WX 业务监听未由此服务提供", "请在 WX 8787 页面管理名单和业务监听；Arm Fleet 仅负责通用硬件执行。"),
+    # 自动手势闭环与 WX 导航（规范第 14.1 节）
+    "gesture_client_upgrade_required": (409, "手机端不支持手势采样", "请安装支持 gesture-capture.v1 的新 APK 后重试；本次未执行任何动作。"),
+    "coordinate_frame_missing": (409, "缺少本次校准的坐标桥", "需在下一次获准机械校准时采集页面元数据；不能事后推测填充。"),
+    "coordinate_frame_unsupported": (409, "当前方向或缩放不支持", "首版仅支持竖屏旋转 0、像素比例 1:1 的坐标桥。"),
+    "gesture_binding_changed": (409, "校准或设备绑定已变化", "相关手势证书已失效，请重新校准并重新自检。"),
+    "publish_nothing_valid": (409, "自检无有效动作", "run 无任何连续验证有效的动作，未发证书；请先解决自检失败原因。"),
+    "input_settings_invalid": (503, "输入开关设置无效", "设置文件损坏或无法安全解释：保留原文件并阻断输入，请人工核对修复。"),
+    "input_settings_write_failed": (503, "输入开关保存失败", "持久化确认失败：旧值保留，请勿重复提交，先核对当前状态。"),
+    "input_settings_commit_unknown": (503, "输入开关提交结果未知", "替换/同步或记录提交无法确认：保留资料，按原请求编号对账，不得盲目重试或重置版本。"),
+    "input_revision_exhausted": (409, "输入开关版本已达上限", "设置版本到达上限：请维护处理，禁止重置计数器绕过。"),
+    "input_binding_unavailable": (409, "尚未确定唯一输入法手机", "开启前需先完成手机与设备的唯一绑定。"),
+    "input_binding_mismatch": (409, "请求手机与绑定不一致", "请求中的手机与服务端唯一绑定不一致：不能开启。"),
+    "unsupported_contract": (400, "契约版本不支持", "contract_version 缺失或不受支持：请升级后重试。"),
+    "revision_conflict": (409, "输入开关设置已变化", "设置已被其他人更新，请刷新后基于最新版本重试。"),
+    "calibration_not_ready": (409, "校准未就绪", "机械校准未通过独立验证：不能开启输入与发送（关闭不受限）。"),
+    "request_conflict": (409, "请求编号冲突", "同一 client_request_id 携带不同内容：疑似重放，请更换编号重试。"),
+    "input_switch_disabled": (409, "输入与发送未允许", "本设备输入开关未开启或当前资格不可用；上下滑与只读不受影响。"),
+    "task_expired": (400, "任务已过期", "等待期间任务已过期未执行；设备恢复后不会自动补做。"),
+    "input_authorization_revoked": (409, "任务输入许可已失效", "开关关闭推进了撤销边界：原排队任务不执行、不复活；重新输入请新建授权任务。"),
+    "input_authorization_missing": (409, "任务缺少输入许可记录", "旧任务不补办许可：请人工核对后按新流程重新提交。"),
+    "issue_not_reviewable": (409, "该问题不可人工勾选清除", "提交/损坏/换绑类问题只能由提交对账、资料修复或换绑流程解决。"),
+    "input_recovery_busy": (409, "原执行仍在途，暂不能人工核对", "存在未确认取消的在途输入：先取消/对账并确认协程退出，再执行人工核对。"),
+    "input_recovery_conflict": (409, "人工核对记录冲突", "遗留核对记录与当前问题状态不一致：保留保护，请刷新后重新核对。"),
+    "original_task_unresolved": (409, "原任务尚未解决", "原任务仍在执行/收尾或设备存在未结束任务/租约：核对回执不能签发。"),
+    "binding_changed": (409, "绑定已变化", "核对请求登记的绑定与当前绑定不一致：旧核对请求作废，请按当前绑定重新发起。"),
+    "evidence_invalid": (422, "核对证据不完整", "当前绑定/校准身份缺失或证据引用无效：不能签发核对回执。"),
+    "authorization_invalid": (403, "授权核验未通过", "签名/编号/归属/有效期核对失败：本次不执行、不签发。"),
+    "operation_not_found": (404, "操作不存在", "按编号未查到操作或回执；404 不能证明原任务无动作。"),
+    "evidence_stale": (422, "证据已过期", "恢复核对证据超出时效窗口：请重新采集后再发起核对。"),
+    "mechanical_unconfirmed": (409, "机械安全未证实", "机械安全事实未由真实状态源证实：不签发可解除隔离的回执。"),
+    "scroll_review_not_found": (404, "滑动核对记录不存在", "按编号未查到该视觉暂停问题；404 不改变既有阻断。"),
+    "scroll_review_conflict": (409, "滑动核对冲突", "同核对编号内容不同或版本已变化：保留保护，请刷新后重新核对。"),
+    "storage_unavailable": (503, "滑动动作存储不可用", "持久边界失败或记录无法安全解释：保持阻断，按原请求编号对账。"),
+    "source_unavailable": (503, "来源不可用", "来源帧缺失/过期/证据丢失或校准不具资格：请确认采集进行中。"),
+    "source_binding_changed": (409, "来源绑定已变化", "上传绑定实例与当前绑定不一致：换绑清帧后旧上传拒绝。"),
+    "camera_source_conflict": (409, "来源帧冲突", "同代际同序号不同内容或低序号上传：拒绝。"),
+    "camera_request_invalid": (422, "来源请求无效", "缺少必需头/参数或请求体无效。"),
+    "input_settings_commit_pending": (409, "存在未对账的设置提交意图", "先按原请求编号对账（重放或查询），不得越过提交。"),
+    "input_record_invalid": (503, "输入控制记录无法安全解释", "保留原记录并阻断输入：请人工核对修复，不重建空记录。"),
+    "client_not_foreground": (409, "测试页不在前台", "请在手机上打开手势测试页后重试；本次未执行动作。"),
+    "trial_not_ready": (409, "本次试验尚未准备好", "等待测试页 Ready 或重新准备试验；未动。"),
+    "trace_payload_conflict": (409, "同编号证据内容冲突", "轨迹主键相同但内容不同，试验转 unknown；请人工核对。"),
+    "trace_incomplete": (500, "触摸轨迹不完整", "手机轨迹证据缺失或不完整，结果按 unknown 处理。"),
+    "no_contact": (409, "未收到接触", "手机未收到触摸事件；请检查接触与落点，不自动加深下压。"),
+    "mapping_mismatch": (409, "实际触点偏离计划", "触点整体偏离阈值；请检查坐标桥与校准，不调路径偏移掩盖。"),
+    "contact_broken": (409, "滑动中途断触", "接触中途断开；测试页仅允许换 S2 候选一次。"),
+    "effect_not_observed": (409, "证据明确显示未起效", "动作完成但目标效果未出现；按决策表换候选或转人工。"),
+    "effect_unknown": (503, "手机效果无法确认", "无法确认目标效果，不继续滑、点击、返回或输入。"),
+    "edge_gesture_unreachable": (409, "当前精度下无法进入系统手势区域", "系统手势区与校准可执行区交集过窄；未执行动作。"),
+    "navigation_mode_unsupported": (409, "导航模式缺少可用手势区域", "系统未报告手势区域或对应 inset 为 0；未执行动作。"),
+    "navigation_layout_unsupported": (409, "页面布局不受支持", "当前微信主界面布局不在支持清单；可登记有版本的特殊布局模板。"),
+    "launcher_template_missing": (409, "尚无桌面确认模板", "请先在桌面登记 launcher 模板；Home 保持未验证。"),
+    "top_not_confirmed": (503, "无法证明已到顶部", "缺少独立顶部证据；不按固定次数宣布成功。"),
+    "path_feature_unavailable": (409, "控制器未支持连续多段路径", "需加载 path.v1 特性；不拆成多次 SWIPE 兜底。"),
+    "gesture_budget_exhausted": (409, "已达到测试/搜索上限", "预算耗尽；按已得证书返回，不自动扩额。"),
+    "ready_payload_conflict": (409, "同一准备确认内容冲突", "同命令 Ready 内容不同，撤销未执行资格。"),
+    "path_timing_unachievable": (409, "路径时序无法满足", "请求时序超出进给/时长限值；返回可行范围，不静默改写。"),
+    "navigation_step_conflict": (409, "导航步骤重复或乱序", "步骤编号必须从 1 严格递增；同步骤重送只返回原结果。"),
+    "navigation_run_invalid": (400, "导航轮编号无效", "navigation_id 必须是标准小写带连字符 UUID。"),
+    "navigation_run_conflict": (409, "导航轮冲突", "同一 navigation_id 已存在且关键参数不同或已终态；变化必须先结束旧轮。"),
+    "navigation_run_corrupted": (500, "导航轮档案损坏", "轮次持久化文件损坏或结构无效，请人工核查数据目录后重试。"),
+    "navigation_profile_not_found": (404, "导航档案不存在", "请核对 profile_id，或先完成导航档案自举。"),
+    "boundary_probe_pending": (200, "疑似边界，尚需一次限定探测", "本次探测步骤完成但不代表回顶成功；允许下一步 return_top。"),
+    "launcher_restore_missing": (409, "尚无测试页恢复入口", "请登记桌面恢复目标后再启用 Home 自动验证。"),
+    "gesture_settings_invalid": (409, "手势开关文件损坏", "设备手势设置损坏；请重新配置，不创建空档案覆盖。"),
+    "gesture_profile_invalid": (409, "自动手势档案损坏", "档案文件损坏；请重新自检生成，不覆盖其他设备。"),
+    "navigation_run_not_found": (404, "导航轮次不存在", "请核对 navigation_id 后重试。"),
+    "navigation_run_active": (409, "导航轮次仍在途", "存在未终态步骤时不能关闭；请先等待或人工核对。"),
+    "navigation_template_preview_invalid": (409, "模板预览无效或已过期", "预览 60 秒有效；过期请重新采集，不复用旧帧。"),
+    "layout_request_invalid": (422, "布局资料请求无效", "缺少必需字段或字段超出闭合结构；本次未写入。"),
+    "layout_permission_denied": (403, "布局资料权限不足", "该编号或资源属于其他身份；不接受自称 operator。"),
+    "layout_resource_missing": (404, "布局资料不存在", "请核对编号/版本；404 不证明此前提交失败，可按原请求编号查询。"),
+    "layout_revision_conflict": (409, "布局资料修订冲突", "expected_revision 与当前指针不一致；请重新读取后再试。"),
+    "layout_request_conflict": (409, "布局请求编号冲突", "同 client_request_id 携带了不同内容，或存在未对账提交。"),
+    "layout_binding_changed": (409, "布局会话绑定已变化", "相机/手机/校准绑定与会话不一致；请重新采集受影响页面。"),
+    "layout_device_busy": (409, "设备正忙", "设备有在途动作；publish=false 草稿可保存，发布须等待空闲。"),
+    "layout_preview_expired": (409, "布局预览已过期", "请重新预览；不能只延长有效期。"),
+    "layout_items_unverified": (409, "存在未证实项目", "提交集合必须恰好等于全部实际通过项，不能选择性隐藏失败项。"),
+    "layout_source_unavailable": (503, "布局来源不可用", "无法取得当前帧或证据；请确认来源链路后重试。"),
+    "layout_archive_invalid": (503, "布局档案损坏", "历史版本无法安全读取；请人工核查数据目录。"),
+    "layout_storage_failed": (503, "布局资料存储失败", "写入回包未知：请先按 operation_id 查询，不要盲目重试新建版本。"),
+    "authorization_unavailable": (503, "人工认证不可用", "缺少凭据/密钥或配置损坏：零动作，不签发假回包。"),
+    "wx_navigation_rejected": (403, "WX 导航任务认证未通过", "签名/授权/摘要核对失败：不接纳该任务，不产生动作。"),
+}
+
+
+class ApiError(Exception):
+    """携带中文标题与处理建议的业务错误。"""
+
+    def __init__(self, key: str, detail: str | None = None):
+        http, title, suggestion = ERROR_DICT.get(
+            key, (500, "未知错误", "发生未登记的错误，请查看日志并登记错误键。")
+        )
+        self.key = key
+        self.http = http
+        self.title = title
+        self.suggestion = suggestion
+        self.detail = detail
+        self.trace_id = new_id("trace")
+        super().__init__(f"{key}: {title}" + (f"（{detail}）" if detail else ""))
+
+    def to_payload(self) -> dict:
+        body = {
+            "error": {
+                "key": self.key,
+                "title": self.title,
+                "suggestion": self.suggestion,
+                "trace_id": self.trace_id,
+            }
+        }
+        if self.detail:
+            body["error"]["detail"] = self.detail
+        return body
+
+
+def error_payload(key: str, detail: str | None = None) -> dict:
+    return ApiError(key, detail).to_payload()

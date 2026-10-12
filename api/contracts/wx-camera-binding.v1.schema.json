@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "wx-camera-binding.v1",
+  "description": "R4-12-D/E：WX 授权失效向 Fleet 查看流的传播契约。对象：代理身份头四元组、Fleet 内部撤销通知、WX introspect 复核与响应。",
+  "$defs": {
+    "ProxyIdentityHeaders": {
+      "type": "object",
+      "description": "可信代理在边界重建的头；proxy_set_header 受控值覆盖客户端伪造同名头。",
+      "properties": {
+        "X-WX-Operator": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32
+        },
+        "X-WX-Operator-Role": {
+          "type": "string",
+          "enum": [
+            "admin",
+            "staff"
+          ]
+        },
+        "X-WX-Session-Id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "X-WX-Credential-Revision": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        }
+      },
+      "required": [
+        "X-WX-Operator",
+        "X-WX-Operator-Role",
+        "X-WX-Session-Id",
+        "X-WX-Credential-Revision"
+      ],
+      "additionalProperties": false
+    },
+    "RevocationRequest": {
+      "type": "object",
+      "description": "WX→Fleet POST /v1/internal/wx-revocations（X-WX-Internal-Token 头认证）。作用域精确到 (username, session_id)，幂等。",
+      "properties": {
+        "kind": {
+          "const": "sessions"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,31}$"
+        },
+        "session_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "kind",
+        "username",
+        "session_ids",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "RevocationResponse": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": "wx-camera-binding.v1"
+        },
+        "revoked_view_sessions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "contract_version",
+        "revoked_view_sessions"
+      ],
+      "additionalProperties": false
+    },
+    "IntrospectRequest": {
+      "type": "object",
+      "description": "Fleet→WX POST /internal/wx-camera/v1/introspect（X-WX-Internal-Token 头认证）。",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false
+    },
+    "IntrospectResponse": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": "wx-camera-binding.v1"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "active",
+            "revoked",
+            "expired",
+            "user_disabled",
+            "credential_superseded",
+            "session_unknown"
+          ]
+        },
+        "username": {
+          "type": "string"
+        },
+        "credential_revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "contract_version",
+        "valid",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "IdentityResponse": {
+      "type": "object",
+      "description": "GET/POST /internal/wx-camera/v1/identity：只反映调用者自身 Cookie 会话；401=拒绝。",
+      "properties": {
+        "contract_version": {
+          "const": "wx-camera-binding.v1"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "username": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,31}$"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "admin",
+            "staff"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "credential_revision": {
+          "type": "integer"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_version",
+        "valid"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "$ref": "#/$defs/ProxyIdentityHeaders"
+}

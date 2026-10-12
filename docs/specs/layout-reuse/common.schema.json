@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:layout-reuse:common",
+  "$comment": "Proposed contracts only; semantic checks in validate.py are mandatory.",
+  "$ref": "#/definitions/id",
+  "definitions": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "maxLength": 64},
+    "text": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "\\S"},
+    "uuid": {"type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{64}$", "maxLength": 64},
+    "time": {"type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})$"},
+    "uint": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "nullable_uuid": {"anyOf": [{"$ref": "#/definitions/uuid"}, {"type": "null"}]},
+    "nullable_sha": {"anyOf": [{"$ref": "#/definitions/sha"}, {"type": "null"}]},
+    "nullable_positive": {"anyOf": [{"$ref": "#/definitions/positive"}, {"type": "null"}]},
+    "nullable_time": {"anyOf": [{"$ref": "#/definitions/time"}, {"type": "null"}]},
+    "size": {
+      "type": "object", "additionalProperties": false, "required": ["width", "height"],
+      "properties": {"width": {"$ref": "#/definitions/positive"}, "height": {"$ref": "#/definitions/positive"}}
+    },
+    "rect": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {"type": "number", "minimum": 0, "exclusiveMaximum": 1},
+        "y": {"type": "number", "minimum": 0, "exclusiveMaximum": 1},
+        "width": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "height": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+      }
+    },
+    "relative_rect": {
+      "type": "object", "additionalProperties": false, "required": ["dx", "dy", "width", "height"],
+      "properties": {
+        "dx": {"type": "number", "minimum": -1, "maximum": 1},
+        "dy": {"type": "number", "minimum": -1, "maximum": 1},
+        "width": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "height": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+      }
+    },
+    "pixel_rect": {
+      "type": "object", "additionalProperties": false, "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": {"$ref": "#/definitions/uint"}, "top": {"$ref": "#/definitions/uint"},
+        "right": {"$ref": "#/definitions/positive"}, "bottom": {"$ref": "#/definitions/positive"}
+      }
+    },
+    "bounds": {
+      "type": "object", "additionalProperties": false, "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": {"type": "number", "minimum": 0}, "top": {"type": "number", "minimum": 0},
+        "right": {"type": "number", "exclusiveMinimum": 0}, "bottom": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "point": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y"],
+      "properties": {"x": {"type": "number", "minimum": 0}, "y": {"type": "number", "minimum": 0}}
+    },
+    "binding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["camera_id", "camera_device_unique_id", "camera_binding_id", "arm_binding_id"],
+      "properties": {
+        "camera_id": {"$ref": "#/definitions/text"},
+        "camera_device_unique_id": {"$ref": "#/definitions/text"},
+        "camera_binding_id": {"$ref": "#/definitions/uuid"},
+        "arm_binding_id": {"$ref": "#/definitions/text"}
+      }
+    },
+    "ref": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version", "sha256"],
+      "properties": {"id": {"$ref": "#/definitions/id"}, "version": {"$ref": "#/definitions/positive"}, "sha256": {"$ref": "#/definitions/sha"}}
+    },
+    "nullable_ref": {"anyOf": [{"$ref": "#/definitions/ref"}, {"type": "null"}]},
+    "page_state": {"type": "string", "enum": ["wechat_list", "chat_ime_hidden", "chat_ime_empty", "chat_ime_text"]},
+    "keyboard_geometry_mode": {"type": "string", "enum": ["legacy_registered", "live_ime_v1"]},
+    "reason_codes": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/definitions/id"}},
+    "asset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "relative_path", "sha256", "media_type", "width", "height"],
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "relative_path": {"type": "string", "maxLength": 512, "pattern": "^assets/(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}/)*[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\\.(?:png|jpg|jpeg)$"},
+        "sha256": {"$ref": "#/definitions/sha"}, "media_type": {"enum": ["image/png", "image/jpeg"]},
+        "width": {"$ref": "#/definitions/positive"}, "height": {"$ref": "#/definitions/positive"}
+      }
+    }
+  }
+}

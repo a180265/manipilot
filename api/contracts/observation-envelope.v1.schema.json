@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/observation-envelope.v1.schema.json",
+  "title": "WX observation envelope v1",
+  "description": "正式观测接口（/v1/observation/*）统一外层信封；业务字段位于 payload，按各接口严格字段表另行校验。customer-message 的 payload 必须完全符合 customer-message.v1.schema.json。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope", "payload"],
+  "properties": {
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "observation_id", "correlation_id", "idempotency_key"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "observation_id": {"type": "string", "minLength": 1},
+        "correlation_id": {"type": "string", "minLength": 1},
+        "idempotency_key": {"type": "string", "minLength": 1}
+      }
+    },
+    "payload": {"type": "object"}
+  }
+}

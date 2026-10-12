@@ -1,0 +1,172 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:input-control:migration",
+  "title": "Pending implementation: maintenance-only legacy input-settings migration",
+  "$comment": "Design attachment only. No migration executable is provided. Legacy input, baseline, backup manifest and maintenance intent are distinct documents.",
+  "$ref": "#/definitions/baseline",
+  "definitions": {
+    "legacy_request_key": {
+      "type": "string", "minLength": 1, "maxLength": 160, "pattern": "\\S"
+    },
+    "artifact_ref": {
+      "type": "string", "minLength": 2, "maxLength": 1024,
+      "pattern": "^/\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])"
+    },
+    "legacy_entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "revision", "operator_id", "at", "digest"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "operator_id": {"$ref": "urn:wx:design:input-control:common#/definitions/operator"},
+        "at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"}
+      }
+    },
+    "legacy_file": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "device_id", "ime_device_id", "enabled", "revision", "updated_at", "operator_id", "reason", "client_request_id", "requests"],
+      "properties": {
+        "contract_version": {"type": "string", "const": "device-input-settings.v1"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "enabled": {"type": "boolean"},
+        "revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "operator_id": {"$ref": "urn:wx:design:input-control:common#/definitions/operator"},
+        "reason": {"$ref": "urn:wx:design:input-control:common#/definitions/reason"},
+        "client_request_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+        "requests": {
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "propertyNames": {"$ref": "#/definitions/legacy_request_key"},
+          "patternProperties": {"\\S": {"$ref": "#/definitions/legacy_entry"}}
+        }
+      }
+    },
+    "baseline": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "revision_floor", "closed_saved_value", "operator_id", "reason", "client_request_id", "backup_manifest_ref", "backup_manifest_sha256", "legacy_request_ids", "migration_id"],
+      "properties": {
+        "contract_version": {"type": "string", "const": "input-settings-migration.v1"},
+        "revision_floor": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "closed_saved_value": {
+          "allOf": [
+            {"$ref": "urn:wx:design:input-control:settings#/definitions/saved_value"},
+            {"properties": {
+              "enabled": {"const": false},
+              "ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+              "revision": {"minimum": 2},
+              "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}
+            }}
+          ]
+        },
+        "operator_id": {"$ref": "urn:wx:design:input-control:common#/definitions/operator"},
+        "reason": {"$ref": "urn:wx:design:input-control:common#/definitions/reason"},
+        "client_request_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+        "backup_manifest_ref": {"$ref": "#/definitions/artifact_ref"},
+        "backup_manifest_sha256": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "legacy_request_ids": {
+          "type": "object", "additionalProperties": false, "minProperties": 1,
+          "propertyNames": {"$ref": "#/definitions/legacy_request_key"},
+          "patternProperties": {"\\S": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"}}
+        },
+        "migration_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"}
+      }
+    },
+    "backup_artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_ref", "backup_ref", "sha256", "byte_length", "method"],
+      "properties": {
+        "source_ref": {"$ref": "#/definitions/artifact_ref"},
+        "backup_ref": {"$ref": "#/definitions/artifact_ref"},
+        "sha256": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "byte_length": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "method": {"type": "string", "enum": ["byte_copy", "sqlite_backup"]}
+      }
+    },
+    "version_inventory": {
+      "type": "object", "additionalProperties": false,
+      "required": ["file_revision", "ledger_revision", "owners", "checkpoint", "applied_intents"],
+      "properties": {
+        "file_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "ledger_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "owners": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["record_id", "settings_revision", "record_sha256"],
+            "properties": {
+              "record_id": {"$ref": "urn:wx:design:input-control:common#/definitions/owner_id"},
+              "settings_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+              "record_sha256": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"}
+            }
+          }
+        },
+        "checkpoint": {"anyOf": [{"$ref": "urn:wx:design:input-control:record#/definitions/checkpoint"}, {"type": "null"}]},
+        "applied_intents": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["record_id", "after_revision", "after_digest", "record_sha256"],
+            "properties": {
+              "record_id": {"type": "string", "pattern": "^write:[a-f0-9]{64}$(?![\\s\\S])"},
+              "after_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+              "after_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+              "record_sha256": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"}
+            }
+          }
+        }
+      }
+    },
+    "backup_manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "migration_id", "device_id", "created_at", "source_file_semantic_digest", "artifacts", "version_inventory"],
+      "properties": {
+        "contract_version": {"type": "string", "const": "input-settings-migration-backup.v1"},
+        "migration_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "created_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "source_file_semantic_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "artifacts": {
+          "type": "object", "additionalProperties": false,
+          "required": ["settings_file", "fleet_db", "ime_db"],
+          "properties": {
+            "settings_file": {"allOf": [{"$ref": "#/definitions/backup_artifact"}, {"properties": {"method": {"const": "byte_copy"}}}]},
+            "fleet_db": {"allOf": [{"$ref": "#/definitions/backup_artifact"}, {"properties": {"method": {"const": "sqlite_backup"}}}]},
+            "ime_db": {"allOf": [{"$ref": "#/definitions/backup_artifact"}, {"properties": {"method": {"const": "sqlite_backup"}}}]}
+          }
+        },
+        "version_inventory": {"$ref": "#/definitions/version_inventory"}
+      }
+    },
+    "maintenance_intent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "migration_id", "device_id", "created_at", "updated_at", "before_digest", "after_digest", "backup_manifest_ref", "backup_manifest_sha256", "backup_manifest", "proposed_file", "state", "committed_at"],
+      "properties": {
+        "contract_version": {"type": "string", "const": "input-settings-migration-intent.v1"},
+        "migration_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "created_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "updated_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "before_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "after_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "backup_manifest_ref": {"$ref": "#/definitions/artifact_ref"},
+        "backup_manifest_sha256": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "backup_manifest": {"$ref": "#/definitions/backup_manifest"},
+        "proposed_file": {
+          "allOf": [
+            {"$ref": "urn:wx:design:input-control:settings#/definitions/file"},
+            {"required": ["migration_baseline"], "properties": {"requests": {"maxProperties": 0}, "enabled": {"const": false}}}
+          ]
+        },
+        "state": {"type": "string", "enum": ["prepared", "committed"]},
+        "committed_at": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_time"}
+      },
+      "allOf": [{
+        "if": {"properties": {"state": {"const": "prepared"}}},
+        "then": {"properties": {"committed_at": {"type": "null"}}},
+        "else": {"properties": {"committed_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}}}
+      }]
+    }
+  }
+}

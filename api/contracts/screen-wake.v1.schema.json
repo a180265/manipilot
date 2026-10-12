@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/screen-wake.v1.schema.json",
+  "title": "Manual screen wake task v1",
+  "description": "One manually confirmed double tap at a previously validated calibration point. Never unlock, OCR, send, or retry. Runtime limits validity to 60 seconds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "task_type", "capability", "contract_version", "device_id", "idempotency_key", "payload", "expires_at", "correlation_id"],
+  "properties": {
+    "task_id": {"$ref": "#/$defs/text"},
+    "task_type": {"const": "screen_wake"},
+    "capability": {"const": "arm.wake_screen"},
+    "contract_version": {"const": "screen-wake.v1"},
+    "device_id": {"$ref": "#/$defs/text"},
+    "idempotency_key": {"$ref": "#/$defs/text"},
+    "correlation_id": {"$ref": "#/$defs/text"},
+    "expires_at": {"type": "string", "format": "date-time", "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "operator_id": {"$ref": "#/$defs/text"},
+    "reason": {"$ref": "#/$defs/text"}
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "daemon_session", "camera_id", "camera_device_unique_id", "binding_revision", "calibration_fingerprint", "frame_width", "frame_height"],
+      "properties": {
+        "device_id": {"$ref": "#/$defs/text"},
+        "daemon_session": {"$ref": "#/$defs/text"},
+        "camera_id": {"$ref": "#/$defs/text"},
+        "camera_device_unique_id": {"$ref": "#/$defs/text"},
+        "binding_revision": {"type": "integer", "minimum": 0},
+        "calibration_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "frame_width": {"type": "integer", "minimum": 1},
+        "frame_height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "confirmed"],
+      "properties": {
+        "binding": {"$ref": "#/$defs/binding"},
+        "confirmed": {"type": "boolean", "const": true}
+      }
+    },
+    "point": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y"],
+      "properties": {
+        "x": {"type": "number", "minimum": 0, "maximum": 1},
+        "y": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["validation_point_id", "point"],
+      "properties": {
+        "validation_point_id": {"$ref": "#/$defs/text"},
+        "point": {"$ref": "#/$defs/point"}
+      }
+    },
+    "blockingReason": {
+      "type": "object", "additionalProperties": false, "required": ["code", "message"],
+      "properties": {"code": {"$ref": "#/$defs/text"}, "message": {"$ref": "#/$defs/text"}}
+    },
+    "evidenceRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_id", "sha256", "captured_at"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/text"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "captured_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "frameObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_frame_seq", "quality", "sha256", "captured_at"],
+      "properties": {
+        "source_frame_seq": {"type": "integer", "minimum": 0},
+        "quality": {"enum": ["waiting", "clear"]},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "captured_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "frameObservations": {
+      "type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/frameObservation"}
+    },
+    "metadata": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "device_id", "binding", "usable", "blocking_reasons", "target", "effect_status"],
+      "properties": {
+        "contract_version": {"const": "screen-wake.v1"},
+        "device_id": {"$ref": "#/$defs/text"},
+        "binding": {"anyOf": [{"$ref": "#/$defs/binding"}, {"type": "null"}]},
+        "usable": {"type": "boolean"},
+        "blocking_reasons": {"type": "array", "items": {"$ref": "#/$defs/blockingReason"}},
+        "target": {"anyOf": [{"$ref": "#/$defs/target"}, {"type": "null"}]},
+        "effect_status": {"const": "unverified"}
+      },
+      "allOf": [{
+        "if": {"properties": {"usable": {"const": true}}, "required": ["usable"]},
+        "then": {"properties": {
+          "binding": {"$ref": "#/$defs/binding"}, "target": {"$ref": "#/$defs/target"},
+          "blocking_reasons": {"maxItems": 0}
+        }}
+      }]
+    },
+    "resultDetail": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "binding", "controller_completed", "tap_count", "effect_status", "motion_not_started", "before_evidence", "after_evidence", "frame_observations"],
+      "properties": {
+        "contract_version": {"const": "screen-wake.v1"},
+        "binding": {"$ref": "#/$defs/binding"},
+        "controller_completed": {"type": "boolean"},
+        "tap_count": {"type": "integer", "minimum": 0, "maximum": 2},
+        "effect_status": {"enum": ["awake", "unverified"]},
+        "motion_not_started": {"type": "boolean"},
+        "before_evidence": {"anyOf": [{"$ref": "#/$defs/evidenceRef"}, {"type": "null"}]},
+        "after_evidence": {"anyOf": [{"$ref": "#/$defs/evidenceRef"}, {"type": "null"}]},
+        "frame_observations": {"$ref": "#/$defs/frameObservations"}
+      }
+    }
+  }
+}

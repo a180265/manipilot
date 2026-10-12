@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:input-control:review",
+  "title": "Pending implementation: input-recovery-review.v1",
+  "$ref": "#/definitions/request",
+  "definitions": {
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "expected_recovery_revision", "ime_device_id", "issue_ids", "candidate_removed", "editor_checked", "operator_id", "role", "reason", "correlation_id", "client_request_id"],
+      "properties": {
+        "contract_version": {"type": "string", "const": "input-recovery-review.v1"},
+        "expected_recovery_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "ime_device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "issue_ids": {"$ref": "urn:wx:design:input-control:common#/definitions/issue_ids"},
+        "candidate_removed": {"type": "boolean", "const": true},
+        "editor_checked": {"type": "boolean", "const": true},
+        "operator_id": {"$ref": "urn:wx:design:input-control:common#/definitions/operator"},
+        "role": {"$ref": "urn:wx:design:input-control:common#/definitions/role"},
+        "reason": {"$ref": "urn:wx:design:input-control:common#/definitions/reason"},
+        "correlation_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"},
+        "client_request_id": {"$ref": "urn:wx:design:input-control:common#/definitions/request_id"}
+      }
+    },
+    "authorized_request": {
+      "allOf": [{"$ref": "#/definitions/request"}, {"properties": {"role": {"enum": ["operator", "responder"]}}}]
+    },
+    "normalized_request": {
+      "allOf": [
+        {"$ref": "#/definitions/authorized_request"},
+        {"properties": {"operator_id": {"pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])"}, "reason": {"pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])"}}}
+      ]
+    },
+    "response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_version", "device_id", "issue_ids", "recovery_revision", "input_recovery_required"],
+      "properties": {
+        "contract_version": {"type": "string", "const": "input-recovery-review.v1"},
+        "device_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "issue_ids": {"$ref": "urn:wx:design:input-control:common#/definitions/issue_ids"},
+        "recovery_revision": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "input_recovery_required": {"type": "boolean"}
+      }
+    },
+    "original_issue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["issue_id", "code", "owner_id", "effect_id", "state", "opened_at", "resolved_at", "resolution"],
+      "properties": {
+        "issue_id": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "code": {"type": "string", "enum": ["input_effect_unknown", "ime_cancel_pending", "editor_review_required", "legacy_input_review_required"]},
+        "owner_id": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/owner_id"}, {"type": "null"}]},
+        "effect_id": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/effect_id"}, {"type": "null"}]},
+        "state": {"type": "string", "const": "open"},
+        "opened_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "resolved_at": {"type": "null"},
+        "resolution": {"type": "null"}
+      }
+    },
+    "review_entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["request_digest", "normalized_request", "call_context", "original_issues", "reviewed_at", "original_response"],
+      "properties": {
+        "request_digest": {"$ref": "urn:wx:design:input-control:common#/definitions/digest"},
+        "normalized_request": {"$ref": "#/definitions/normalized_request"},
+        "call_context": {
+          "allOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/call_context"}, {"properties": {"origin": {"const": "human_review"}}}]
+        },
+        "original_issues": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/original_issue"}},
+        "reviewed_at": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "original_response": {"$ref": "#/definitions/response"}
+      }
+    }
+  }
+}

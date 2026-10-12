@@ -1,0 +1,59 @@
+# FleetIME iOS 工程（XcodeGen 规格）
+# 生成：brew install xcodegen && xcodegen generate
+# 生成后打开 FleetIME.xcodeproj：Signing & Capabilities 选择个人 Apple ID Team，
+# 分别给 FleetIMEApp 与 FleetIMEKeyboardExtension 两个 target 选 Team，然后 Run 到手机。
+name: FleetIME
+options:
+  bundleIdPrefix: com.armfleet.fleetime
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+packages:
+  FleetIME:
+    path: ../
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  FleetIMEApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: FleetIMEApp
+    settings:
+      base:
+        INFOPLIST_FILE: FleetIMEApp/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.armfleet.fleetime.app
+        TARGETED_DEVICE_FAMILY: "1"
+    dependencies:
+      - package: FleetIME
+        product: FleetIMEKit
+      - target: FleetIMEKeyboardExtension
+
+  FleetIMEKeyboardExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: FleetIMEKeyboardExtension
+        # 键盘 UI 源码直接编入扩展（免框架嵌入配置，免费签名更省事）
+      - path: ../Sources/FleetIMEKeyboard
+    settings:
+      base:
+        INFOPLIST_FILE: FleetIMEKeyboardExtension/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.armfleet.fleetime.keyboard
+    dependencies:
+      - package: FleetIME
+        product: FleetIMEKit
+
+schemes:
+  FleetIMEApp:
+    build:
+      targets:
+        FleetIMEApp: all
+        FleetIMEKeyboardExtension: all
+    run:
+      config: Debug

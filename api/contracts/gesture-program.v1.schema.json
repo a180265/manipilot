@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/gesture-program.v1.schema.json",
+  "title": "Gesture program v1",
+  "description": "单指手势程序（规范第 6 节）：1-4 段接触、每段 1-64 点、归一化坐标与计划时间。不接受 Z、tapDepth、tapFeed、G-code、回调或脚本字段；序列语义（首点 t_ms=0、严格递增、末段 gap_after=0、时长预算）由 drivers/gesture_program.py 在 schema 之外强制。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["program_version", "coordinate_space", "strokes"],
+  "properties": {
+    "program_version": {"const": "gesture-program.v1"},
+    "coordinate_space": {"const": "calibration_root_normalized.v1"},
+    "strokes": {
+      "type": "array", "minItems": 1, "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["points", "hold_before_ms", "hold_after_ms", "gap_after_ms"],
+        "properties": {
+          "points": {
+            "type": "array", "minItems": 1, "maxItems": 64,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["x", "y", "t_ms"],
+              "properties": {
+                "x": {"type": "number", "minimum": 0, "maximum": 1},
+                "y": {"type": "number", "minimum": 0, "maximum": 1},
+                "t_ms": {"type": "integer", "minimum": 0}
+              }
+            }
+          },
+          "hold_before_ms": {"type": "integer", "minimum": 0, "maximum": 2000},
+          "hold_after_ms": {"type": "integer", "minimum": 0, "maximum": 2000},
+          "gap_after_ms": {"type": "integer", "minimum": 0, "maximum": 1000}
+        }
+      }
+    }
+  }
+}

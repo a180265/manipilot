@@ -1,0 +1,619 @@
+{
+  "description": "Synthetic design examples. $fixture and $sha256 are offline fixture recipes, never wire fields. No image, calibration or hardware claim is made.",
+  "positive": [
+    {
+      "name": "task_request", "schema": "contract.schema.json#/definitions/task_request",
+      "record": {
+        "task_id": "task-fixture-01", "task_type": "calibrated_scroll",
+        "contract_version": "calibrated-scroll.v1", "device_id": "arm-fixture",
+        "idempotency_key": "scroll-submit-fixture-01", "correlation_id": "correlation-fixture-01",
+        "expires_at": "2026-10-01T01:01:00.000Z",
+        "payload": {"action": "swipe_up", "binding": {"$fixture": "fresh_before_frame", "path": "binding"}},
+        "policy_context": {"reason": "人工单步上滑", "client_request_id": "scroll-submit-fixture-01"}
+      }
+    },
+    {"name": "task_nullable_expiry", "base": "task_request", "set": {"expires_at": null}, "remove": ["policy_context"]},
+    {
+      "name": "task_ack", "schema": "contract.schema.json#/definitions/task_ack",
+      "record": {"task_id": "task-fixture-01", "status": "queued", "status_display": "已排队",
+        "task_type_display": "校准直驱单步滑动", "created_at": "2026-10-01T01:00:00.000Z"}
+    },
+    {
+      "name": "capability_ready", "schema": "contract.schema.json#/definitions/capability",
+      "record": {
+        "contract_version": "calibrated-scroll.v1", "device_id": "arm-fixture",
+        "binding": {"$fixture": "task_request", "path": "payload.binding"},
+        "usable": true,
+        "actions": {
+          "swipe_up": {"usable": true, "blocking_reasons": [],
+            "motion_budget": {"status": "within_window", "estimated_total_ms": 4000, "limit_ms": 4400}},
+          "swipe_down": {"usable": true, "blocking_reasons": [],
+            "motion_budget": {"status": "within_window", "estimated_total_ms": 4000, "limit_ms": 4400}}
+        },
+        "blocking_reasons": [], "planning_version": "calibrated-scroll-planning.v1",
+        "observation_version": "calibrated-scroll-observation.v1", "calibration_schema_version": 3,
+        "sampling_support": {"bounded_capture": true, "source_timing_proven": true,
+          "source_clock_id": "mach-absolute:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "clock_registration_id": "evd-clock",
+          "max_capture_uncertainty_ms": 20},
+        "observed_at": "2026-10-01T01:00:00.000Z"
+      }
+    },
+    {
+      "name": "capability_unproven_budget", "base": "capability_ready",
+      "set": {
+        "usable": false,
+        "actions.swipe_up": {"usable": false,
+          "blocking_reasons": [{"code": "scroll_observation_window_insufficient", "message": "完整时长待验证"}],
+          "motion_budget": {"status": "unproven", "estimated_total_ms": null, "limit_ms": 4400}},
+        "actions.swipe_down": {"usable": false,
+          "blocking_reasons": [{"code": "scroll_observation_window_insufficient", "message": "本版观察窗口不足"}],
+          "motion_budget": {"status": "exceeds_window", "estimated_total_ms": 4401, "limit_ms": 4400}},
+        "blocking_reasons": [{"code": "scroll_observation_window_insufficient", "message": "本版观察时长条件未满足"}]
+      }
+    },
+    {
+      "name": "capability_v2_readonly", "base": "capability_ready",
+      "set": {
+        "binding": null, "usable": false, "calibration_schema_version": 2,
+        "actions.swipe_up.usable": false, "actions.swipe_down.usable": false,
+        "actions.swipe_up.blocking_reasons": [{"code": "calibration_v3_required", "message": "新滑动需要有效的第三版机械校准"}],
+        "actions.swipe_down.blocking_reasons": [{"code": "calibration_v3_required", "message": "新滑动需要有效的第三版机械校准"}],
+        "blocking_reasons": [{"code": "calibration_v3_required", "message": "新滑动需要有效的第三版机械校准"}]
+      }
+    },
+    {
+      "name": "parameters", "schema": "records.schema.json#/definitions/parameters",
+      "record": {
+        "scroll_observation": {
+          "max_corners": 200, "quality_level": 0.01, "min_distance": 8, "block_size": 7,
+          "win_size": 21, "max_level": 3, "criteria_count": 30, "criteria_eps": 0.01,
+          "max_forward_backward_error_px": 1.5, "min_inliers": 12, "min_retained_ratio": 0.7,
+          "max_horizontal_ratio": 0.03, "max_dy_mad_ratio": 0.02, "min_displacement_ratio": 0.04,
+          "ocr_row_position_tolerance_ratio": 0.04, "max_frame_chain": 30,
+          "stationary": {"median_ratio": 0.01, "frames": 3, "frame_interval_ms": 300, "min_unique_ocr_rows": 3}
+        },
+        "calibrated_scroll_observation": {
+          "version": "calibrated-scroll-observation.v1", "sample_interval_ms": 200,
+          "max_pair_gap_ms": 400, "before_wait_timeout_ms": 2000, "before_max_age_ms": 400,
+          "capture_timeout_ms": 400, "observation_timeout_ms": 5800,
+          "motion_observation_budget_ms": 4400, "after_wait_timeout_ms": 1000,
+          "settle_pair_count": 2, "max_pair_vertical_ratio": 0.25,
+          "reverse_noise_ratio": 0.002, "max_reverse_path_ratio": 0.01,
+          "max_capture_uncertainty_ms": 20,
+          "observation_roi": {"x": 0.1, "y": 0.2, "width": 0.8, "height": 0.6}
+        }
+      }
+    },
+    {
+      "name": "config", "schema": "records.schema.json#/definitions/config_snapshot",
+      "record": {
+        "record_version": "calibrated-scroll-config.v1", "task_id": "task-fixture-01",
+        "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture",
+        "config_sha256": {"$sha256": {"$fixture": "parameters"}},
+        "parameters": {"$fixture": "parameters"}
+      }
+    },
+    {
+      "name": "plan", "schema": "records.schema.json#/definitions/plan_snapshot",
+      "record": {
+        "record_version": "calibrated-scroll-plan.v1", "task_id": "task-fixture-01",
+        "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture",
+        "action": "swipe_up", "binding": {"$fixture": "task_request", "path": "payload.binding"},
+        "planning_version": "calibrated-scroll-planning.v1", "calibration_schema_version": 3,
+        "calibration_evidence": {
+          "evidence_id": "evd-calibration", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "captured_at": "2026-10-01T01:00:00.000Z", "task_id": "task-fixture-01",
+          "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "kind": "calibration"
+        },
+        "config_sha256": {"$fixture": "config", "path": "config_sha256"},
+        "screen_size": {"width": 1000, "height": 1000},
+        "start": {"x": 0.5, "y": 0.75}, "end": {"x": 0.5, "y": 0.3},
+        "camera_start": {"cameraX": 600, "cameraY": 500, "frameW": 1280, "frameH": 720},
+        "camera_end": {"cameraX": 600, "cameraY": 200, "frameW": 1280, "frameH": 720},
+        "profile": {"hoverZ": 1, "tapDepth": 0.1, "tapFeed": 300},
+        "duration_ms": 600, "distance_mm": 10,
+        "motion_budget": {
+          "hover_move_ms": 1000, "press_ms": 300, "stroke_ms": 600, "lift_ms": 300,
+          "driver_verification_ms": 500, "safe_cleanup_ms": 1000, "margin_ms": 300, "total_ms": 4000,
+          "basis_evidence": {
+            "evidence_id": "evd-budget", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "captured_at": "2026-10-01T01:00:00.000Z", "task_id": "task-fixture-01",
+            "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "kind": "budget"
+          }
+        },
+        "safety_checks": {"model_locked": true, "independent_validation_passed": true, "path_valid": true, "pose_valid": true}
+      }
+    },
+    {
+      "name": "frame0", "base": "fresh_before_frame", "schema": "observation.schema.json#/definitions/frame",
+      "set": {"planning_version": "calibrated-scroll-planning.v1", "config_sha256": {"$fixture": "config", "path": "config_sha256"}}
+    },
+    {
+      "name": "frame1", "base": "frame0",
+      "set": {"sample_index": 1, "phase": "during", "evidence_id": "evd-fixture-1",
+        "source_frame.source_frame_seq": 101, "source_frame.source_capture_seq": 81,
+        "source_frame.source_captured_at": "2026-10-01T01:00:00.200Z",
+        "source_frame.source_received_at": "2026-10-01T01:00:00.220Z",
+        "source_frame.source_captured_monotonic_ns": 1200000000, "accepted_monotonic_ns": 1230000000,
+        "accepted_at": "2026-10-01T01:00:00.230Z", "freshness_checked_at": "2026-10-01T01:00:00.230Z"}
+    },
+    {
+      "name": "frame2", "base": "frame1",
+      "set": {"sample_index": 2, "evidence_id": "evd-fixture-2",
+        "source_frame.source_frame_seq": 102, "source_frame.source_capture_seq": 82,
+        "source_frame.source_captured_at": "2026-10-01T01:00:00.400Z",
+        "source_frame.source_received_at": "2026-10-01T01:00:00.420Z",
+        "source_frame.source_captured_monotonic_ns": 1400000000, "accepted_monotonic_ns": 1430000000,
+        "accepted_at": "2026-10-01T01:00:00.430Z", "freshness_checked_at": "2026-10-01T01:00:00.430Z"}
+    },
+    {
+      "name": "frame3", "base": "frame2",
+      "set": {"sample_index": 3, "evidence_id": "evd-fixture-3",
+        "source_frame.source_frame_seq": 103, "source_frame.source_capture_seq": 83,
+        "source_frame.source_captured_at": "2026-10-01T01:00:00.600Z",
+        "source_frame.source_received_at": "2026-10-01T01:00:00.620Z",
+        "source_frame.source_captured_monotonic_ns": 1600000000, "accepted_monotonic_ns": 1630000000,
+        "accepted_at": "2026-10-01T01:00:00.630Z", "freshness_checked_at": "2026-10-01T01:00:00.630Z"}
+    },
+    {
+      "name": "frame4", "base": "frame3",
+      "set": {"sample_index": 4, "evidence_id": "evd-fixture-4",
+        "source_frame.source_frame_seq": 104, "source_frame.source_capture_seq": 84,
+        "source_frame.source_captured_at": "2026-10-01T01:00:00.800Z",
+        "source_frame.source_received_at": "2026-10-01T01:00:00.820Z",
+        "source_frame.source_captured_monotonic_ns": 1800000000, "accepted_monotonic_ns": 1830000000,
+        "accepted_at": "2026-10-01T01:00:00.830Z", "freshness_checked_at": "2026-10-01T01:00:00.830Z"}
+    },
+    {
+      "name": "frame5", "base": "frame4",
+      "set": {"sample_index": 5, "evidence_id": "evd-fixture-5",
+        "source_frame.source_frame_seq": 105, "source_frame.source_capture_seq": 85,
+        "source_frame.source_captured_at": "2026-10-01T01:00:01.000Z",
+        "source_frame.source_received_at": "2026-10-01T01:00:01.020Z",
+        "source_frame.source_captured_monotonic_ns": 2000000000, "accepted_monotonic_ns": 2030000000,
+        "accepted_at": "2026-10-01T01:00:01.030Z", "freshness_checked_at": "2026-10-01T01:00:01.030Z"}
+    },
+    {
+      "name": "frame6", "base": "frame5",
+      "set": {"sample_index": 6, "phase": "after", "evidence_id": "evd-fixture-6",
+        "source_frame.source_frame_seq": 106, "source_frame.source_capture_seq": 86,
+        "source_frame.source_captured_at": "2026-10-01T01:00:01.200Z",
+        "source_frame.source_received_at": "2026-10-01T01:00:01.220Z",
+        "source_frame.source_captured_monotonic_ns": 2200000000, "accepted_monotonic_ns": 2230000000,
+        "accepted_at": "2026-10-01T01:00:01.230Z", "freshness_checked_at": "2026-10-01T01:00:01.230Z"}
+    },
+    {
+      "name": "tail_pair4", "schema": "observation.schema.json#/definitions/pair",
+      "record": {"record_type": "pair", "pair_index": 4, "from_sample_index": 4, "to_sample_index": 5,
+        "corners": 20, "valid_points": 16, "inlier_ratio": 0.8, "forward_backward_max_px": 1,
+        "dx_px": 0, "dy_px": 0, "mad_dy_px": 0.5, "quality_ok": true, "reason_code": null}
+    },
+    {"name": "tail_pair5", "base": "tail_pair4",
+      "set": {"pair_index": 5, "from_sample_index": 5, "to_sample_index": 6}},
+    {
+      "name": "chain7", "base": "confirmed_chain", "schema": "observation.schema.json#/definitions/chain",
+      "set": {
+        "config_sha256": {"$fixture": "config", "path": "config_sha256"},
+        "frame_count": 7, "after_evidence_id": "evd-fixture-6",
+        "frame_evidence_ids": ["evd-fixture-0", "evd-fixture-1", "evd-fixture-2", "evd-fixture-3", "evd-fixture-4", "evd-fixture-5", "evd-fixture-6"],
+        "pairs": [
+          {"$fixture": "confirmed_chain", "path": "pairs.0"},
+          {"$fixture": "confirmed_chain", "path": "pairs.1"},
+          {"$fixture": "confirmed_chain", "path": "pairs.2"},
+          {"$fixture": "confirmed_chain", "path": "pairs.3"},
+          {"$fixture": "tail_pair4"}, {"$fixture": "tail_pair5"}]
+      }
+    },
+    {
+      "name": "ref0", "schema": "contract.schema.json#/definitions/frame_ref",
+      "record": {"evidence_id": "evd-fixture-0",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "captured_at": "2026-10-01T01:00:00.000Z", "task_id": "task-fixture-01",
+        "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "kind": "frame"}
+    },
+    {"name": "ref1", "base": "ref0", "set": {"evidence_id": "evd-fixture-1", "captured_at": "2026-10-01T01:00:00.200Z"}},
+    {"name": "ref2", "base": "ref0", "set": {"evidence_id": "evd-fixture-2", "captured_at": "2026-10-01T01:00:00.400Z"}},
+    {"name": "ref3", "base": "ref0", "set": {"evidence_id": "evd-fixture-3", "captured_at": "2026-10-01T01:00:00.600Z"}},
+    {"name": "ref4", "base": "ref0", "set": {"evidence_id": "evd-fixture-4", "captured_at": "2026-10-01T01:00:00.800Z"}},
+    {"name": "ref5", "base": "ref0", "set": {"evidence_id": "evd-fixture-5", "captured_at": "2026-10-01T01:00:01.000Z"}},
+    {"name": "ref6", "base": "ref0", "set": {"evidence_id": "evd-fixture-6", "captured_at": "2026-10-01T01:00:01.200Z"}},
+    {
+      "name": "result_confirmed", "schema": "contract.schema.json#/definitions/result",
+      "record": {
+        "contract_version": "calibrated-scroll.v1", "task_id": "task-fixture-01",
+        "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture",
+        "action": "swipe_up", "action_display": "上滑",
+        "binding": {"$fixture": "task_request", "path": "payload.binding"},
+        "planning_version": "calibrated-scroll-planning.v1",
+        "observation_version": "calibrated-scroll-observation.v1",
+        "config_sha256": {"$fixture": "config", "path": "config_sha256"},
+        "status": "confirmed", "status_display": "已完成", "reported_at": "2026-10-01T01:00:01.250Z",
+        "mechanical_status": "confirmed", "effect_status": "displaced", "flow_status": "displaced",
+        "motion_started": true, "safe_cleanup_confirmed": true, "direction_consistent": true,
+        "dx_px": 1, "dy_px": -60, "valid_points": 16, "inlier_ratio": 0.8,
+        "reason_code": null, "diagnostic_codes": [], "driver_error_code": null, "retryable": false,
+        "before_evidence": {"$fixture": "ref0"}, "after_evidence": {"$fixture": "ref6"},
+        "frame_chain_evidence": [{"$fixture": "ref0"}, {"$fixture": "ref1"}, {"$fixture": "ref2"},
+          {"$fixture": "ref3"}, {"$fixture": "ref4"}, {"$fixture": "ref5"}, {"$fixture": "ref6"}],
+        "observation_roi": {"x": 0.1, "y": 0.2, "width": 0.8, "height": 0.6},
+        "observation": {"$fixture": "chain7"}, "manual_review_required": false, "pause_issue_id": null
+      }
+    },
+    {
+      "name": "result_pre_rejection", "base": "result_confirmed",
+      "set": {"config_sha256": null, "status": "failed", "status_display": "明确失败",
+        "mechanical_status": "not_started", "effect_status": "not_started", "flow_status": "not_started",
+        "motion_started": false, "safe_cleanup_confirmed": false, "direction_consistent": null,
+        "dx_px": null, "dy_px": null, "valid_points": null, "inlier_ratio": null,
+        "reason_code": "calibration_v3_required", "before_evidence": null, "after_evidence": null,
+        "frame_chain_evidence": [], "observation_roi": null, "observation": null}
+    },
+    {
+      "name": "chain_stationary", "base": "chain7",
+      "set": {"pairs.0.dx_px": 0, "pairs.0.dy_px": 0, "pairs.1.dx_px": 0, "pairs.1.dy_px": 0,
+        "dx_px": 0, "dy_px": 0, "horizontal_path_px": 0, "vertical_path_px": 0,
+        "flow_status": "stationary", "effect_status": "stationary", "direction_consistent": null}
+    },
+    {
+      "name": "result_stationary", "base": "result_confirmed",
+      "set": {"status": "failed", "status_display": "明确失败", "reason_code": "scroll_no_displacement",
+        "flow_status": "stationary", "effect_status": "stationary", "direction_consistent": null,
+        "dx_px": 0, "dy_px": 0, "observation": {"$fixture": "chain_stationary"}}
+    },
+    {
+      "name": "chain_no_after", "base": "chain7",
+      "set": {"frame_count": 1, "frame_evidence_ids": ["evd-fixture-0"], "pairs": [],
+        "sampling_status": "incomplete", "settled_tail_pairs": 0, "after_evidence_id": null,
+        "flow_status": "unknown", "effect_status": "unknown", "direction_consistent": null,
+        "dx_px": null, "dy_px": null, "horizontal_path_px": null, "vertical_path_px": null,
+        "reverse_path_px": null, "valid_points": null, "inlier_ratio": null, "mad_dy_px": null,
+        "reason_code": "after_frame_missing"}
+    },
+    {
+      "name": "result_visual_unknown", "base": "result_confirmed",
+      "set": {"status": "unknown", "status_display": "结果未知", "effect_status": "unknown",
+        "flow_status": "unknown", "direction_consistent": null, "dx_px": null, "dy_px": null,
+        "valid_points": null, "inlier_ratio": null, "reason_code": "after_frame_missing",
+        "after_evidence": null, "frame_chain_evidence": [{"$fixture": "ref0"}],
+        "observation": {"$fixture": "chain_no_after"}, "manual_review_required": true,
+        "pause_issue_id": "issue-fixture-01"}
+    },
+    {
+      "name": "result_claim_interrupted", "base": "result_visual_unknown",
+      "set": {"mechanical_status": "unknown", "motion_started": null, "safe_cleanup_confirmed": false,
+        "reason_code": "interrupted_after_claim", "diagnostic_codes": ["after_frame_missing"]}
+    },
+    {
+      "name": "result_cleanup_unknown", "base": "result_confirmed",
+      "set": {"status": "unknown", "status_display": "结果未知", "safe_cleanup_confirmed": false,
+        "reason_code": "safe_cleanup_unconfirmed", "manual_review_required": true, "pause_issue_id": "issue-fixture-01"}
+    },
+    {
+      "name": "task_view_active", "schema": "contract.schema.json#/definitions/task_view",
+      "record": {
+        "contract_version": "calibrated-scroll.v1", "task_id": "task-fixture-01",
+        "task_type": "calibrated_scroll", "device_id": "arm-fixture",
+        "status": "queued", "status_display": "已排队", "created_at": "2026-10-01T01:00:00.000Z",
+        "started_at": null, "finished_at": null, "correlation_id": "correlation-fixture-01",
+        "action_instance_id": "scroll-fixture-01", "result": null
+      }
+    },
+    {
+      "name": "task_view_terminal", "base": "task_view_active",
+      "set": {"status": "confirmed", "status_display": "已完成",
+        "started_at": "2026-10-01T01:00:00.010Z", "finished_at": "2026-10-01T01:00:01.250Z",
+        "result": {"$fixture": "result_confirmed"}}
+    },
+    {
+      "name": "internal_call", "schema": "contract.schema.json#/definitions/internal_call",
+      "record": {"action": "swipe_up", "binding": {"$fixture": "task_request", "path": "payload.binding"},
+        "action_instance_id": "scroll-fixture-01", "observation_context": null}
+    },
+    {
+      "name": "measurement_request", "schema": "contract.schema.json#/definitions/measurement_request",
+      "record": {"measurement_contract": "calibrated-scroll-observation.v1",
+        "task_id": "task-fixture-01", "action_instance_id": "scroll-fixture-01",
+        "evidence_ids": {"$fixture": "chain7", "path": "frame_evidence_ids"}}
+    },
+    {
+      "name": "swipe_call", "schema": "records.schema.json#/definitions/swipe_call",
+      "record": {"binding": {"$fixture": "task_request", "path": "payload.binding"},
+        "start": {"source": "screen_normalized", "x": 0.5, "y": 0.75},
+        "end": {"source": "screen_normalized", "x": 0.5, "y": 0.3}, "durationMs": 600}
+    },
+    {
+      "name": "ocr_endpoint", "schema": "contract.schema.json#/definitions/ocr_endpoint",
+      "record": {"coordinate_frame": "screen_px", "before_evidence_id": "evd-fixture-0",
+        "after_evidence_id": "evd-fixture-6",
+        "before_rows": [{"text": "Synthetic A", "center_x": 200, "center_y": 400},
+          {"text": "Synthetic B", "center_x": 200, "center_y": 500}],
+        "after_rows": [{"text": "Synthetic A", "center_x": 201, "center_y": 340},
+          {"text": "Synthetic B", "center_x": 201, "center_y": 440}]}
+    },
+    {
+      "name": "aggregate_request", "schema": "records.schema.json#/definitions/aggregate_request",
+      "record": {"pairs": {"$fixture": "chain7", "path": "pairs"}, "frame_count": 7,
+        "roi_px": {"$fixture": "chain7", "path": "roi_px"}, "expected_direction": "swipe_up",
+        "params": {"$fixture": "parameters"}, "ocr_endpoint": null}
+    },
+    {
+      "name": "aggregate_result", "schema": "records.schema.json#/definitions/aggregate_result",
+      "record": {"flow_status": "displaced", "effect_status": "displaced", "direction_consistent": true,
+        "dx_px": 1, "dy_px": -60, "horizontal_path_px": 1, "vertical_path_px": 60,
+        "reverse_path_px": 0, "valid_points": 16, "inlier_ratio": 0.8, "mad_dy_px": 0.5,
+        "ocr_summary": null, "failure_pair_index": null, "reason_code": null}
+    },
+    {
+      "name": "prepared_record", "schema": "records.schema.json#/definitions/action_record",
+      "record": {
+        "record_version": "calibrated-scroll-action.v1", "task_id": "task-fixture-01",
+        "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "state": "prepared", "revision": 1,
+        "origin": "external_task", "step_key": "single-scroll",
+        "request_sha256": {"$sha256": {"$fixture": "task_request"}},
+        "action": "swipe_up", "binding": {"$fixture": "task_request", "path": "payload.binding"},
+        "planning_version": "calibrated-scroll-planning.v1", "observation_version": "calibrated-scroll-observation.v1",
+        "config_sha256": {"$fixture": "config", "path": "config_sha256"},
+        "plan_evidence": {
+          "evidence_id": "evd-plan", "sha256": {"$sha256": {"$fixture": "plan"}},
+          "captured_at": "2026-10-01T01:00:00.000Z", "task_id": "task-fixture-01",
+          "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "kind": "plan"},
+        "config_evidence": {
+          "evidence_id": "evd-config", "sha256": {"$sha256": {"$fixture": "config"}},
+          "captured_at": "2026-10-01T01:00:00.000Z", "task_id": "task-fixture-01",
+          "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "kind": "config"},
+        "clock_registration_evidence": {
+          "evidence_id": "evd-clock", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "captured_at": "2026-10-01T01:00:00.000Z", "task_id": "task-fixture-01",
+          "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "kind": "clock_registration"},
+        "created_at": "2026-10-01T01:00:00.000Z", "updated_at": "2026-10-01T01:00:00.000Z",
+        "lease_id": "lease-fixture-01", "claim_id": null, "claimed_at": null, "driver_invoked_at": null,
+        "swipe_call_count": 0, "motion_started": false, "mechanical_status": "not_started",
+        "safe_cleanup_confirmed": false, "sample_evidence_ids": [],
+        "timeline": {"source_clock_id": "mach-absolute:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "before_accepted_ns": null,
+          "dispatch_claimed_ns": null, "driver_invoked_ns": null, "mechanical_completed_ns": null,
+          "safe_cleanup_confirmed_ns": null, "completion_fence_ns": null, "sampling_finished_ns": null},
+        "sampling_diagnostics": [], "observation_context": null, "ocr_evidence": null,
+        "driver_receipt_evidence": null, "observation": null, "task_outcome": null, "reason_code": null,
+        "pause_issue_id": null, "pause_scope": null, "manual_resume_required": false, "result": null, "review": null
+      }
+    },
+    {
+      "name": "claimed_record", "base": "prepared_record",
+      "set": {"state": "claimed", "revision": 2, "updated_at": "2026-10-01T01:00:00.050Z",
+        "claim_id": "claim-fixture-01", "claimed_at": "2026-10-01T01:00:00.050Z",
+        "motion_started": null, "mechanical_status": "unknown",
+        "sample_evidence_ids": ["evd-fixture-0"], "timeline.before_accepted_ns": 1030000000,
+        "timeline.dispatch_claimed_ns": 1050000000}
+    },
+    {
+      "name": "completed_record", "base": "claimed_record",
+      "set": {"state": "completed", "revision": 3, "updated_at": "2026-10-01T01:00:01.250Z",
+        "driver_invoked_at": "2026-10-01T01:00:00.060Z", "swipe_call_count": 1,
+        "motion_started": true, "mechanical_status": "confirmed", "safe_cleanup_confirmed": true,
+        "sample_evidence_ids": {"$fixture": "chain7", "path": "frame_evidence_ids"},
+        "timeline.driver_invoked_ns": 1060000000, "timeline.mechanical_completed_ns": 1700000000,
+        "timeline.safe_cleanup_confirmed_ns": 1710000000, "timeline.completion_fence_ns": 1710000000,
+        "timeline.sampling_finished_ns": 2230000000,
+        "driver_receipt_evidence": {
+          "evidence_id": "evd-driver", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "captured_at": "2026-10-01T01:00:00.710Z", "task_id": "task-fixture-01",
+          "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "kind": "driver_receipt"},
+        "observation": {"$fixture": "chain7"}, "task_outcome": "confirmed", "result": {"$fixture": "result_confirmed"}}
+    },
+    {
+      "name": "unknown_record", "base": "completed_record",
+      "set": {"state": "review_required", "sample_evidence_ids": ["evd-fixture-0"],
+        "observation": {"$fixture": "chain_no_after"}, "task_outcome": "unknown",
+        "reason_code": "after_frame_missing", "pause_issue_id": "issue-fixture-01",
+        "pause_scope": "automatic_actions", "manual_resume_required": true,
+        "result": {"$fixture": "result_visual_unknown"}}
+    },
+    {
+      "name": "recovered_claim", "base": "unknown_record",
+      "set": {"driver_invoked_at": null, "swipe_call_count": null, "motion_started": null,
+        "mechanical_status": "unknown", "safe_cleanup_confirmed": false,
+        "driver_receipt_evidence": null, "timeline.driver_invoked_ns": null,
+        "timeline.mechanical_completed_ns": null, "timeline.safe_cleanup_confirmed_ns": null,
+        "timeline.completion_fence_ns": null, "reason_code": "interrupted_after_claim",
+        "result": {"$fixture": "result_claim_interrupted"}}
+    },
+    {
+      "name": "abort_result", "base": "result_pre_rejection",
+      "set": {"config_sha256": {"$fixture": "config", "path": "config_sha256"}, "reason_code": "task_cancelled"}
+    },
+    {
+      "name": "aborted_record", "base": "prepared_record",
+      "set": {"state": "aborted_before_motion", "revision": 2, "updated_at": "2026-10-01T01:00:01.250Z",
+        "task_outcome": "failed", "reason_code": "task_cancelled", "result": {"$fixture": "abort_result"}}
+    },
+    {
+      "name": "review_request", "base": "review_no_motion", "schema": "contract.schema.json#/definitions/review_request",
+      "set": {"expected_revision": 3}
+    },
+    {
+      "name": "review_response", "schema": "contract.schema.json#/definitions/review_response",
+      "record": {"contract_version": "calibrated-scroll-review.v1", "device_id": "arm-fixture",
+        "issue_id": "issue-fixture-01", "task_id": "task-fixture-01", "action_instance_id": "scroll-fixture-01",
+        "request_id": "review-fixture-01", "revision": 4, "reviewed_at": "2026-10-01T01:02:00.000Z",
+        "reviewed_by": "authenticated-operator-fixture", "original_outcome": "unknown",
+        "issue_resolved": true, "automatic_resume_performed": false, "manual_resume_required": true,
+        "remaining_visual_issue_ids": [], "other_blocking_reasons": []}
+    },
+    {
+      "name": "review_receipt", "schema": "records.schema.json#/definitions/review_receipt",
+      "record": {
+        "record_version": "calibrated-scroll-review-receipt.v1", "device_id": "arm-fixture",
+        "issue_id": "issue-fixture-01", "request_id": "review-fixture-01",
+        "request_sha256": {"$sha256": {"device_id": "arm-fixture", "issue_id": "issue-fixture-01",
+          "request": {"$fixture": "review_request"}}},
+        "request": {"$fixture": "review_request"}, "old_revision": 3, "new_revision": 4,
+        "response": {"$fixture": "review_response"}
+      }
+    },
+    {
+      "name": "reviewed_record", "base": "unknown_record",
+      "set": {"state": "reviewed", "revision": 4, "updated_at": "2026-10-01T01:02:00.000Z",
+        "review": {"$fixture": "review_receipt"}}
+    },
+    {
+      "name": "resumed_record", "base": "reviewed_record",
+      "set": {"revision": 5, "updated_at": "2026-10-01T01:03:00.000Z", "manual_resume_required": false}
+    },
+    {
+      "name": "action_row", "schema": "records.schema.json#/definitions/action_row",
+      "record": {"task_id": "task-fixture-01", "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture",
+        "state": "completed", "revision": 3, "json": {"$fixture": "completed_record"}}
+    },
+    {
+      "name": "review_row", "schema": "records.schema.json#/definitions/review_row",
+      "record": {"device_id": "arm-fixture", "request_id": "review-fixture-01", "issue_id": "issue-fixture-01",
+        "request_sha256": {"$fixture": "review_receipt", "path": "request_sha256"}, "json": {"$fixture": "review_receipt"}}
+    },
+    {
+      "name": "review_list", "schema": "contract.schema.json#/definitions/review_list",
+      "record": {"contract_version": "calibrated-scroll-review.v1", "device_id": "arm-fixture",
+        "issues": [{"issue_id": "issue-fixture-01", "task_id": "task-fixture-01", "action_instance_id": "scroll-fixture-01",
+          "revision": 3, "state": "review_required", "binding": {"$fixture": "task_request", "path": "payload.binding"},
+          "original_result": {"$fixture": "result_visual_unknown"}, "frame_chain_evidence": [{"$fixture": "ref0"}],
+          "mechanical_review_required": false, "other_blocking_reasons": [],
+          "manual_resume_required": true, "review": null}]}
+    },
+    {
+      "name": "review_list_reviewed", "base": "review_list",
+      "set": {"issues.0.revision": 4, "issues.0.state": "reviewed", "issues.0.review": {"$fixture": "review_response"}}
+    },
+    {
+      "name": "driver_receipt", "schema": "records.schema.json#/definitions/driver_receipt",
+      "record": {"record_version": "calibrated-scroll-driver-receipt.v1", "task_id": "task-fixture-01",
+        "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "claim_id": "claim-fixture-01",
+        "controller_completed": true, "motion_verified": true, "swipe_executed": true,
+        "stopped": false, "cancelled": false, "mechanical_confirmed": true, "safe_cleanup_confirmed": true,
+        "driver_error_code": null, "timeline": {"$fixture": "completed_record", "path": "timeline"}}
+    },
+    {
+      "name": "http_error", "schema": "contract.schema.json#/definitions/http_error",
+      "record": {"error": {"key": "scroll_review_revision_conflict", "title": "滑动核对版本冲突",
+        "detail": "原问题已被核对，请刷新问题列表。", "suggestion": "只核对指定问题，不重放原动作。",
+        "trace_id": "trace-fixture-01"}}
+    },
+    {
+      "name": "evidence_bundle", "schema": "records.schema.json#/definitions/evidence_bundle",
+      "record": {"record": {"$fixture": "completed_record"}, "plan": {"$fixture": "plan"},
+        "config": {"$fixture": "config"},
+        "frames": [{"$fixture": "frame0"}, {"$fixture": "frame1"}, {"$fixture": "frame2"},
+          {"$fixture": "frame3"}, {"$fixture": "frame4"}, {"$fixture": "frame5"}, {"$fixture": "frame6"}],
+        "current_binding": {"$fixture": "task_request", "path": "payload.binding"},
+        "calibration_schema_version": 3, "clock_registration_id": "evd-clock", "ocr_endpoint": null}
+    },
+    {
+      "name": "bundle_global_revision_changes_only", "base": "evidence_bundle",
+      "set": {"current_binding.binding_revision": 100, "frames.3.binding.binding_revision": 88,
+        "frames.3.source_frame.binding_revision": 89, "frames.6.source_frame.binding_revision": 100}
+    },
+    {
+      "name": "bundle_with_ocr", "base": "evidence_bundle",
+      "set": {
+        "ocr_endpoint": {"$fixture": "ocr_endpoint"},
+        "record.observation_context": {"coordinate_frame": "screen_norm", "list_roi": null, "exclusion_regions": [], "ocr_mode": "trusted_endpoint_provider"},
+        "record.ocr_evidence": {
+          "evidence_id": "evd-ocr", "sha256": {"$sha256": {"$fixture": "ocr_endpoint"}},
+          "captured_at": "2026-10-01T01:00:01.240Z", "task_id": "task-fixture-01",
+          "action_instance_id": "scroll-fixture-01", "device_id": "arm-fixture", "kind": "ocr"},
+        "record.observation.ocr_summary": {
+          "before_evidence_id": "evd-fixture-0", "after_evidence_id": "evd-fixture-6", "coordinate_frame": "screen_px",
+          "comparable_unique_rows": 2, "matched_rows": 2, "contradictory_rows": 0, "status": "consistent"},
+        "record.result.observation.ocr_summary": {
+          "before_evidence_id": "evd-fixture-0", "after_evidence_id": "evd-fixture-6", "coordinate_frame": "screen_px",
+          "comparable_unique_rows": 2, "matched_rows": 2, "contradictory_rows": 0, "status": "consistent"}
+      }
+    }
+  ],
+  "negative": [
+    {"name": "task_mechanical_override", "base": "task_request", "stage": "schema", "set": {"payload.duration_ms": 500}},
+    {"name": "task_coordinates", "base": "task_request", "stage": "schema", "set": {"payload.start": {"x": 0.2, "y": 0.5}}},
+    {"name": "task_old_certificate", "base": "task_request", "stage": "schema", "set": {"payload.gesture_profile_version": 1}},
+    {"name": "task_template", "base": "task_request", "stage": "schema", "set": {"payload.template_id": "old-template"}},
+    {"name": "task_skip_gate", "base": "task_request", "stage": "schema", "set": {"payload.ready": true}},
+    {"name": "task_client_actor", "base": "task_request", "stage": "schema", "set": {"policy_context.operator_id": "admin"}},
+    {"name": "task_source_smuggling", "base": "task_request", "stage": "schema", "set": {"source": "wx"}},
+    {"name": "task_old_protocol", "base": "task_request", "stage": "schema", "set": {"contract_version": "screen-gesture.v1"}},
+    {"name": "task_wrong_device", "base": "task_request", "stage": "semantic", "set": {"device_id": "different-arm"}},
+    {"name": "capability_fake_v3", "base": "capability_ready", "stage": "schema", "set": {"calibration_schema_version": 2}},
+    {"name": "capability_missing_clock", "base": "capability_ready", "stage": "schema", "set": {"sampling_support.clock_registration_id": null}},
+    {"name": "capability_unbounded_capture", "base": "capability_ready", "stage": "schema", "set": {"sampling_support.bounded_capture": false}},
+    {"name": "capability_boolean_budget", "base": "capability_ready", "stage": "schema", "set": {"actions.swipe_up.motion_budget.estimated_total_ms": true}},
+    {"name": "capability_false_aggregate", "base": "capability_ready", "stage": "semantic", "set": {"usable": false}},
+    {"name": "capability_claim_unproven_ready", "base": "capability_unproven_budget", "stage": "schema", "set": {"actions.swipe_up.usable": true}},
+    {"name": "config_relax_uncertainty", "base": "config", "stage": "schema", "set": {"parameters.calibrated_scroll_observation.max_capture_uncertainty_ms": 21}},
+    {"name": "config_hot_swap", "base": "config", "stage": "semantic", "set": {"config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+    {"name": "plan_v2", "base": "plan", "stage": "schema", "set": {"calibration_schema_version": 2}},
+    {"name": "plan_unsafe_window", "base": "plan", "stage": "schema", "set": {"motion_budget.total_ms": 4401}},
+    {"name": "plan_clipped_stroke", "base": "plan", "stage": "semantic", "set": {"start.y": 0.7}},
+    {"name": "plan_false_budget", "base": "plan", "stage": "semantic", "set": {"motion_budget.total_ms": 3900}},
+    {"name": "result_unknown_retry", "base": "result_visual_unknown", "stage": "schema", "set": {"retryable": true}},
+    {"name": "result_confirmed_unsafe", "base": "result_confirmed", "stage": "schema", "set": {"safe_cleanup_confirmed": false}},
+    {"name": "result_unknown_without_pause", "base": "result_visual_unknown", "stage": "schema", "set": {"pause_issue_id": null}},
+    {"name": "result_unknown_says_unstarted", "base": "result_visual_unknown", "stage": "schema", "set": {"motion_started": false}},
+    {"name": "result_fake_dx", "base": "result_confirmed", "stage": "semantic", "set": {"dx_px": 2}},
+    {"name": "result_foreign_evidence", "base": "result_confirmed", "stage": "semantic", "set": {"frame_chain_evidence.3.action_instance_id": "old-action"}},
+    {"name": "result_during_as_after", "base": "result_confirmed", "stage": "semantic", "set": {"after_evidence": {"$fixture": "ref3"}}},
+    {"name": "result_top_proof", "base": "result_stationary", "stage": "schema", "set": {"top_verified": true}},
+    {"name": "task_view_result_conflict", "base": "task_view_terminal", "stage": "semantic", "set": {"status": "failed"}},
+    {"name": "task_view_free_details", "base": "task_view_terminal", "stage": "schema", "set": {"step_log": []}},
+    {"name": "review_request_supplied_actor", "base": "review_request", "stage": "schema", "set": {"operator_id": "admin"}},
+    {"name": "review_response_auto_resume", "base": "review_response", "stage": "schema", "set": {"automatic_resume_performed": true}},
+    {"name": "review_response_changed_outcome", "base": "review_response", "stage": "schema", "set": {"original_outcome": "confirmed"}},
+    {"name": "review_receipt_wrong_revision", "base": "review_receipt", "stage": "semantic", "set": {"new_revision": 5}},
+    {"name": "review_receipt_wrong_digest", "base": "review_receipt", "stage": "semantic", "set": {"request_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+    {"name": "review_list_wrong_device", "base": "review_list", "stage": "semantic", "set": {"device_id": "other-arm"}},
+    {"name": "review_list_auto_clear", "base": "review_list", "stage": "semantic", "set": {"issues.0.manual_resume_required": false}},
+    {"name": "record_unknown_version", "base": "prepared_record", "stage": "schema", "set": {"record_version": "future.v2"}},
+    {"name": "record_prepared_without_plan", "base": "prepared_record", "stage": "schema", "set": {"plan_evidence": null}},
+    {"name": "record_boolean_revision", "base": "prepared_record", "stage": "schema", "set": {"revision": true}},
+    {"name": "record_missing_resume_barrier", "base": "unknown_record", "stage": "schema", "set": {"manual_resume_required": false}},
+    {"name": "record_wrong_outcome", "base": "completed_record", "stage": "semantic", "set": {"task_outcome": "failed"}},
+    {"name": "row_mismatched_column", "base": "action_row", "stage": "semantic", "set": {"revision": 4}},
+    {"name": "review_row_mismatched_column", "base": "review_row", "stage": "semantic", "set": {"issue_id": "other-issue"}},
+    {"name": "bundle_missing_instance", "base": "evidence_bundle", "stage": "schema", "remove": ["current_binding.camera_binding_id"]},
+    {"name": "bundle_replaced_instance", "base": "evidence_bundle", "stage": "semantic", "set": {"current_binding.camera_binding_id": "99999999-1234-4234-8234-123456789abc"}},
+    {"name": "bundle_replaced_geometry", "base": "evidence_bundle", "stage": "semantic", "set": {"current_binding.source_geometry_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}},
+    {"name": "bundle_replaced_daemon", "base": "evidence_bundle", "stage": "semantic", "set": {"current_binding.daemon_session": "new-session"}},
+    {"name": "bundle_replaced_calibration", "base": "evidence_bundle", "stage": "semantic", "set": {"current_binding.calibration_fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+    {"name": "bundle_replaced_physical", "base": "evidence_bundle", "stage": "semantic", "set": {"current_binding.camera_device_unique_id": "new-physical"}},
+    {"name": "bundle_replaced_dimensions", "base": "evidence_bundle", "stage": "semantic", "set": {"current_binding.frame_width": 720}},
+    {"name": "bundle_replaced_device", "base": "evidence_bundle", "stage": "semantic", "set": {"current_binding.device_id": "new-device"}},
+    {"name": "bundle_missing_v3", "base": "evidence_bundle", "stage": "schema", "set": {"calibration_schema_version": 2}},
+    {"name": "bundle_mixed_generation", "base": "evidence_bundle", "stage": "semantic", "set": {"frames.2.source_frame.source_generation_id": "99999999-1234-4234-8234-123456789abc"}},
+    {"name": "bundle_binding_uuid_is_not_generation", "base": "evidence_bundle", "stage": "semantic", "set": {"frames.3.source_frame.source_generation_id": "12345678-1234-4234-8234-123456789abc"}},
+    {"name": "bundle_mixed_clock", "base": "evidence_bundle", "stage": "semantic", "set": {"frames.2.source_frame.source_clock_id": "mach-absolute:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+    {"name": "bundle_replayed_capture", "base": "evidence_bundle", "stage": "semantic", "set": {"frames.2.source_frame.source_capture_seq": 81}},
+    {"name": "bundle_old_action", "base": "evidence_bundle", "stage": "semantic", "set": {"frames.2.action_instance_id": "old-action"}},
+    {"name": "bundle_changed_image_hash", "base": "evidence_bundle", "stage": "semantic", "set": {"frames.2.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+    {"name": "bundle_lost_plan_hash", "base": "evidence_bundle", "stage": "semantic", "set": {"record.plan_evidence.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+    {"name": "bundle_unknown_clock_proof", "base": "evidence_bundle", "stage": "semantic", "set": {"clock_registration_id": "different-proof"}},
+    {"name": "bundle_tail_before_completion", "base": "evidence_bundle", "stage": "semantic", "set": {"record.timeline.mechanical_completed_ns": 1900000000, "record.timeline.completion_fence_ns": 1900000000}},
+    {"name": "bundle_claim_stale_before", "base": "evidence_bundle", "stage": "semantic", "set": {"record.timeline.dispatch_claimed_ns": 1450000000, "record.timeline.driver_invoked_ns": 1460000000}},
+    {"name": "bundle_ocr_endpoint_mismatch", "base": "bundle_with_ocr", "stage": "semantic", "set": {"ocr_endpoint.after_evidence_id": "evd-fixture-5"}},
+    {"name": "bundle_ocr_contradiction", "base": "bundle_with_ocr", "stage": "semantic", "set": {"ocr_endpoint.after_rows.1.center_y": 600}},
+    {"name": "measurement_free_params", "base": "measurement_request", "stage": "schema", "set": {"thresholds": {}}},
+    {"name": "measurement_empty_chain", "base": "measurement_request", "stage": "schema", "set": {"evidence_ids": []}},
+    {"name": "driver_controller_only", "base": "driver_receipt", "stage": "semantic", "set": {"motion_verified": null}},
+    {"name": "internal_client_ctx", "base": "internal_call", "stage": "schema", "set": {"ctx": {}}},
+    {"name": "error_free_details", "base": "http_error", "stage": "schema", "set": {"error.detail": {"retry": true}}}
+  ],
+  "transitions": [
+    {"name": "prepare_claim_once", "before": "prepared_record", "after": "claimed_record", "event": "claim", "accept": true},
+    {"name": "claim_complete", "before": "claimed_record", "after": "completed_record", "event": "finalize", "accept": true},
+    {"name": "claim_visual_unknown", "before": "claimed_record", "after": "unknown_record", "event": "finalize", "accept": true},
+    {"name": "recover_claim_no_replay", "before": "claimed_record", "after": "recovered_claim", "event": "recover", "accept": true},
+    {"name": "recover_prepared_abort", "before": "prepared_record", "after": "aborted_record", "event": "recover", "accept": true},
+    {"name": "review_only", "before": "unknown_record", "after": "reviewed_record", "event": "review", "accept": true},
+    {"name": "separate_resume", "before": "reviewed_record", "after": "resumed_record", "event": "resume", "accept": true},
+    {"name": "second_claim_forbidden", "before": "claimed_record", "after": "claimed_record", "event": "claim", "accept": false, "set": {"revision": 3}},
+    {"name": "unknown_replay_forbidden", "before": "unknown_record", "after": "claimed_record", "event": "claim", "accept": false, "set": {"revision": 4}},
+    {"name": "completed_replay_forbidden", "before": "completed_record", "after": "claimed_record", "event": "claim", "accept": false, "set": {"revision": 4}},
+    {"name": "review_does_not_resume", "before": "unknown_record", "after": "reviewed_record", "event": "review", "accept": false, "set": {"manual_resume_required": false}},
+    {"name": "review_cas_stale", "before": "unknown_record", "after": "reviewed_record", "event": "review", "accept": false, "set": {"revision": 5}},
+    {"name": "review_must_not_rewrite_history", "before": "unknown_record", "after": "reviewed_record", "event": "review", "accept": false, "set": {"result.reported_at": "2026-10-01T01:02:00.000Z"}}
+  ]
+}

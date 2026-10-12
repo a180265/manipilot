@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wx.local/contracts/screen-gesture.v1.schema.json",
+  "title": "Screen gesture task v1",
+  "description": "One mechanical gesture in normalized upright physical screen coordinates. No machine coordinates or phone-effect confirmation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "task_type", "contract_version", "device_id", "idempotency_key", "payload", "expires_at", "correlation_id"],
+  "properties": {
+    "task_id": {"$ref": "#/$defs/text"},
+    "task_type": {"const": "screen_gesture"},
+    "contract_version": {"const": "screen-gesture.v1"},
+    "device_id": {"$ref": "#/$defs/text"},
+    "idempotency_key": {"$ref": "#/$defs/text"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "correlation_id": {"$ref": "#/$defs/text"},
+    "policy_context": {"type": "object"}
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "pattern": "\\S"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": {"type": "number", "minimum": 0, "maximum": 1},
+        "y": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "daemon_session", "camera_id", "camera_device_unique_id", "binding_revision", "calibration_fingerprint", "frame_width", "frame_height"],
+      "properties": {
+        "device_id": {"$ref": "#/$defs/text"},
+        "daemon_session": {"$ref": "#/$defs/text"},
+        "camera_id": {"$ref": "#/$defs/text"},
+        "camera_device_unique_id": {"$ref": "#/$defs/text"},
+        "binding_revision": {"type": "integer", "minimum": 0},
+        "calibration_fingerprint": {"$ref": "#/$defs/sha256"},
+        "frame_width": {"type": "integer", "minimum": 1},
+        "frame_height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "binding"],
+      "properties": {
+        "action": {"enum": ["double_tap", "swipe"]},
+        "binding": {"$ref": "#/$defs/binding"},
+        "point": {"$ref": "#/$defs/point"},
+        "start": {"$ref": "#/$defs/point"},
+        "end": {"$ref": "#/$defs/point"},
+        "interval_ms": {"type": "number", "minimum": 50, "maximum": 500},
+        "duration_ms": {"type": "number", "minimum": 150, "maximum": 5000}
+      },
+      "oneOf": [
+        {
+          "properties": {"action": {"const": "double_tap"}},
+          "required": ["point"],
+          "not": {"anyOf": [{"required": ["start"]}, {"required": ["end"]}, {"required": ["duration_ms"]}]}
+        },
+        {
+          "properties": {"action": {"const": "swipe"}},
+          "required": ["start", "end"],
+          "not": {"anyOf": [{"required": ["point"]}, {"required": ["interval_ms"]}]}
+        }
+      ]
+    },
+    "actionReadiness": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["usable", "blocking_reasons"],
+      "properties": {
+        "usable": {"type": "boolean"},
+        "blocking_reasons": {"type": "array", "items": {"$ref": "#/$defs/text"}}
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["contract_version", "device_id", "binding", "usable", "blocking_reasons", "features", "actions"],
+      "allOf": [
+        {
+          "if": {"properties": {"usable": {"const": true}}, "required": ["usable"]},
+          "then": {"properties": {"binding": {"$ref": "#/$defs/binding"}}}
+        }
+      ],
+      "properties": {
+        "contract_version": {"const": "screen-gesture.v1"},
+        "device_id": {"$ref": "#/$defs/text"},
+        "binding": {"anyOf": [{"$ref": "#/$defs/binding"}, {"type": "null"}]},
+        "usable": {"type": "boolean"},
+        "blocking_reasons": {"type": "array", "items": {"$ref": "#/$defs/text"}},
+        "features": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/text"}},
+        "actions": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["double_tap", "swipe"],
+          "properties": {
+            "double_tap": {"$ref": "#/$defs/actionReadiness"},
+            "swipe": {"$ref": "#/$defs/actionReadiness"}
+          }
+        }
+      }
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "sha256", "captured_at"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/text"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "captured_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "resultDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "action", "action_display", "effect_status", "effect_status_display", "mechanical_status", "mechanical_status_display", "motion_verified", "before_evidence", "after_evidence", "manual_review_required"],
+      "properties": {
+        "contract_version": {"const": "screen-gesture.v1"},
+        "action": {"enum": ["double_tap", "swipe"]},
+        "action_display": {"$ref": "#/$defs/text"},
+        "effect_status": {"const": "unverified"},
+        "effect_status_display": {"$ref": "#/$defs/text"},
+        "mechanical_status": {"enum": ["not_started", "confirmed", "unknown"]},
+        "mechanical_status_display": {"$ref": "#/$defs/text"},
+        "motion_verified": {"type": ["boolean", "null"]},
+        "tap_count": {"type": ["integer", "null"], "minimum": 0},
+        "swipe_executed": {"type": ["boolean", "null"]},
+        "before_evidence": {"anyOf": [{"$ref": "#/$defs/evidenceRef"}, {"type": "null"}]},
+        "after_evidence": {"anyOf": [{"$ref": "#/$defs/evidenceRef"}, {"type": "null"}]},
+        "manual_review_required": {"type": "boolean"}
+      }
+    }
+  }
+}

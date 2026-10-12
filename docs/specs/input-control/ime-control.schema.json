@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:wx:design:input-control:ime",
+  "title": "Pending implementation: Fleet-mounted IME inputTaskControlVersion=1 delta",
+  "$comment": "Not a replacement for standalone IME, keyboard geometry, calibration or all task APIs.",
+  "$ref": "#/definitions/heartbeat_v1",
+  "definitions": {
+    "heartbeat_observation": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "appVersion": {"type": "string", "minLength": 1, "maxLength": 100, "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])"},
+        "keyboardActive": {"type": "boolean"},
+        "currentTaskId": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "inputTaskControlVersion": {"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"}
+      }
+    },
+    "heartbeat_v1": {
+      "allOf": [
+        {"$ref": "#/definitions/heartbeat_observation"},
+        {
+          "required": ["appVersion", "keyboardActive", "currentTaskId", "inputTaskControlVersion"],
+          "properties": {"inputTaskControlVersion": {"type": "integer", "const": 1}}
+        }
+      ]
+    },
+    "heartbeat_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["deviceId", "appVersion", "keyboardActive", "currentTaskId", "lastSeenAt", "online", "inputTaskControlVersion"],
+      "properties": {
+        "deviceId": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "appVersion": {"type": "string", "minLength": 1, "maxLength": 100, "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])"},
+        "keyboardActive": {"type": "boolean"},
+        "currentTaskId": {"$ref": "urn:wx:design:input-control:common#/definitions/nullable_id"},
+        "lastSeenAt": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "online": {"type": "boolean", "const": true},
+        "inputTaskControlVersion": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/safe_integer"}, {"type": "null"}]}
+      }
+    },
+    "control_command": {
+      "type": "object", "additionalProperties": false,
+      "required": ["commandId", "taskId", "command", "createdAt"],
+      "properties": {
+        "commandId": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "taskId": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "command": {"type": "string", "const": "cancel"},
+        "createdAt": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}
+      }
+    },
+    "control_ack": {
+      "type": "object", "additionalProperties": false,
+      "required": ["deviceId", "commandId", "typedCharacterCount"],
+      "properties": {
+        "deviceId": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "commandId": {"$ref": "urn:wx:design:input-control:common#/definitions/positive_integer"},
+        "typedCharacterCount": {"$ref": "urn:wx:design:input-control:common#/definitions/typed_count"}
+      }
+    },
+    "status_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["deviceId", "status", "typedCharacterCount"],
+      "properties": {
+        "deviceId": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "status": {"type": "string", "enum": ["displayed", "typing", "inserted", "typing_failed"]},
+        "typedCharacterCount": {"$ref": "urn:wx:design:input-control:common#/definitions/typed_count"},
+        "failureReason": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/reason"}, {"type": "null"}]}
+      }
+    },
+    "task_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["taskId", "deviceId", "targetUser", "content", "typingSpeed", "resolvedTypingSpeed", "status", "typedCharacterCount", "failureReason", "source", "createdAt", "updatedAt"],
+      "properties": {
+        "taskId": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "deviceId": {"$ref": "urn:wx:design:input-control:common#/definitions/id"},
+        "targetUser": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "content": {"type": "string", "minLength": 1, "maxLength": 10000, "pattern": "\\S"},
+        "typingSpeed": {"type": "string", "enum": ["slow", "normal", "fast", "random"]},
+        "resolvedTypingSpeed": {"type": "string", "enum": ["slow", "normal", "fast"]},
+        "status": {"type": "string", "enum": ["pending", "displayed", "typing", "inserted", "typing_failed", "cancel_requested", "cancelled"]},
+        "typedCharacterCount": {"$ref": "urn:wx:design:input-control:common#/definitions/typed_count"},
+        "failureReason": {"anyOf": [{"$ref": "urn:wx:design:input-control:common#/definitions/reason"}, {"type": "null"}]},
+        "source": {"type": "string", "enum": ["api", "web"]},
+        "createdAt": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"},
+        "updatedAt": {"$ref": "urn:wx:design:input-control:common#/definitions/timestamp"}
+      }
+    },
+    "start_success": {
+      "allOf": [{"$ref": "#/definitions/task_response"}, {"properties": {"status": {"const": "typing"}}}]
+    },
+    "control_ack_success": {
+      "allOf": [{"$ref": "#/definitions/task_response"}, {"properties": {"status": {"enum": ["cancelled", "inserted", "typing_failed"]}}}]
+    },
+    "start_error": {
+      "type": "object", "additionalProperties": false, "required": ["error", "message"],
+      "properties": {
+        "error": {"type": "string", "enum": ["input_authorization_revoked", "input_start_already_claimed", "ime_control_incompatible", "input_control_not_ready"]},
+        "message": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    }
+  }
+}

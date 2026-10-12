@@ -1,0 +1,174 @@
+[
+  {
+    "name": "migration-legacy-file",
+    "schema": "input-migration.schema.json#/definitions/legacy_file",
+    "value": {
+      "contract_version": "device-input-settings.v1", "device_id": "机械臂-迁移",
+      "ime_device_id": "手机-迁移", "enabled": true, "revision": 1,
+      "updated_at": "2026-10-03T11:00:00+08:00", "operator_id": "旧操作员",
+      "reason": "旧版允许输入", "client_request_id": "旧请求-甲",
+      "requests": {
+        "旧请求-甲": {
+          "enabled": true, "revision": 1, "operator_id": "旧操作员", "at": "2026-10-03T11:00:00+08:00",
+          "digest": "b68bef3f9c7e1b2e6a1dc4c6aa2ea0a08ed6ab7b1f09fec8011d4df03365a705"
+        }
+      }
+    }
+  },
+  {
+    "name": "migration-backup-manifest",
+    "schema": "input-migration.schema.json#/definitions/backup_manifest",
+    "value": {
+      "contract_version": "input-settings-migration-backup.v1", "migration_id": "迁移-甲",
+      "device_id": "机械臂-迁移", "created_at": "2026-10-03T12:00:00+08:00",
+      "source_file_semantic_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+      "artifacts": {
+        "settings_file": {
+          "source_ref": "/fixture/data/devices/机械臂-迁移/input_settings.json",
+          "backup_ref": "/fixture/maintenance/migration-a/legacy-input-settings.json",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "byte_length": 701, "method": "byte_copy"
+        },
+        "fleet_db": {
+          "source_ref": "/fixture/data/fleet.db", "backup_ref": "/fixture/maintenance/migration-a/fleet.sqlite",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "byte_length": 4096, "method": "sqlite_backup"
+        },
+        "ime_db": {
+          "source_ref": "/fixture/data/ime.db", "backup_ref": "/fixture/maintenance/migration-a/ime.sqlite",
+          "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "byte_length": 4096, "method": "sqlite_backup"
+        }
+      },
+      "version_inventory": {
+        "file_revision": 1, "ledger_revision": 1,
+        "owners": [{"record_id": "owner:task:旧任务-甲", "settings_revision": 1, "record_sha256": "4444444444444444444444444444444444444444444444444444444444444444"}],
+        "checkpoint": null, "applied_intents": []
+      }
+    }
+  },
+  {
+    "name": "migration-closed-file",
+    "schema": "input-settings.schema.json#/definitions/file",
+    "value": {
+      "contract_version": "device-input-settings.v1", "device_id": "机械臂-迁移",
+      "ime_device_id": "手机-迁移", "enabled": false, "revision": 2, "revoked_through_revision": 2,
+      "updated_at": "2026-10-03T12:00:01+08:00", "operator_id": "维护员甲",
+      "reason": "旧输入资料迁移并关闭许可", "client_request_id": "维护请求-甲", "requests": {},
+      "migration_baseline": {
+        "contract_version": "input-settings-migration.v1", "revision_floor": 1,
+        "closed_saved_value": {"enabled": false, "ime_device_id": "手机-迁移", "revision": 2, "revoked_through_revision": 2, "updated_at": "2026-10-03T12:00:01+08:00"},
+        "operator_id": "维护员甲", "reason": "旧输入资料迁移并关闭许可", "client_request_id": "维护请求-甲",
+        "backup_manifest_ref": "/fixture/maintenance/migration-a/manifest.json",
+        "backup_manifest_sha256": "2b9b507e840cc4671e6c782d460733adbd4732c35e789ed00ed0bb1622ec3656",
+        "legacy_request_ids": {"旧请求-甲": "651a2ffd27039c7f60c6170ff61fcab5714bac129b8193651c619dc1ac5e5459"},
+        "migration_id": "迁移-甲"
+      }
+    }
+  },
+  {
+    "name": "migration-prepared-intent",
+    "schema": "input-migration.schema.json#/definitions/maintenance_intent",
+    "value": {
+      "contract_version": "input-settings-migration-intent.v1", "migration_id": "迁移-甲", "device_id": "机械臂-迁移",
+      "created_at": "2026-10-03T12:00:01+08:00", "updated_at": "2026-10-03T12:00:01+08:00",
+      "before_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+      "after_digest": "17711ff9d434da83dd1e69ba4d2a726e5607a9cdbca04278e58454ba731b441a",
+      "backup_manifest_ref": "/fixture/maintenance/migration-a/manifest.json",
+      "backup_manifest_sha256": "2b9b507e840cc4671e6c782d460733adbd4732c35e789ed00ed0bb1622ec3656",
+      "backup_manifest": {
+        "contract_version": "input-settings-migration-backup.v1", "migration_id": "迁移-甲",
+        "device_id": "机械臂-迁移", "created_at": "2026-10-03T12:00:00+08:00",
+        "source_file_semantic_digest": "37a30d7fc84f3bc4b0843614f63219c897fb759e72733d3c5c3eaadb781df369",
+        "artifacts": {
+          "settings_file": {
+            "source_ref": "/fixture/data/devices/机械臂-迁移/input_settings.json",
+            "backup_ref": "/fixture/maintenance/migration-a/legacy-input-settings.json",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "byte_length": 701, "method": "byte_copy"
+          },
+          "fleet_db": {
+            "source_ref": "/fixture/data/fleet.db", "backup_ref": "/fixture/maintenance/migration-a/fleet.sqlite",
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "byte_length": 4096, "method": "sqlite_backup"
+          },
+          "ime_db": {
+            "source_ref": "/fixture/data/ime.db", "backup_ref": "/fixture/maintenance/migration-a/ime.sqlite",
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "byte_length": 4096, "method": "sqlite_backup"
+          }
+        },
+        "version_inventory": {
+          "file_revision": 1, "ledger_revision": 1,
+          "owners": [{"record_id": "owner:task:旧任务-甲", "settings_revision": 1, "record_sha256": "4444444444444444444444444444444444444444444444444444444444444444"}],
+          "checkpoint": null, "applied_intents": []
+        }
+      },
+      "proposed_file": {
+        "contract_version": "device-input-settings.v1", "device_id": "机械臂-迁移",
+        "ime_device_id": "手机-迁移", "enabled": false, "revision": 2, "revoked_through_revision": 2,
+        "updated_at": "2026-10-03T12:00:01+08:00", "operator_id": "维护员甲",
+        "reason": "旧输入资料迁移并关闭许可", "client_request_id": "维护请求-甲", "requests": {},
+        "migration_baseline": {
+          "contract_version": "input-settings-migration.v1", "revision_floor": 1,
+          "closed_saved_value": {"enabled": false, "ime_device_id": "手机-迁移", "revision": 2, "revoked_through_revision": 2, "updated_at": "2026-10-03T12:00:01+08:00"},
+          "operator_id": "维护员甲", "reason": "旧输入资料迁移并关闭许可", "client_request_id": "维护请求-甲",
+          "backup_manifest_ref": "/fixture/maintenance/migration-a/manifest.json",
+          "backup_manifest_sha256": "2b9b507e840cc4671e6c782d460733adbd4732c35e789ed00ed0bb1622ec3656",
+          "legacy_request_ids": {"旧请求-甲": "651a2ffd27039c7f60c6170ff61fcab5714bac129b8193651c619dc1ac5e5459"},
+          "migration_id": "迁移-甲"
+        }
+      },
+      "state": "prepared", "committed_at": null
+    }
+  },
+  {
+    "name": "migration-first-real-write",
+    "schema": "input-settings.schema.json#/definitions/file",
+    "value": {
+      "contract_version": "device-input-settings.v1", "device_id": "机械臂-迁移",
+      "ime_device_id": "手机-迁移", "enabled": false, "revision": 3, "revoked_through_revision": 3,
+      "updated_at": "2026-10-03T12:05:00+08:00", "operator_id": "值班员甲",
+      "reason": "继续暂停输入", "client_request_id": "迁后请求-甲",
+      "migration_baseline": {
+        "contract_version": "input-settings-migration.v1", "revision_floor": 1,
+        "closed_saved_value": {"enabled": false, "ime_device_id": "手机-迁移", "revision": 2, "revoked_through_revision": 2, "updated_at": "2026-10-03T12:00:01+08:00"},
+        "operator_id": "维护员甲", "reason": "旧输入资料迁移并关闭许可", "client_request_id": "维护请求-甲",
+        "backup_manifest_ref": "/fixture/maintenance/migration-a/manifest.json",
+        "backup_manifest_sha256": "2b9b507e840cc4671e6c782d460733adbd4732c35e789ed00ed0bb1622ec3656",
+        "legacy_request_ids": {"旧请求-甲": "651a2ffd27039c7f60c6170ff61fcab5714bac129b8193651c619dc1ac5e5459"},
+        "migration_id": "迁移-甲"
+      },
+      "requests": {
+        "迁后请求-甲": {
+          "request_digest": "9e3f318c93f46af4c2454c8b8c4049db88bf61f8e64bce728ec8eedc03db55b2",
+          "normalized_request": {
+            "contract_version": "device-input-settings.v1", "enabled": false, "expected_revision": 2,
+            "ime_device_id": null, "operator_id": "值班员甲", "role": "operator",
+            "reason": "继续暂停输入", "correlation_id": "迁后关联-甲", "client_request_id": "迁后请求-甲"
+          },
+          "call_context": {"origin": "human_put", "operator_id": "值班员甲", "role": "operator", "operation_id": null},
+          "before": {"enabled": false, "ime_device_id": "手机-迁移", "revision": 2, "revoked_through_revision": 2, "updated_at": "2026-10-03T12:00:01+08:00"},
+          "after": {"enabled": false, "ime_device_id": "手机-迁移", "revision": 3, "revoked_through_revision": 3, "updated_at": "2026-10-03T12:05:00+08:00"},
+          "audit": {
+            "device_id": "机械臂-迁移", "requested_ime_device_id": null, "authorized_ime_device_id": "手机-迁移",
+            "operator_id": "值班员甲", "role": "operator", "reason": "继续暂停输入",
+            "correlation_id": "迁后关联-甲", "client_request_id": "迁后请求-甲", "committed_at": "2026-10-03T12:05:00+08:00"
+          },
+          "original_response": {
+            "settings": {
+              "contract_version": "device-input-settings.v1", "device_id": "机械臂-迁移",
+              "ime_device_id": "手机-迁移", "current_ime_device_id": "手机-迁移", "enabled": false,
+              "revision": 3, "revoked_through_revision": 3, "updated_at": "2026-10-03T12:05:00+08:00",
+              "observed_at": "2026-10-03T12:05:00+08:00", "effective": false,
+              "blocking_reasons": [{"code": "input_switch_disabled", "message": "输入与发送未允许"}],
+              "calibration_ready": true, "ime_online": true, "keyboard_active": true,
+              "pending_cancellation_count": 0, "input_recovery_required": false
+            },
+            "replayed": false
+          }
+        }
+      }
+    }
+  }
+]
