@@ -249,7 +249,7 @@ def test_reporter_queues_failures_and_resend_via_reporter(store: Store):
     queued = store.get_callback("customer-message:m-9")
     assert queued is not None and queued["status"] == "retry"
 
-    # WX 恢复后由 flush 成功投递并标记
+    # 业务 恢复后由 flush 成功投递并标记
     async def recovering():
         async def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"accepted": True, "queued": True})

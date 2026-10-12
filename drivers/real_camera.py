@@ -954,7 +954,7 @@ class RealCameraDriver(CameraDriver):
         else:
             title = {"text": "", "confidence": 0.0, "words": [], "truncated": False}
             input_ocr = {"text": "", "confidence": 0.0}
-        # WX 列表导航需要整帧文字框来识别“微信/WeChat”标题和底部四个导航
+        # 业务 列表导航需要整帧文字框来识别“应用/WeChat”标题和底部四个导航
         # 标签。标题区域/内容色块只能证明会话页内容，不能推导主页列表 ROI。
         navigation_ocr = await asyncio.to_thread(recognize, image, "messages")
         import base64

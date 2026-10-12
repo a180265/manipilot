@@ -44,7 +44,7 @@ DEFAULT_PLATFORM_CONFIG: dict = {
     "wx_callback_estop_path": "/v1/arm-fleet/emergency-stop",
     "wx_callback_takeover_path": "/internal/conversations/{conversation_id}/takeover",
     "wx_compat_enabled": False,
-    # R4-12-E（wx-camera-binding.v1）：WX 绑定查看会话的授权复核通道。
+    # R4-12-E（wx-camera-binding.v1）：业务 绑定查看会话的授权复核通道。
     # introspect URL 未配置=复核关闭（撤销推送仍生效）；令牌文件未配置=
     # 内部撤销端点拒绝一切请求（无无令牌模式）。
     "wx_camera_introspect_url": "",

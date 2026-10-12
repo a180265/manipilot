@@ -20,7 +20,7 @@ from tests.test_screen_wake_runtime import PLUGIN_DIR
 @pytest.mark.parametrize("scenario,status,effect", [
     ("wake", "confirmed", "awake"),
     # W04/§9.4：双击有完整控制器确认、之后仍暗屏——Fleet 确认机械双击已完成，
-    # 仅亮屏效果 unverified；WX 侧保留等待屏障（不重试、不重放）。
+    # 仅亮屏效果 unverified；业务侧保留等待屏障（不重试、不重放）。
     ("still_dark", "confirmed", "unverified"),
     ("already_lit", "failed", "unverified"),
     ("frozen", "failed", "unverified"),

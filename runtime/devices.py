@@ -592,7 +592,7 @@ class DeviceManager:
         # 设备级唯一帧入口：监听、质量巡检、查看和运动验证共享同一 broker。
         self._camera_brokers.pop(device_id, None)
         self._inputs[device_id] = inp
-        # fake 微信窗口联动：机械臂点击会话/返回时，fake 摄像头画面同步切换
+        # fake 应用窗口联动：机械臂点击会话/返回时，fake 摄像头画面同步切换
         if cfg.get("sim_wechat_window"):
             def _on_click(target, _camera=camera):
                 if isinstance(target, dict):

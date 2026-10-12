@@ -41,7 +41,7 @@ from runtime.views import ViewSessionManager
 from runtime.takeovers import TakeoverBridge
 CONTRACT_DIR = Path(__file__).resolve().parents[1] / "api" / "contracts"
 # 任务类型 → 外壳契约 schema（api/contracts/ 下文件名）。平台核心只提供注册表
-# 机制，不硬编码业务契约分支；chat-send 为历史默认注册项（WX 插件任务类型），
+# 机制，不硬编码业务契约分支；chat-send 为历史默认注册项（业务 插件任务类型），
 # 业务插件可在装载时经 register_task_contract_schema 登记自己的外壳契约。
 TASK_CONTRACT_SCHEMAS: dict[str, str] = {"chat_send": "chat-send.v1.schema.json"}
 TASK_DEFAULT_CONTRACT_VERSIONS: dict[str, str] = {"chat_send": "chat-send.v1"}
@@ -190,7 +190,7 @@ class ArmFleetRuntime:
         self._geometry_gates: dict[str, object] = {}
         self._geometry_gate_lock = threading.Lock()
         self.views = ViewSessionManager(self.store, self.devices, self.audit, self.events, self.config)
-        # WX 业务监听属于可选兼容插件。默认关闭时，Arm Fleet 仍可独立
+        # 业务监听属于可选兼容插件。默认关闭时，Arm Fleet 仍可独立
         # 运行机械臂、daemon、输入法、摄像头和校准；显式开启后才加载旧监听。
         if bool(self.config.get("wx_compat_enabled", False)):
             from tasks.supervision import SupervisionManager
@@ -1616,7 +1616,7 @@ class ArmFleetRuntime:
                                  or task.get("motion_result_unknown")
                                  or task.get("recovery_attempted")))
                 # P2-1（第五轮复审）：暗屏代提重试群体过期前失败化——queued
-                # 过期本不入 reporter 回报名单，WX 将零回调；失败化让 WX 收到
+                # 过期本不入 reporter 回报名单，业务 将零回调；失败化让 业务 收到
                 # 明确 failed（其余任务维持 expired 原语义）。
                 fail_expired = (task.get("source") == "wx" and not moved
                                 and task.get("wake_retried"))
@@ -2995,7 +2995,7 @@ class ArmFleetRuntime:
         result = await self.estop.reset(context["operator_id"], context["reason"])
         return result
 
-    # ================= 微信托管 =================
+    # ================= 业务托管 =================
     async def op_supervision_start(self, device_id: str, context: dict) -> dict:
         from runtime.permissions import check_operation
 

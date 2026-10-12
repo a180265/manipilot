@@ -161,8 +161,8 @@ def _start_fake_safety_fleet() -> dict:
                                _hl.sha256).hexdigest()
             if not _hm.compare_digest(expected, sig):
                 self.send_response(401); self.end_headers(); return
-            device_id = self.path.split("/")[3].split("?")[0]  # /v1/devices/{id}/wx-navigation-safety
-            view = {"contract_version": "wx-navigation-device-safety.v1",
+            device_id = self.path.split("/")[3].split("?")[0]  # /v1/devices/{id}/safety-view
+            view = {"contract_version": "device-safety-view.v1",
                     "device_id": device_id, "binding": None,
                     "snapshot_revision": 1,
                     "observed_at": _dt.now(_tz.utc).isoformat(
@@ -216,7 +216,7 @@ def timing_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CAMERA_HELPER_EXEC", str(helper))
     monkeypatch.setattr(frame, "_PROOF_CACHE", {}, raising=False)
     # R4-11-B：换绑核对的 Fleet 安全查询为必需配置——本夹具提供模块内
-    # 最小假 Fleet（仅 wx-navigation-safety 只读投影，confirmed 视图）。
+    # 最小假 Fleet（仅 device-safety-view 只读投影，confirmed 视图）。
     fake = _start_fake_safety_fleet()
     monkeypatch.setenv("CAMERA_FLEET_SAFETY_BASE_URL", fake["base"])
     monkeypatch.setenv("ARMFLEET_WX_NAV_KEYS_FILE", fake["keys_file"])

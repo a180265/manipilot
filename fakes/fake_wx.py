@@ -57,7 +57,7 @@ class FakeWX:
             self.estop_events.append(body)
             return {"accepted": True}
 
-    # ---------- 构造已批准的发送任务（WX M5 语义） ----------
+    # ---------- 构造已批准的发送任务（业务 M5 语义） ----------
     def build_chat_send(
         self,
         *,

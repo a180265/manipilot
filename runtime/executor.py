@@ -851,7 +851,7 @@ class TaskExecutor:
             task["finalization_phase"] = None
             self._save(task)
 
-        # 对聊天任务，平台归位检查还不够；必须同时证明微信主界面已确认。
+        # 对聊天任务，平台归位检查还不够；必须同时证明应用主界面已确认。
         # 没有生成步骤计划意味着任务在动作前被拒绝，平台检查即可证明未改变界面。
         park_result = None
         if task["task_type"] == "chat_send":
@@ -865,7 +865,7 @@ class TaskExecutor:
                 return_main_ok = True
             recovery_home_ok = bool((recovery_result or {}).get("home_verified"))
             return_main_ok = return_main_ok or recovery_home_ok
-            # 业务界面停靠证据并入收尾核对：WX 的 conversation_turn_completed
+            # 业务界面停靠证据并入收尾核对：业务 的 conversation_turn_completed
             # 依赖 home_check 里的 park_* 字段区分“已完成”和“部分完成”。
             park_done = [entry for entry in task.get("step_log", [])
                          if entry.get("action") == "park_ime_delete_key"
@@ -968,7 +968,7 @@ class TaskExecutor:
         task["home_check"] = {
             "home_ok": home_check.get("home_ok"),
             "checked_at": home_check.get("checked_at"),
-            # 停靠证据随 home_check 一起进入 task-result.v1，供 WX 判定
+            # 停靠证据随 home_check 一起进入 task-result.v1，供 业务 判定
             # conversation_turn_completed 的完成状态；非聊天任务没有这些字段。
             **(park_result or {}),
         }
@@ -1003,7 +1003,7 @@ class TaskExecutor:
         # 租约字段和审计结果需要在回报前持久化，便于进程重启后对账。
         self._save(task)
 
-        # 回报外部系统（WX）
+        # 回报外部系统（业务）
         if task.get("source") == "wx":
             await runtime.reporter.send_task_result(task)
 

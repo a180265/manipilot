@@ -142,7 +142,7 @@ def test_estop_report_wx_pause_and_resume_via_reporter_result(tmp_path):
     controller, reporter, outbox, store = _make(tmp_path)
 
     async def paused_scenario():
-        # WX 接收急停（暂停 Outbox 调度）：accepted=true → reporter 返回 True
+        # 业务 接收急停（暂停 Outbox 调度）：accepted=true → reporter 返回 True
         async def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"accepted": True, "paused": True})
 
@@ -155,7 +155,7 @@ def test_estop_report_wx_pause_and_resume_via_reporter_result(tmp_path):
     assert asyncio.run(paused_scenario()) is True
 
     async def rejected_scenario():
-        # WX 未确认（5xx）：reporter 返回 False，急停回调留在本地队列
+        # 业务 未确认（5xx）：reporter 返回 False，急停回调留在本地队列
         async def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(503, json={})
 
@@ -175,7 +175,7 @@ def test_estop_report_wx_pause_and_resume_via_reporter_result(tmp_path):
     store.save_callback(due)
 
     async def flush_scenario():
-        # WX 恢复（mock）：后台 flush 补投成功，语义等同于急停通知最终生效
+        # 业务 恢复（mock）：后台 flush 补投成功，语义等同于急停通知最终生效
         async def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"accepted": True, "paused": True})
 

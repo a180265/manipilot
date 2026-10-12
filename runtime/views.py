@@ -296,7 +296,7 @@ class ViewSessionManager:
         self._store.save_view_session(session)
         return session
 
-    # ---------- R4-12-E：WX 授权失效传播（wx-camera-binding.v1） ----------
+    # ---------- R4-12-E：业务 授权失效传播（wx-camera-binding.v1） ----------
     def revoke_wx_sessions(self, session_ids: list[str], username: str,
                            reason: str) -> int:
         """按 WX 推送撤销绑定会话：精确 (username, wx_session_id) 作用域——

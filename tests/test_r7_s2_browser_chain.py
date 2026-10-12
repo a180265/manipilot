@@ -73,7 +73,7 @@ def stack():
     confd.mkdir()
     try:
         _docker("network", "create", "--subnet", f"{BASE_IP}0/24", net)
-        # WX 后端（容器内 python，仓库只读 + 临时数据卷）。
+        # 业务 后端（容器内 python，仓库只读 + 临时数据卷）。
         # 账号认证按正式语义开启：CSRF secret（≥32B 测试值，仅隔离栈）、
         # 回环 HTTP 许可（隔离网络明文）、公共源=浏览器实际入口。
         wxdata = work / "wxdata"
@@ -127,7 +127,7 @@ def stack():
                 "-v", f"{REPO / 'frontend/dist'}:/usr/share/nginx/html:ro",
                 "-v", f"{work / 'environment-public.json'}:/etc/wx/environment-public.json:ro",
                 NGINX_IMAGE)
-        # 就绪必须探到 WX 上游真通（amd64 仿真启动慢，environment.json 只证
+        # 就绪必须探到 业务 上游真通（amd64 仿真启动慢，environment.json 只证
         # nginx 本地路由）；session 匿名 401/403 都证明上游已响应。
         base = f"http://127.0.0.1:{PORT}"
         import urllib.error

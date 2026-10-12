@@ -141,7 +141,7 @@ class CallbackOutbox:
                 summary["rescheduled"] += 1
             return
         if 200 <= status_code < 300:
-            # §问题10：HTTP 2xx 只表示“收到请求”；必须解析到 WX 结构化确认
+            # §问题10：HTTP 2xx 只表示“收到请求”；必须解析到 业务 结构化确认
             # accepted=true 才算成功。空 body、空对象或缺确认字段一律重试。
             accepted = isinstance(body, dict) and body.get("accepted") is True
             if accepted:
@@ -149,7 +149,7 @@ class CallbackOutbox:
                 summary["delivered"] += 1
                 return
             if isinstance(body, dict) and body.get("accepted") is False:
-                # WX 业务拒绝（200 + accepted=false，例如托管未运行）：参数面
+                # 业务拒绝（200 + accepted=false，例如托管未运行）：参数面
                 # 问题，与 4xx 同类，进入人工处理，不无限重试。
                 item["status"] = "manual"
                 item["status_display"] = STATUS_DISPLAY["manual"]

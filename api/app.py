@@ -594,7 +594,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         return {"device_id": device_id, **result,
                 "说明": "绑定已恢复：设备进入待校准状态，完成校准和主界面检查后方可托管"}
 
-    # ---------- §4.3 设备侧允许回复名单（WX 保存名单时同步） ----------
+    # ---------- §4.3 设备侧允许回复名单（业务系统保存名单时同步） ----------
     @app.get("/v1/devices/{device_id}/reply-allowlist")
     async def get_reply_allowlist(device_id: str, request: Request):
         rt_ = rt(request)
@@ -665,7 +665,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
     async def device_eligibility(device_id: str, request: Request, require_input: bool = True):
         return {"device_id": device_id, **rt(request).device_eligibility(device_id, require_input=require_input)}
 
-    # ---------- 自动手势与 WX 导航（规范第 7、12.3、22.12、22.14、22.15 节） ----------
+    # ---------- 自动手势与业务导航（规范第 7、12.3、22.12、22.14、22.15 节） ----------
 
     def _gesture_bundle_and_frame(rt_, device_id: str):
         from drivers import calibration_bundle as cb
@@ -734,7 +734,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         binding["gesture_profile_version"] = int(profile.get("version") or 0) \
             if profile else 0
         # 视觉优先（拍板 2026-09-30）：纯滑动自检默认走相机光流判定发证，
-        # 不依赖手势页会话（生产 WX 无软件回报）；显式传 vision_only 可覆盖。
+        # 不依赖手势页会话（生产 业务无软件回报）；显式传 vision_only 可覆盖。
         scroll_only = bool(actions) and all(
             a in ("scroll_up", "scroll_down") for a in actions)
         if vision_only is None:
@@ -2906,7 +2906,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         result = await rt(request).op_status_query(device_id, op_context(body))
         return result
 
-    # ---------- 微信托管 ----------
+    # ---------- 业务托管 ----------
     @app.get("/v1/devices/{device_id}/supervision")
     async def get_supervision(device_id: str, request: Request):
         return rt(request).supervision.view(device_id)
@@ -2966,9 +2966,9 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
     async def get_task(task_id: str, request: Request):
         return task_view(rt(request), rt(request).get_task(task_id))
 
-    # ---------- 可选扩展：WX 导航服务签名通道（extensions.wx_navigation） ----------
+    # ---------- 可选扩展：业务导航服务签名通道（extensions.wx_navigation） ----------
     # 平台核心不硬编码该通道的端点与契约；探测到扩展包才挂载（SDK 纯净发行
-    # 剔除 extensions/ 即得无 WX 导航通道形态），挂载时端点与钩子行为不变。
+    # 剔除 extensions/ 即得无业务导航通道形态），挂载时端点与钩子行为不变。
     try:
         from extensions.wx_navigation import routes as wx_nav
     except ImportError:
@@ -2984,7 +2984,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         payload = json.loads(raw_body.decode("utf-8"))
         contract = str(payload.get("contract_version") or "")
         if wx_nav is not None and contract in wx_nav.SIGNED_TASK_CONTRACTS:
-            # Q02：WX 导航合同分支走服务签名认证；来源恒为 wx，
+            # Q02：业务导航合同分支走服务签名认证；来源恒为 wx，
             # body.source/role 不参与认证（§7.2）。逻辑在可选扩展内。
             wx_nav.verify_signed_submission(rt_, request, payload, raw_body, contract)
         payload = json.loads(json.dumps(payload))
@@ -3065,6 +3065,73 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
                 reviewed_by=context.get("operator_id") or "")
         except ScrollActionStoreError as exc:
             raise ApiError(exc.code, exc.message)
+
+    # ---------- 设备安全视图（服务签名只读；帧桥换绑门的数据源） ----------
+    @app.get("/v1/devices/{device_id}/safety-view")
+    async def get_device_safety_view(device_id: str, request: Request):
+        """device-safety-view.v1（服务签名 GET，只读零动作）：换绑/排空前核对
+        持久在途任务、未解决机械/输入未知、动作租约与急停。帧桥
+        （scripts/camera_frame_server）在安装锁内消费本视图，任一未知即
+        保守拒绝。密钥经 FLEET_SAFETY_KEYS_FILE 配置（与帧桥侧同文件）。"""
+        import os as _os
+        from runtime import service_signing
+
+        keys_file = _os.environ.get("FLEET_SAFETY_KEYS_FILE") or ""
+        if not keys_file or not Path(keys_file).exists():
+            raise ApiError("authorization_unavailable",
+                           "缺少安全视图服务 key 配置（FLEET_SAFETY_KEYS_FILE）")
+        keys = service_signing.load_keys(keys_file)
+        rt_ = rt(request)
+        service_signing.ensure_service_auth_schema(rt_.store._conn)
+        try:
+            service_signing.verify_service_signature(
+                rt_.store._conn, keys, "GET",
+                request.url.path + (f"?{request.url.query}"
+                                    if request.url.query else ""),
+                b"", request.headers)
+        except service_signing.ServiceAuthError as exc:
+            raise ApiError("authorization_unavailable", exc.message) \
+                if exc.status >= 500 else ApiError("authorization_invalid", exc.message)
+        rt_.devices.get(device_id)
+        terminal = {"confirmed", "failed", "unknown", "cancelled", "expired"}
+        tasks = rt_.store.all_tasks()
+        in_flight = sorted(t["task_id"] for t in tasks
+                           if t.get("device_id") == device_id
+                           and t.get("status") not in terminal)
+        unresolved = sorted(t["task_id"] for t in tasks
+                            if t.get("device_id") == device_id
+                            and (t.get("status") == "unknown"
+                                 or t.get("stop_result_unknown")
+                                 or t.get("motion_result_unknown")))
+        lease = rt_.leases.get(device_id)
+        estop = rt_.estop.active
+        blockers: list[str] = []
+        if in_flight:
+            blockers.append("device_busy")
+        if unresolved:
+            blockers.append("original_task_unresolved")
+        if lease is not None or estop:
+            blockers.append("fleet_safety_blocked")
+        device = rt_.devices.get(device_id)
+        view = {
+            "contract_version": "device-safety-view.v1",
+            "device_id": device_id,
+            "binding": None,
+            "snapshot_revision": max(1, int(device.get("binding_revision") or 1)),
+            "observed_at": iso(utc_now()),
+            "in_flight_task_ids": in_flight,
+            "unresolved_task_ids": unresolved,
+            "held_session_id": None,
+            "lease_active": lease is not None,
+            "mechanical_safe": "unknown" if blockers else "confirmed",
+            "blocking_reasons": sorted(set(blockers)),
+        }
+        rt_.audit.record("device_safety_view", operator_id="frame-bridge",
+                         device_id=device_id, reason="换绑/排空前安全核对",
+                         detail={"in_flight": len(in_flight),
+                                 "unresolved": len(unresolved),
+                                 "mechanical_safe": view["mechanical_safe"]})
+        return view
 
     # ---------- R3-17：手机配对管理（本机调试台后端机器身份转发） ----------
     def _pairing_svc(request: Request):
@@ -3473,7 +3540,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
                                         last_status_check = now
                                         current = await rt_.views.refresh_camera_status(
                                             view_session_id)
-                                        # R4-12-E：WX 绑定会话周期授权复核
+                                        # R4-12-E：业务绑定会话周期授权复核
                                         # （自然到期/推送失败的兜底通道）。
                                         current = await rt_.views.recheck_wx_authorization(
                                             view_session_id)

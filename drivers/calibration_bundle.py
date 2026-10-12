@@ -963,8 +963,8 @@ def validate_calibration_bundle(
         elif not entry.get("validated"):
             _fail(checks, "target_not_validated", f"目标未通过点击验收：{name}")
 
-    # 10. 微信测试会话不属于机械臂校准门禁。
-    # 每次实际发送仍由 WX/插件完成目标、正文和发送后效果证据核对；
+    # 10. 业务测试会话不属于机械臂校准门禁。
+    # 每次实际发送仍由 业务/插件完成目标、正文和发送后效果证据核对；
     # 通用平台这里只负责机械臂与输入法的校准事实。
 
     # 11. 运动可用性

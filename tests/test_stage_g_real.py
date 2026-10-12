@@ -610,7 +610,7 @@ def test_device_manager_mixed_real_and_simulation(tmp_path):
     assert real["driver_versions"]["arm"] == RealArmDriver.DRIVER_VERSION
     assert real["driver_versions"]["camera"] == RealCameraDriver.DRIVER_VERSION
     assert sim["driver_versions"]["arm"].startswith("fake-")
-    # 通用硬件就绪不依赖微信参考画面，应用核对仍不能伪造成功。
+    # 通用硬件就绪不依赖应用参考画面，应用核对仍不能伪造成功。
     assert real["status"] == "ready"
     camera = runtime.devices.camera("arm-01")
     assert asyncio.run(camera.confirm_main_view("wechat_main"))["confirmed"] is False

@@ -998,7 +998,7 @@ def test_acceptance_execute_runs_full_chain(env):
     assert r2["executed"] is True
     assert "TAP 3.000 F1500 P2.2" in env.daemon.cmds
 
-    # 微信项不可执行（人工确认）
+    # 应用项不可执行（人工确认）
     with pytest.raises(WizardError, match="人工确认"):
         env.wizard.acceptance_execute("wechat", "send_message", nx=0.5, ny=0.5)
     # 自动 OCR 不可用时才提示回退到「仅标记」坐标；失败路径必须取消任务
@@ -2852,7 +2852,7 @@ def test_auto_promote_with_debug_only_wechat_deferred(tmp_path):
     run_id = _first_active_run_id(env)
     wait_auto(env, lambda v: v["phase"] == "E_ACCEPTANCE", desc="E 验收")
 
-    # 只记录调试两项 ✓（微信四项不记）
+    # 只记录调试两项 ✓（应用四项不记）
     finish_e_acceptance(env, run_id)
     view = wait_auto(env, lambda v: v["state"] == "PROMOTED", desc="仅调试项提升")
     bundle = cb.load_bundle("arm-01", tmp_path)

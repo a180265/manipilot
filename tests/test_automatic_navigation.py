@@ -114,7 +114,7 @@ class TestDetectChatListLayout:
         assert result["reason_code"] == "navigation_layout_unsupported"
 
     def test_title_with_unrelated_suffix_rejected(self):
-        # “微信支付”不是带未读后缀的标题，剥掉括号后不等于“微信”。
+        # “应用支付”不是带未读后缀的标题，剥掉括号后不等于“应用”。
         result = an.detect_chat_list_layout(chinese_screen(title="微信支付"),
                                             W, H, defaults=DEFAULTS)
         assert result["matched"] is False

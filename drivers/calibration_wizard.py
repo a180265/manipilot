@@ -218,7 +218,7 @@ WECHAT_ACCEPTANCE_CHECKS: tuple[str, ...] = (
 )
 
 # 必验目标（§9.3）改为运行期 OCR 定位（用户拍板 2026-09-01）：候选栏文字、
-# 发送/删除、微信会话用户名都由 OCR 找到位置后走位点击，不预先登记坐标。
+# 发送/删除、聊天会话用户名都由 OCR 找到位置后走位点击，不预先登记坐标。
 DEFAULT_REQUIRED_TARGETS: tuple[str, ...] = ()
 
 TOUCH_REPORT_TIMEOUT_S = 6.0
@@ -919,7 +919,7 @@ class CalibrationWizard:
                   for kind in ("debug", "wechat")
                   for check, rec in (acceptance.get(kind) or {}).items()]
         # 自动 run 的 ✓ 记录在 run["acceptance"]（手动流程在 state）：
-        # 两处任一完成即视为该类验收完成（2026-09-04：微信项可延后，未完成时
+        # 两处任一完成即视为该类验收完成（2026-09-04：应用项可延后，未完成时
         # wechat=False 保持发送门禁关闭）
         run_acceptance = ((getattr(self, "_auto", None) or {}).get("run") or {}).get("acceptance") or {}
 
@@ -3333,7 +3333,7 @@ class CalibrationWizard:
                 entry["validated"] = True
                 entry["testedAt"] = trials[-1]["ts"]
                 entry["errorPx"] = trials[-1]["errorPx"]
-                entry["sendAuthorized"] = False  # 真实发送仍由 WX 任务级证据门禁授权
+                entry["sendAuthorized"] = False  # 真实发送仍由 业务 任务级证据门禁授权
             else:
                 entry["validated"] = False
             self._sync_bundle()
@@ -3940,7 +3940,7 @@ class CalibrationWizard:
                     raise WizardError(f"调试台验收未完成：{'、'.join(missing)}")
                 self.finish()
             elif stage == STAGE_WECHAT_ACCEPTANCE:
-                # 历史状态兼容：不再因为缺少微信测试会话而阻断。
+                # 历史状态兼容：不再因为缺少业务测试会话而阻断。
                 self.finish()
             else:
                 raise WizardError(f"当前阶段「{STAGE_DISPLAY.get(stage, stage)}」无可推进项")
@@ -6896,7 +6896,7 @@ class CalibrationWizard:
             "tolerancePx": run["config"]["target_tolerance_px"],
         }
         # 验收标志以 RUN 的 ✓ 记录为准（手动流程的 state 记录兜底取或）。
-        # 微信四项仅作历史兼容记录，不参与 ready 或机械臂运行门禁。
+        # 应用四项仅作历史兼容记录，不参与 ready 或机械臂运行门禁。
         run_acceptance = run.get("acceptance") or {}
 
         def _run_kind_done(kind, checks_tuple):

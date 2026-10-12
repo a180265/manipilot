@@ -364,7 +364,7 @@ def test_self_test_without_coordinate_frame_uses_calibration_frame(tmp_path, mon
         try:
             done = await drive(runtime, self_test_body())
             assert done["status"] == "confirmed", done.get("failure_reason")
-            # WX 屏幕内滑动使用校准包派生的内部屏幕坐标桥；
+            # 业务 屏幕内滑动使用校准包派生的内部屏幕坐标桥；
             # 缺少 display-root 旁档不应阻挡 screen-normalized 自动手势。
             assert created
             frame = created[0]["coordinate_frame"]
@@ -829,7 +829,7 @@ def test_auto_navigate_search_miss_swipes_once_and_verifies_displacement(tmp_pat
                         .index("arm.execute_gesture_program")][1]["program"]
     assert program["program_version"] == "gesture-program.v1"
     assert len(program["strokes"]) == 1
-    # search 步骤不 close：WX 轮次跨任务（§22.14）
+    # search 步骤不 close：业务 轮次跨任务（§22.14）
     view = run_view(tmp_path)
     assert view["state"] == "active"
     assert view["physical_count"] == 1

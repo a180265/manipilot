@@ -176,7 +176,7 @@ def test_ten_devices_concurrent_isolation(tmp_path):
             timeline_devices = runtime.audit.list_events(limit=50, device_id="arm-05")
             assert all(e.get("device_id") in (None, "arm-05") for e in timeline_devices)
 
-            # WX 回报对账：8 已发送 + 1 失败 + 1 结果未知（按 task_id 逐台核对）
+            # 业务回报对账：8 已发送 + 1 失败 + 1 结果未知（按 task_id 逐台核对）
             statuses = [r["status"] for r in fake_wx.results_by_task.values()]
             assert statuses.count("confirmed") == 8, statuses
             assert statuses.count("failed") == 1 and statuses.count("unknown") == 1

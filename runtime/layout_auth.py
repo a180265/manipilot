@@ -137,14 +137,14 @@ DEFAULT_DEBUG_TTL_SECONDS = 4 * 3600
 LEGACY_CONSOLE_PRINCIPAL = "motor-debug-console"
 
 # 导出白名单：只允许布局资料资源（L2：导出只含白名单布局资产，
-# 不含 phone/WX/Helper 密钥）
+# 不含 phone/业务/Helper 密钥）
 EXPORT_ALLOWED_RESOURCE_KINDS = frozenset(
     {"template", "region", "adaptation"})
 EXPORT_FORBIDDEN_KEY_RE = re.compile(
     r"token|secret|password|credential|cookie|authorization|api_?key|"
     r"session|private_key", re.IGNORECASE)
 
-# 浏览器自报身份字段/头（一律剥离，不作身份；不生成 WX human proof）
+# 浏览器自报身份字段/头（一律剥离，不作身份；不生成 业务 human proof）
 SELF_REPORTED_IDENTITY_FIELDS = frozenset({
     "principal", "principal_id", "role", "roles", "actor", "actor_kind",
     "operator_id", "machine", "machine_id", "operator"})

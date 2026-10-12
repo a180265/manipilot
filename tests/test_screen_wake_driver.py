@@ -435,7 +435,7 @@ def test_wake_compensates_observable_dark_phone_offset(rig):
 def test_wake_lit_lock_screen_keeps_awake_effect_without_further_motion(rig):
     # W14/§9.4：亮屏+姿态可信但页面是锁屏/未知页（Fleet 不识别页面内容）——
     # effect_status=awake 保留，机械事实保留，不追加任何业务触屏动作
-    # （WX 页面恢复屏障在业务侧，不由 Fleet 改回未知）。
+    # （业务 页面恢复屏障在业务侧，不由 Fleet 改回未知）。
     daemon, driver, bundle, root, _ = prepare_wake(rig)
     counter = [0]
 

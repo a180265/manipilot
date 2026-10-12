@@ -415,7 +415,7 @@ def test_gate_target_not_validated():
 def test_gate_does_not_require_wechat_acceptance_and_estop():
     bundle = _ready_bundle()
     bundle["acceptance"]["wechat"] = False
-    # 微信测试会话不是校准前置；发送仍由每次任务的真实发送证据确认。
+    # 业务测试会话不是校准前置；发送仍由每次任务的真实发送证据确认。
     assert _gate(bundle, wechat_send=True) == []
     # 急停锁定
     codes = _codes(_gate(_ready_bundle(), estop_locked=True))

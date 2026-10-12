@@ -353,7 +353,7 @@ class Plugin(TaskPlugin):
         actions = list(payload["actions"])
         device_id = ctx.device_id
         # 视觉优先（拍板 2026-09-30）：滑动类自检不依赖手势页会话——效果由
-        # 相机前后帧光流判定（生产 WX 场景无软件回报）。vision_only 仅对
+        # 相机前后帧光流判定（生产 业务 场景无软件回报）。vision_only 仅对
         # 纯滑动集生效；tap/back/home 仍走页面采样路径。
         scroll_only = bool(actions) and all(
             a in ("scroll_up", "scroll_down") for a in actions)

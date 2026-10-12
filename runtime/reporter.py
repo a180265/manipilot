@@ -47,9 +47,9 @@ class Reporter:
         try:
             response = await client.post(base.rstrip("/") + path, json=payload)
             # §问题10：HTTP 2xx 只表示“收到请求”，不单独表示业务成功。
-            # 必须收到 WX 结构化确认（accepted=true）才算成功；空对象、缺确认
+            # 必须收到 业务 结构化确认（accepted=true）才算成功；空对象、缺确认
             # 字段或无法解析时进入重试，不得标记成功。
-            # §7.3（P3-3）：2xx 且 accepted=false 是 WX 业务拒绝（参数面问题），
+            # §7.3（P3-3）：2xx 且 accepted=false 是 业务拒绝（参数面问题），
             # 与 customer 通道对称进入人工处理（business_rejected），不自动重试。
             confirmed = False
             business_rejected = False
@@ -128,7 +128,7 @@ class Reporter:
                           "reason": reason or f"WX 拒绝消息回报：HTTP {response.status_code}"}
                 outcome = "rejected_4xx"
             elif body.get("accepted") is False:
-                # WX 业务拒绝通常仍返回 200，例如进入托管前需要人工核对。
+                # 业务拒绝通常仍返回 200，例如进入托管前需要人工核对。
                 result = {**body, "accepted": False, "rejected": True,
                           "retryable": False, "reason": reason or "WX 尚未允许该消息进入业务流程"}
                 outcome = "business_rejected"

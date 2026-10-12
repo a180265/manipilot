@@ -98,7 +98,7 @@ class TakeoverBridge:
                 )
                 raise ApiError("takeover_rejected", detail)
 
-            # WX may return HTTP 200 while explicitly declining to apply the
+            # 业务 may return HTTP 200 while explicitly declining to apply the
             # takeover (for example, a stale conversation state). Do not
             # convert that application-level rejection into a success.
             if body.get("accepted") is False:

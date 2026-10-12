@@ -152,7 +152,7 @@ def helper_env(tmp_path, monkeypatch):
     fingerprint = clock.host_fingerprint(install_id)
     clock_id = clock.source_clock_id(**fingerprint)
     # R4-11-B：换绑核对的 Fleet 安全查询为必需配置——夹具提供模块内假
-    # Fleet（仅 wx-navigation-safety 只读 confirmed 投影）。
+    # Fleet（仅 device-safety-view 只读 confirmed 投影）。
     from tests.test_r3_10_source_session_timing import _start_fake_safety_fleet
     fake = _start_fake_safety_fleet()
     monkeypatch.setenv("CAMERA_FLEET_SAFETY_BASE_URL", fake["base"])

@@ -494,7 +494,7 @@ def _require_fleet_device_safe(device_id: str) -> None:
     """R3-11：换绑前核对持久在途任务/未解决未知/当前 daemon 安全事实。
 
     使用受信本机版本化 Fleet 安全查询（GET /v1/devices/{id}/
-    wx-navigation-safety，服务签名）；读不全/过期/断网/任一阻断 → 保守拒绝。
+    device-safety-view，服务签名）；读不全/过期/断网/任一阻断 → 保守拒绝。
     只读 STATUS，绝不代为 CONNECT/STOP/回零。
     """
     config = _fleet_safety_config()
@@ -507,7 +507,7 @@ def _require_fleet_device_safe(device_id: str) -> None:
             "CAMERA_FLEET_SAFETY_KEYS_FILE 或 ARMFLEET_WX_NAV_KEYS_FILE）："
             "拒绝换绑，请完成部署配置后重试")
     base, keys_file, key_id = config
-    path = f"/v1/devices/{quote(device_id, safe='')}/wx-navigation-safety"
+    path = f"/v1/devices/{quote(device_id, safe='')}/safety-view"
     try:
         from runtime import service_signing as wna
         keys = wna.load_keys(str(keys_file))
@@ -547,7 +547,7 @@ def _assert_safety_confirmed(device_id: str, view) -> None:
 
     if not isinstance(view, dict):
         reject("安全视图不是对象")
-    if view.get("contract_version") != "wx-navigation-device-safety.v1":
+    if view.get("contract_version") != "device-safety-view.v1":
         reject(f"契约版本未知：{view.get('contract_version')!r}")
     if str(view.get("device_id") or "") != device_id:
         reject("设备身份不匹配")

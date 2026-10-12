@@ -86,7 +86,7 @@ ERROR_DICT: dict[str, tuple[int, str, str]] = {
     "supervision_running": (409, "设备正在托管", "请先停止当前托管，或直接使用已有托管配置。"),
     "supervision_unavailable": (409, "微信托管暂不可用", "请检查微信观测配置、OCR 引擎和设备摄像头后重试。"),
     "wx_compat_disabled": (409, "WX 业务监听未由此服务提供", "请在 WX 8787 页面管理名单和业务监听；Arm Fleet 仅负责通用硬件执行。"),
-    # 自动手势闭环与 WX 导航（规范第 14.1 节）
+    # 自动手势闭环与 业务 导航（规范第 14.1 节）
     "gesture_client_upgrade_required": (409, "手机端不支持手势采样", "请安装支持 gesture-capture.v1 的新 APK 后重试；本次未执行任何动作。"),
     "coordinate_frame_missing": (409, "缺少本次校准的坐标桥", "需在下一次获准机械校准时采集页面元数据；不能事后推测填充。"),
     "coordinate_frame_unsupported": (409, "当前方向或缩放不支持", "首版仅支持竖屏旋转 0、像素比例 1:1 的坐标桥。"),

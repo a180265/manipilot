@@ -54,7 +54,7 @@ VIEW_SESSION_STATUS: dict[str, str] = {
     "unavailable": "画面不可用",
 }
 
-# 微信/外部应用界面状态（由摄像头观测回报，平台只保存标准映射）
+# 应用/外部应用界面状态（由摄像头观测回报，平台只保存标准映射）
 UI_STATE: dict[str, str] = {
     "unknown": "未知",
     "wechat_main": "微信主界面",

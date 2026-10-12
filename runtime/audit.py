@@ -46,6 +46,7 @@ ACTION_DISPLAY: dict[str, str] = {
     "scroll_startup_scan": "滑动动作存储启动扫描",
     "scroll_startup_scan_failed": "滑动动作存储启动扫描失败（保持阻断）",
     "visual_pause_lease_released": "纯视觉未知释放任务租约（存储阻断承担）",
+    "device_safety_view": "设备安全视图查询（换绑/排空核对）",
     "wx_navigation_safety_view": "WX 恢复排空安全视图查询",
     "wx_review_receipt_issued": "WX 标读核对回执签发",
     "plugin_install": "安装插件",

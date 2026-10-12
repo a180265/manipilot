@@ -58,7 +58,7 @@ open tools/camera_helper/dist/CameraHelper.app     # GUI 里：刷新摄像头 �
 IME_BASE_URL=http://127.0.0.1:8788 .venv/bin/python scripts/motor_debug_server.py
 ```
 
-- 控制令牌与宿主安装指纹是**部署态**（`data/` 不入库）：令牌经 `scripts.camera_binding_v2.generate_control_token` 生成；安装指纹为 36 位小写 UUID（帧桥启动自举兜底生成）。摄像头绑定记录同理，可经 `camera_binding_v2.save_binding_v2` 播种或走 helper GUI 绑定（注意：运行时换绑写受安全门保护，未配置对应签名端点时会按设计拒绝）。
+- 控制令牌与宿主安装指纹是**部署态**（`data/` 不入库）：令牌经 `scripts.camera_binding_v2.generate_control_token` 生成；安装指纹为 36 位小写 UUID（帧桥启动自举兜底生成）。摄像头绑定记录同理，可经 `camera_binding_v2.save_binding_v2` 播种或走 helper GUI 绑定（运行时换绑写受设备安全视图保护：平台侧配 `FLEET_SAFETY_KEYS_FILE`、帧桥侧配 `CAMERA_FLEET_SAFETY_*` 后闭环可用，未配置时按设计 fail-closed 拒绝。）
 - `configs/devices.json` 以占位符示例入库；真机部署按现场修改后**按文件名精确 `git add`，不要整库 `-A`**（避免把本机硬件标识带进公开历史）。
 
 ## 开发边界（平台宪法，见 AGENTS.md）

@@ -190,7 +190,7 @@ def test_tampered_target_mode_rejected_without_tap(tmp_path):
                             if e.get("action") == "send_and_capture" and e.get("phase") == "done")
             assert send_log["outcome"] == "success"
             assert send_log["detail"]["provider_message_id"]
-            # 结果按失败回报 WX，不报告成功
+            # 结果按失败回报 业务，不报告成功
             result = fake_wx.results_by_task[done["task_id"]]
             assert result["status"] == "failed"
         finally:
@@ -262,7 +262,7 @@ def test_park_disconnect_is_unknown_and_keeps_send_result(tmp_path):
             # 不重试停靠、不重复点击
             moves = [e for e in arm.action_log if e.get("action") == "move_target"]
             assert len(moves) == 0, "断连后不得自动重试停靠"
-            # WX 收到 unknown 结果，带中文不确定性原因
+            # 业务 收到 unknown 结果，带中文不确定性原因
             result = fake_wx.results_by_task[done["task_id"]]
             assert result["status"] == "unknown" and result["uncertainty_reason"]
         finally:

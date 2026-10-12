@@ -73,7 +73,7 @@ def test_ten_devices_register_and_become_ready(tmp_path):
         assert device["camera_quality_display"] == "清晰"
         assert device["last_heartbeat_at"] is None or device["last_heartbeat_at"].endswith("Z")
         assert device["binding_mode"] == "simulation"
-        # 仿真槽位账号为 sim-acc-*；真机槽位（arm-01）账号待 WX 联调绑定（pending-real-acc-*）
+        # 仿真槽位账号为 sim-acc-*；真机槽位（arm-01）账号待 业务 联调绑定（pending-real-acc-*）
         assert device["wechat_account_id"].startswith(("sim-acc-", "pending-real-acc-"))
 
     # 十台设备编号唯一、槽位唯一、摄像头唯一、仿真账号唯一
