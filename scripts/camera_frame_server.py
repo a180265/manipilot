@@ -2125,6 +2125,19 @@ def main() -> None:
         fleet_db_path=args.fleet_db,
         evidence_dir=args.evidence_dir,
     )
+    # 部署自举：宿主代际指纹输入（36 位小写 UUID）缺失时自动生成。
+    # helper 的时序证明依赖它；缺失会导致 capture-sessions 握手 503
+    # （独立部署常见首障，2026-10-12 现场实证），这里兜底生成。
+    _install_id_path = _host_installation_id_file()
+    try:
+        _install_id_raw = _install_id_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        _install_id_raw = ""
+    if len(_install_id_raw) != 36 or _install_id_raw != _install_id_raw.lower():
+        import uuid as _uuid
+        _install_id_path.parent.mkdir(parents=True, exist_ok=True)
+        _install_id_path.write_text(str(_uuid.uuid4()) + "\n", encoding="utf-8")
+        print(f"已自动生成宿主安装指纹：{_install_id_path}", flush=True)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     register_active_server(server)
     _start_source_retention_loop()
