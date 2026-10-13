@@ -11,3 +11,4 @@ __pycache__/
 console/dist/
 build/
 node_modules/
+.build/
