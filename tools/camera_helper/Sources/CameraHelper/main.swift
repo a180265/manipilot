@@ -251,11 +251,12 @@ private final class FrameUploader: @unchecked Sendable {
         cameraID: String,
         device: AVCaptureDevice,
         credential: MachineCredential,
+        renew: Bool = false,
         completion: @escaping @Sendable (Result<String, V2Error>) -> Void
     ) {
         bindV2(cameraID: cameraID, uniqueID: device.uniqueID,
                localizedName: device.localizedName,
-               credential: credential, completion: completion)
+               credential: credential, renew: renew, completion: completion)
     }
 
     /// 绑定实现（AVFoundation 与合成采集源共用同一生产路径）。
@@ -264,13 +265,16 @@ private final class FrameUploader: @unchecked Sendable {
         uniqueID: String,
         localizedName: String,
         credential: MachineCredential,
+        renew: Bool = false,
         completion: @escaping @Sendable (Result<String, V2Error>) -> Void
     ) {
+        // renew：同一物理摄像头重复保存（原绑定未变）= 续期/重申（服务端
+        // 原子换发新代际）；首绑仍走 bind。避免"已绑定再保存"吃 409。
         let url = serverBaseURL
             .appendingPathComponent("cameras")
             .appendingPathComponent(cameraID)
-            .appendingPathComponent("binding-v2")
-        let request = bearerRequest(url, method: "PUT",
+            .appendingPathComponent(renew ? "binding-v2/renew" : "binding-v2")
+        let request = bearerRequest(url, method: renew ? "POST" : "PUT",
                                     jsonBody: ["requestId": UUID().uuidString,
                                                "deviceUniqueId": uniqueID,
                                                "displayName": localizedName],
@@ -624,6 +628,8 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
     private var syntheticFrameIndex: UInt64 = 0
     private var session: AVCaptureSession?
     private var lastFrameAt: CFTimeInterval = 0
+    /// 稳态推送节拍：按绝对时刻表放行（30fps 网格上目标 4fps 的稳定档位 = 3.75）。
+    private var nextAdmitAt: CFTimeInterval = 0
     private var sourceSequence: UInt64 = 0
     private var previewSequence: UInt64 = 0
     private var uploadInFlight = false
@@ -695,9 +701,10 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
             completion?(false)
             return
         }
-        publish("保存绑定（binding-v2）…")
+        let renew = isBound(to: device)
+        publish(renew ? "保存绑定（binding-v2/renew 续期）…" : "保存绑定（binding-v2）…")
         uploader.bindV2(cameraID: cameraID, device: device,
-                        credential: credential) { [weak self] result in
+                        credential: credential, renew: renew) { [weak self] result in
             guard let self else { return }
             switch result {
             case .failure(let error):
@@ -705,7 +712,7 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
                 completion?(false)
             case .success:
                 self.boundUniqueID = device.uniqueID
-                self.publish("绑定已保存，等待启动")
+                self.publish(renew ? "绑定已续期，等待启动" : "绑定已保存，等待启动")
                 completion?(true)
             }
         }
@@ -921,6 +928,7 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
             session = captureSession
             running = true
             lastFrameAt = 0
+            nextAdmitAt = CACurrentMediaTime()
             sourceSequence = 0
             frameWindowStart = CACurrentMediaTime()
             frameWindowCount = 0
@@ -1143,7 +1151,8 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
     ) {
         guard running else { return }
         let now = CACurrentMediaTime()
-        let shouldUploadOCR = !uploadInFlight && now - lastFrameAt >= 1.0 / max(pushFPS, 0.1)
+        // 稳态节拍：绝对时刻表放行（不做相对计时，上传耗时不再引起漂移）
+        let shouldUploadOCR = !uploadInFlight && now >= nextAdmitAt
         let shouldUploadPreview = previewViewerCount > 0
         guard shouldUploadOCR || shouldUploadPreview else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -1203,6 +1212,8 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
         }
 
         lastFrameAt = now
+        // 下一档 = 上一档 + 周期；积压落后时重置为当前，避免突发连推
+        nextAdmitAt = max(nextAdmitAt + 1.0 / max(pushFPS, 0.1), now)
         sourceSequence += 1
         frameWindowCount += 1
         let elapsed = now - frameWindowStart
@@ -1261,7 +1272,7 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
                     if sequence % 10 == 0 {
                         let uploadedAt = frozenPacket.capturedAtISO.suffix(9)
                         self.publish(String(
-                            format: "推流中 %dx%d · %.1ffps · %@",
+                            format: "推流中 %dx%d · %.0ffps · %@",
                             frozenPacket.width, frozenPacket.height, self.measuredFPS, String(uploadedAt)
                         ))
                         self.publishPreview(frozenPacket.jpeg)
@@ -1467,6 +1478,7 @@ private final class ChannelRow {
                     self.devicePopup.isEnabled = !started
                     self.saveButton.isEnabled = !started
                     self.fpsField.isEnabled = !started
+                    self.toggleButton.isEnabled = true
                     self.toggleButton.title = started ? "停止" : "启动"
                     self.syncControls()
                 }
@@ -1515,7 +1527,13 @@ private final class ChannelRow {
     }
 
     private func syncControls() {
-        guard !running else { return }
+        if running {
+            // 流式期间任何刷新（如设备弹窗重建竞态）都不得禁用"停止"：
+            // 曾致单行无法停止、只能"停止全部"（2026-10-13）。
+            toggleButton.isEnabled = true
+            toggleButton.title = "停止"
+            return
+        }
         let device = selectedDevice()
         toggleButton.isEnabled = channel.isBound(to: device)
         if device == nil {

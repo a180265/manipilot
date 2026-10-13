@@ -1541,6 +1541,9 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _error(self, status: int, code: str, message: str, **details) -> None:
+        if status >= 500:
+            print(f"[reject] {self.command} {self.path} -> {status} {code}: {message}",
+                  flush=True)
         self._json(status, {
             "ok": False,
             "error": {"code": code, "message": message, "details": details},
