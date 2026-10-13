@@ -633,6 +633,9 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
     private var previewPollTimer: DispatchSourceTimer?
     private var running = false
     var boundUniqueID: String?
+    /// 每通道推送帧率上限（GUI 每行可调，默认 8fps；夹取 1.0-30.0）。
+    /// 采集端经 videoMin/MaxFrameDuration 定节拍，上传端再按 1/fps 间隔闸门。
+    var pushFPS: Double = 8.0
     private var frameWindowStart: CFTimeInterval = 0
     private var frameWindowCount = 0
     private var measuredFPS = 0.0
@@ -655,6 +658,14 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
         self.uploader = uploader
         self.captureQueue = DispatchQueue(label: "camera-helper.\(cameraID)", qos: .userInitiated)
         super.init()
+    }
+
+    /// 设置推送帧率；非法值返回 false（GUI 侧提示），成功夹取到 1.0-30.0。
+    @discardableResult
+    func setPushFPS(_ value: Double) -> Bool {
+        guard value.isFinite, value >= 1.0, value <= 30.0 else { return false }
+        pushFPS = value
+        return true
     }
 
     func select(device: AVCaptureDevice?) {
@@ -901,6 +912,10 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
                               userInfo: [NSLocalizedDescriptionKey: "无法添加视频输出"])
             }
             captureSession.addOutput(output)
+            // 推送帧率控制（GUI 每行可调，默认 8）在**上传端闸门**实现
+            // （captureOutput 按 1/pushFPS 间隔放行）：本机 UVC 实测对
+            // videoMinFrameDuration 任何设置都可能停止出帧（2026-10-13），
+            // 采集层保持相机原生节奏，只控"推送"节奏。
             captureSession.commitConfiguration()
 
             session = captureSession
@@ -1128,7 +1143,7 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
     ) {
         guard running else { return }
         let now = CACurrentMediaTime()
-        let shouldUploadOCR = !uploadInFlight && now - lastFrameAt >= 0.1
+        let shouldUploadOCR = !uploadInFlight && now - lastFrameAt >= 1.0 / max(pushFPS, 0.1)
         let shouldUploadPreview = previewViewerCount > 0
         guard shouldUploadOCR || shouldUploadPreview else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -1362,6 +1377,8 @@ private final class ChannelRow {
     let previewView = NSImageView()
     let saveButton = NSButton(title: "保存绑定", target: nil, action: nil)
     let toggleButton = NSButton(title: "启动", target: nil, action: nil)
+    let fpsLabel = NSTextField(labelWithString: "帧率")
+    let fpsField = NSTextField(string: "8")
     let view = NSStackView()
 
     private var devices: [AVCaptureDevice] = []
@@ -1389,6 +1406,10 @@ private final class ChannelRow {
         toggleButton.bezelStyle = .rounded
         toggleButton.target = self
         toggleButton.action = #selector(toggle)
+        fpsLabel.font = .systemFont(ofSize: 12)
+        fpsField.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        fpsField.toolTip = "推送帧率（fps，1-30，默认 8）；启动时生效"
+        fpsField.widthAnchor.constraint(equalToConstant: 48).isActive = true
 
         view.orientation = .horizontal
         view.alignment = .centerY
@@ -1397,6 +1418,8 @@ private final class ChannelRow {
         view.addArrangedSubview(devicePopup)
         view.addArrangedSubview(previewView)
         view.addArrangedSubview(statusLabel)
+        view.addArrangedSubview(fpsLabel)
+        view.addArrangedSubview(fpsField)
         view.addArrangedSubview(saveButton)
         view.addArrangedSubview(toggleButton)
 
@@ -1430,6 +1453,11 @@ private final class ChannelRow {
 
     func start() {
         guard !running else { return }
+        guard let fps = Double(fpsField.stringValue.trimmingCharacters(in: .whitespaces)),
+              channel.setPushFPS(fps) else {
+            statusLabel.stringValue = "帧率无效：请输入 1-30 的数字（默认 8）"
+            return
+        }
         channel.select(device: selectedDevice())
         guard channel.start(completion: { [weak self] started in
             DispatchQueue.main.async {
@@ -1438,6 +1466,7 @@ private final class ChannelRow {
                     self.running = started
                     self.devicePopup.isEnabled = !started
                     self.saveButton.isEnabled = !started
+                    self.fpsField.isEnabled = !started
                     self.toggleButton.title = started ? "停止" : "启动"
                     self.syncControls()
                 }
@@ -1453,6 +1482,7 @@ private final class ChannelRow {
         channel.stop()
         devicePopup.isEnabled = true
         saveButton.isEnabled = true
+        fpsField.isEnabled = true
         toggleButton.title = "启动"
         syncControls()
     }
@@ -1541,7 +1571,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1060, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 1160, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false

@@ -53,7 +53,7 @@ cd console && npm install && npm run dev
 # 3) 摄像头辅助程序（GUI）。必须先注入两个环境变量，缺一会在界面报"V2 认证失败/不可用"：
 launchctl setenv CAMERA_CONTROL_TOKEN_FILE "$PWD/data/camera_helper/control.token"
 launchctl setenv CAMERA_HOST_INSTALLATION_ID_FILE "$PWD/data/camera_source/host_installation_id"
-open tools/camera_helper/dist/CameraHelper.app     # GUI 里：刷新摄像头 → 启动通道
+open tools/camera_helper/dist/CameraHelper.app     # GUI 里：刷新摄像头 → 启动通道（每行可设推送帧率，默认 8，详见 tools/camera_helper/README.md）
 # 4) 设备调试台（连接设备/点动/校准向导，8792）
 IME_BASE_URL=http://127.0.0.1:8788 .venv/bin/python scripts/motor_debug_server.py
 ```
