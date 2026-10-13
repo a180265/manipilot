@@ -4,7 +4,7 @@
 
 - 本仓（manipilot）是**独立的机械臂执行平台 SDK**：机械臂驱动、摄像头链路、屏幕输入法、统一校准、手势/滑动、任务运行时与控制台。它与任何外部业务系统**零代码耦合**——业务能力一律经 `api/contracts/` 版本化契约由外部插件接入。
 - 独立性有守卫测试固化：`tests/test_platform_isolation.py`（生产核心零业务适配层 import 的 AST 断言 + `create_app` 有/无可选扩展双形态子进程验证）。**提交前必须保持它绿**；核心代码不得 import 业务适配层或可选扩展。
-- **双载体提示**：本平台代码有两条演进线——本仓（独立 SDK，github.com/a180265/manipilot）与源仓内嵌副本（WX 项目 `arm_fleet/`，现役生产部署）。修改共享核心（`runtime/`、`drivers/`、`api/`、`adapters/screen_ime|vision|uinav`、`scripts/camera_frame_server.py`、`tasks/plugin_api.py`）时，**必须评估是否需要双向同步**，并在提交说明写明"仅本仓 / 仅源仓 / 已双向"及理由。仅业务侧文件（业务适配层、业务扩展、业务契约、业务插件）的改动不影响另一条线。
+- **双载体提示**：本平台代码有两条演进线——本仓（独立 SDK，github.com/a180265/manipilot）与源仓内嵌副本（WX 项目 `arm_fleet/`，现役生产部署）。修改共享核心（`runtime/`、`drivers/`、`api/`、`adapters/screen_ime|vision|uinav`、`scripts/camera_frame_server.py`、`tasks/plugin_api.py`）时，**必须评估是否需要双向同步**，并在提交说明写明"仅本仓 / 仅源仓 / 已双向"及理由。仅业务侧文件（业务适配层、业务扩展、业务契约、业务插件）的改动不影响另一条线。 **同步机制已上线（2026-10-14）**：漂移检查脚本与合法分叉清单住在源仓（WX `tools/check_fleet_sync.py` + `tools/fleet_sync_manifest.json`，规程=WX `docs/双仓同步规程.md`），本仓不放运维工具；收尾推送前可到源仓跑一次脚本确认两线对账干净。
 
 ## 开工必读
 
