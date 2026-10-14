@@ -109,7 +109,7 @@ def test_wizard_keeps_runner_container_access_whitelisted():
     # wizard 侧只允许经 self._auto_runner 白盒直达 runner；不允许裸 self._auto（除 _auto_cfg/_auto_runner）
     for i, line in enumerate(WIZARD_SRC.splitlines(), 1):
         stripped = line.strip()
-        if stripped.startswith("#") or "self._auto_" not in line:
+        if stripped.startswith("#") or "self._auto" not in line:
             continue
         for token in ("self._auto[", "self._auto.", "self._auto_lock", "self._auto_invalidate"):
             assert token not in line, \

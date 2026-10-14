@@ -2,7 +2,8 @@
 
 阶段常量、验收清单与异常家族被手动向导与 v1.1 自动 runner 两侧共用；
 独立成叶模块保证依赖 DAG 无环：calibration_wizard 与 calibration_auto_runner
-都只从本模块 import，互相不依赖。
+都从本模块取共享词汇，二者之间互不 import（wizard 另从 runner 取 AutoRunner
+与 v1.1 常量 re-export）。
 """
 from __future__ import annotations
 
