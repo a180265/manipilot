@@ -133,7 +133,7 @@ def test_uncertain_stop_cannot_be_hidden_by_plugin_or_trigger_recovery(tmp_path,
                 return {"home_ok": True}
 
             monkeypatch.setattr(arm, "stop", stop)
-            monkeypatch.setattr("runtime.runtime.TASK_STOP_TIMEOUT_SECONDS", 0.03)
+            monkeypatch.setattr("runtime.plugin_capabilities.TASK_STOP_TIMEOUT_SECONDS", 0.03)
             monkeypatch.setattr(runtime.devices, "home_check", home_check)
             task = runtime.submit_task(
                 probe_payload([{"is_action": True}]), source="console",
