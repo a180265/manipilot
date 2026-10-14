@@ -1170,8 +1170,9 @@ class HttpFrameSource:
         """取原始字节并完成身份/必填头/新鲜度/序号校验（单实现核心）。
 
         校准链（fetch_bytes）与观测链（__call__）共用本方法，保证两条链对
-        同一帧服务的头契约、超时与失败语义一致。seq 活性状态
-        （_last_seq/stream_alive）在此维护。
+        同一帧服务的头契约、超时与失败语义一致。seq 活性窗口
+        （_last_seq_at/stream_alive）在此维护；_last_seq 落账仍由 __call__
+        在解码与分辨率核对全过之后进行，decode 失败不推进序号基线。
         """
         import urllib.request
 
@@ -1251,21 +1252,24 @@ class HttpFrameSource:
             self.stream_alive = bool(
                 seq is not None and self._last_seq_at is not None
                 and time.monotonic() - self._last_seq_at <= self.seq_staleness_seconds)
+            camera_binding_id = (headers.get("X-Camera-Binding-Id") or "").strip() or None
+            source_clock_id = (headers.get("X-Source-Clock-Id") or "").strip() or None
+            frame_source = (headers.get("X-Frame-Source") or "").strip().lower() or None
         return _BridgeJpeg(
             data=data, seq=seq, camera_id=camera_id, device_id=device_id,
             device_unique_id=unique_id, legacy=legacy,
             binding_revision=binding_revision, captured_at=captured_at,
             received_at=received_at, width_header=width_header,
             height_header=height_header,
-            camera_binding_id=(headers.get("X-Camera-Binding-Id") or "").strip() or None,
+            camera_binding_id=camera_binding_id,
             source_geometry_id=source_geometry_id,
             source_generation_id=source_generation,
             source_capture_seq=source_capture_seq,
-            source_clock_id=(headers.get("X-Source-Clock-Id") or "").strip() or None,
+            source_clock_id=source_clock_id,
             source_captured_monotonic_ns=captured_monotonic_ns,
             source_capture_uncertainty_ms=capture_uncertainty_ms,
             source_timing_provenance=source_provenance,
-            frame_source=(headers.get("X-Frame-Source") or "").strip().lower() or None,
+            frame_source=frame_source,
         )
 
     def fetch_bytes(self) -> tuple[bytes, int | None]:
