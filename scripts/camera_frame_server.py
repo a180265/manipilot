@@ -407,7 +407,11 @@ def _controlled_clock_proof(helper_sha256: str, source_clock_id: str) -> dict:
     helper = _helper_exec_path()
     if helper is None or not helper.is_file():
         raise _FrameReject(503, "source_timing_unproven",
-                           "受控 helper 未配置：帧桥无法在本机核验时钟证明")
+                           "受控 helper 未配置：帧桥无法在本机核验时钟证明；"
+                           "请设置 CAMERA_HELPER_EXEC 指向受控 helper 可执行文件"
+                           "（取值见 tools/wx_service_console.py），或改经启停台启动帧桥"
+                           "（手工起桥三件套=CAMERA_HELPER_EXEC+CAMERA_CONTROL_TOKEN_FILE"
+                           "+CAMERA_HOST_INSTALLATION_ID_FILE；helper 被拒后须重启才会重试）")
     digest = v2_file_sha256(helper)
     if not _secrets.compare_digest(digest, helper_sha256):
         raise _FrameReject(503, "source_timing_unproven",
@@ -494,7 +498,7 @@ def _require_fleet_device_safe(device_id: str) -> None:
     """R3-11：换绑前核对持久在途任务/未解决未知/当前 daemon 安全事实。
 
     使用受信本机版本化 Fleet 安全查询（GET /v1/devices/{id}/
-    device-safety-view，服务签名）；读不全/过期/断网/任一阻断 → 保守拒绝。
+    wx-navigation-safety，服务签名）；读不全/过期/断网/任一阻断 → 保守拒绝。
     只读 STATUS，绝不代为 CONNECT/STOP/回零。
     """
     config = _fleet_safety_config()
@@ -507,7 +511,7 @@ def _require_fleet_device_safe(device_id: str) -> None:
             "CAMERA_FLEET_SAFETY_KEYS_FILE 或 ARMFLEET_WX_NAV_KEYS_FILE）："
             "拒绝换绑，请完成部署配置后重试")
     base, keys_file, key_id = config
-    path = f"/v1/devices/{quote(device_id, safe='')}/safety-view"
+    path = f"/v1/devices/{quote(device_id, safe='')}/wx-navigation-safety"
     try:
         from runtime import service_signing as wna
         keys = wna.load_keys(str(keys_file))
@@ -547,7 +551,7 @@ def _assert_safety_confirmed(device_id: str, view) -> None:
 
     if not isinstance(view, dict):
         reject("安全视图不是对象")
-    if view.get("contract_version") != "device-safety-view.v1":
+    if view.get("contract_version") != "wx-navigation-device-safety.v1":
         reject(f"契约版本未知：{view.get('contract_version')!r}")
     if str(view.get("device_id") or "") != device_id:
         reject("设备身份不匹配")
@@ -2128,19 +2132,6 @@ def main() -> None:
         fleet_db_path=args.fleet_db,
         evidence_dir=args.evidence_dir,
     )
-    # 部署自举：宿主代际指纹输入（36 位小写 UUID）缺失时自动生成。
-    # helper 的时序证明依赖它；缺失会导致 capture-sessions 握手 503
-    # （独立部署常见首障，2026-10-12 现场实证），这里兜底生成。
-    _install_id_path = _host_installation_id_file()
-    try:
-        _install_id_raw = _install_id_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        _install_id_raw = ""
-    if len(_install_id_raw) != 36 or _install_id_raw != _install_id_raw.lower():
-        import uuid as _uuid
-        _install_id_path.parent.mkdir(parents=True, exist_ok=True)
-        _install_id_path.write_text(str(_uuid.uuid4()) + "\n", encoding="utf-8")
-        print(f"已自动生成宿主安装指纹：{_install_id_path}", flush=True)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     register_active_server(server)
     _start_source_retention_loop()
