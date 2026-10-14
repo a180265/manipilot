@@ -38,7 +38,7 @@ def env(tmp_path):
         yield rig
     finally:
         rig.wizard.auto_stop()
-        thread = rig.wizard._auto["thread"]
+        thread = rig.wizard._auto_runner._auto["thread"]
         if thread is not None:
             thread.join(timeout=2)
             assert not thread.is_alive()

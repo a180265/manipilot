@@ -21,7 +21,7 @@ def test_r4_08_d_overshift_warns_and_continues_run():
     run 不中断、edge 基准推进（样本不作废）、无强制人工门。"""
     wizard = wizard_with_edge([[x + 30, y + 5] for x, y in SAVED])  # 超 4px
     run = {"edge": {"corners": SAVED, "frameSeq": 1}, "events": []}
-    wizard._auto_require_stable_phone(run)  # H01：不得抛 AutoRunError
+    wizard._auto_runner._auto_require_stable_phone(run)  # H01：不得抛 AutoRunError
     # 仅告警：样本不作废（edge 原样保留）、run 不中断、无强制人工门
     assert run["edge"]["corners"] == SAVED and run["edge"]["frameSeq"] == 1
     assert not any(e.get("event") == "operator_confirm_required"
@@ -34,7 +34,7 @@ def test_r4_08_d2_overshift_warning_records_measurable_details():
     """告警/事件携带可测位移与阈值；无法测得的值不得编造（None 保留）。"""
     wizard = wizard_with_edge([[x + 30, y + 5] for x, y in SAVED])
     run = {"edge": {"corners": SAVED, "frameSeq": 1}, "events": []}
-    wizard._auto_require_stable_phone(run)
+    wizard._auto_runner._auto_require_stable_phone(run)
     skips = [e for e in run["events"] if e.get("event") == "pose_gate_skipped"]
     assert skips, "必须有告警留痕"
     detail = skips[-1].get("detail") or {}
@@ -56,7 +56,7 @@ def test_r4_08_d3_warning_structured_fields_and_summary():
     poseWarnings 中文展示；旧记录（仅 reason）兼容显示未知不编造。"""
     wizard = wizard_with_edge([[x + 30, y + 5] for x, y in SAVED])
     run = {"edge": {"corners": SAVED, "frameSeq": 1}, "events": []}
-    wizard._auto_require_stable_phone(run)
+    wizard._auto_runner._auto_require_stable_phone(run)
     skips = [e for e in run["events"] if e.get("event") == "pose_gate_skipped"]
     assert skips, "必须有告警留痕"
     detail = skips[-1]["detail"]
@@ -68,7 +68,7 @@ def test_r4_08_d3_warning_structured_fields_and_summary():
     assert 29.0 < detail["measuredDisplacementPx"] < 32.0, detail
     assert detail.get("thresholdPx") == 4.0
     # 结束摘要（_auto_run_summary）携带 poseWarnings，进行中/结束后同源
-    summary = wizard._auto_run_summary(run)
+    summary = wizard._auto_runner._auto_run_summary(run)
     ws = summary.get("poseWarnings")
     assert ws, "结束摘要必须含姿态告警"
     w = ws[-1]
@@ -86,13 +86,13 @@ def test_r4_08_d4_unmeasurable_warning_keeps_null():
         raise ScreenEdgeError("edge_detect_failed", "当前帧无法定位手机四角")
     wizard._edge_quad = boom
     run = {"edge": {"corners": SAVED, "frameSeq": 1}, "events": []}
-    wizard._auto_require_stable_phone(run)
+    wizard._auto_runner._auto_require_stable_phone(run)
     skips = [e for e in run["events"] if e.get("event") == "pose_gate_skipped"]
     assert skips, run["events"]
     detail = skips[-1]["detail"]
     assert detail.get("measuredDisplacementPx") is None, detail
     assert detail.get("thresholdPx") == 4.0  # 阈值仍可给出
-    summary = wizard._auto_run_summary(run)
+    summary = wizard._auto_runner._auto_run_summary(run)
     assert summary["poseWarnings"][-1]["measuredDisplay"] == "姿态未核实"  # S1/L42 文案
 
 
@@ -101,7 +101,7 @@ def test_r4_08_d5_legacy_events_compat_display():
     wizard = wizard_with_edge(SAVED)
     run = {"events": [{"ts": "2026-10-05T00:00:00Z", "phase": "SAMPLE",
                        "event": "pose_gate_skipped", "detail": {"reason": "旧版留痕"}}]}
-    summary = wizard._auto_run_summary(run)
+    summary = wizard._auto_runner._auto_run_summary(run)
     w = summary["poseWarnings"][-1]
     assert w["reason"] == "旧版留痕"
     assert w["categoryDisplay"] == "未知" and w["stageDisplay"] == "未知"

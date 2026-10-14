@@ -84,7 +84,7 @@ def test_auto_acceptance_click_uses_complete_candidate_model(tmp_path):
         "z": {"zSafe": -5.0},
         "acceptance": {},
     }
-    env.wizard._auto["run"] = run
+    env.wizard._auto_runner._auto["run"] = run
     env.wizard.state["xy"]["fit"]["c"] = 900.0
 
     result = env.wizard.auto_acceptance_execute(run["runId"], "ime_input_tap")
@@ -214,7 +214,7 @@ def test_auto_runner_position_contention_preserves_calibration(
     bundle_before = bundle_path.read_bytes()
     entered, release, reading = threading.Event(), threading.Event(), threading.Event()
     phase_method = "_auto_e_acceptance" if outcome.startswith("e_") else "_auto_phase2_validate"
-    original_phase = getattr(env.wizard, phase_method)
+    original_phase = getattr(env.wizard._auto_runner, phase_method)
     timer = None
 
     def read(**kwargs):
@@ -239,7 +239,7 @@ def test_auto_runner_position_contention_preserves_calibration(
                 timer.start()
             return original_phase(run, *args, **kwargs)
 
-        monkeypatch.setattr(env.wizard, phase_method, phase2)
+        monkeypatch.setattr(env.wizard._auto_runner, phase_method, phase2)
         env.wizard.auto_start(defer_input_acceptance=False)
         run_id = env.wizard.auto_view()["runId"]
         try:
@@ -253,7 +253,7 @@ def test_auto_runner_position_contention_preserves_calibration(
                 assert view["phase"] == "E_ACCEPTANCE", view["lastFailure"]
                 assert view["lastFailure"] is None
                 assert view["validation"]["passed"]
-                assert len([s for s in env.wizard._auto["run"]["samples"]
+                assert len([s for s in env.wizard._auto_runner._auto["run"]["samples"]
                             if s["phase"] == "PHASE2_VALIDATE"]) == 16
             elif mode == "busy":
                 view = wait_auto(env, lambda view: view["state"] == "FAILED", timeout=2)
@@ -276,7 +276,7 @@ def test_auto_runner_position_contention_preserves_calibration(
             if timer is not None:
                 timer.join(timeout=1)
             env.wizard.auto_stop(run_id)
-            env.wizard._auto["thread"].join(timeout=2)
+            env.wizard._auto_runner._auto["thread"].join(timeout=2)
 
 
 def test_auto_run_does_not_continue_after_initial_park_failure(tmp_path, monkeypatch):
@@ -285,7 +285,7 @@ def test_auto_run_does_not_continue_after_initial_park_failure(tmp_path, monkeyp
     env = auto_ready_env(tmp_path)
     commands_before = list(env.daemon.cmds)
     phase0 = []
-    monkeypatch.setattr(env.wizard, "_auto_phase0_camera", lambda run: phase0.append(True))
+    monkeypatch.setattr(env.wizard._auto_runner, "_auto_phase0_camera", lambda run: phase0.append(True))
 
     def busy(**kwargs):
         raise debug.DaemonCommandError("status_read_busy", "位置只读查询持续忙")
@@ -334,7 +334,7 @@ def failed_e_snapshot(tmp_path_factory):
     )
     env.wizard.auto_start(defer_input_acceptance=False)
     view = wait_auto(env, lambda view: view["state"] == "FAILED", timeout=15)
-    env.wizard._auto["thread"].join(timeout=2)
+    env.wizard._auto_runner._auto["thread"].join(timeout=2)
     assert view["phase"] == "E_ACCEPTANCE"
     assert view["lastFailure"]["code"] == "acceptance_timeout"
     run = cb.load_candidate("arm-01", view["runId"], root)
@@ -393,7 +393,7 @@ def test_e_resume_requires_fresh_idle_park_after_unknown_cleanup(
     before = cb.candidate_path("arm-01", run["runId"], tmp_path).read_bytes()
     commands = list(env.daemon.cmds)
     spawned = []
-    monkeypatch.setattr(env.wizard, "_auto_spawn", lambda *args, **kwargs: spawned.append(True))
+    monkeypatch.setattr(env.wizard._auto_runner, "_auto_spawn", lambda *args, **kwargs: spawned.append(True))
 
     def read(**kwargs):
         pos = env.daemon.mpos()
@@ -444,7 +444,7 @@ def test_e_resume_preserves_unknown_cleanup_and_records_new_position(
         return env.daemon.mpos()
 
     env.wizard._position_read = read
-    monkeypatch.setattr(env.wizard, "_auto_spawn", lambda *args, **kwargs: None)
+    monkeypatch.setattr(env.wizard._auto_runner, "_auto_spawn", lambda *args, **kwargs: None)
     commands = list(env.daemon.cmds)
     env.wizard.auto_resume_acceptance(run["runId"])
 
@@ -476,12 +476,12 @@ def test_e_resume_rechecks_position_in_runner_before_any_action(resumable_e):
         assert len(reads) == 2
     finally:
         env.wizard.auto_stop()
-        env.wizard._auto["thread"].join(timeout=2)
+        env.wizard._auto_runner._auto["thread"].join(timeout=2)
 
 
 def test_e_resume_manual_execution_cannot_bypass_position_gate(resumable_e, monkeypatch):
     env, run = resumable_e
-    monkeypatch.setattr(env.wizard, "_auto_spawn", lambda *args, **kwargs: None)
+    monkeypatch.setattr(env.wizard._auto_runner, "_auto_spawn", lambda *args, **kwargs: None)
     env.wizard.auto_resume_acceptance(run["runId"])
     commands = list(env.daemon.cmds)
     env.wizard._position_read = lambda **kwargs: {**env.daemon.mpos(), "state": "Run"}
@@ -528,4 +528,4 @@ def test_e_resume_position_wait_cancellation_never_parks(resumable_e, tmp_path):
         assert saved["events"][-1]["event"] == "safe_park_skipped"
     finally:
         env.wizard.auto_stop()
-        env.wizard._auto["thread"].join(timeout=2)
+        env.wizard._auto_runner._auto["thread"].join(timeout=2)

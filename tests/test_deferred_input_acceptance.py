@@ -246,7 +246,7 @@ def test_deferred_mode_cancellation_never_promotes(tmp_path, monkeypatch):
     def cancel(_run):
         raise cw._AutoCancelled()
 
-    monkeypatch.setattr(env.wizard, "_auto_validate_independent", cancel)
+    monkeypatch.setattr(env.wizard._auto_runner, "_auto_validate_independent", cancel)
     env.wizard.auto_start(defer_input_acceptance=True)
     view = wait_auto(env, lambda v: v["state"] not in cw.AUTO_ACTIVE_STATES)
     assert view["state"] == cw.AUTO_STATE_STOPPED
@@ -261,7 +261,7 @@ def test_deferred_independent_failure_does_not_promote(tmp_path, monkeypatch):
     def fail(_run):
         raise cw.AutoRunError("independent_validation_failed", "test validation failure")
 
-    monkeypatch.setattr(env.wizard, "_auto_validate_independent", fail)
+    monkeypatch.setattr(env.wizard._auto_runner, "_auto_validate_independent", fail)
     env.wizard.auto_start(defer_input_acceptance=True)
     view = wait_auto(env, lambda v: v["state"] not in cw.AUTO_ACTIVE_STATES)
     assert view["state"] == cw.AUTO_STATE_FAILED

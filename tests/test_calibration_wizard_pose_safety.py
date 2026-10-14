@@ -236,7 +236,7 @@ def automatic_run(env):
         "locks": {"cameraToScreen": {"state": cb.MODEL_LOCK_LOCKED}},
         "samples": [], "edge": deepcopy(env.wizard.state["geometry"]["edge"]),
     }
-    env.wizard._auto["run"] = run
+    env.wizard._auto_runner._auto["run"] = run
     env.wizard._target_detector = env.green_from_armed()
     return run
 
@@ -256,7 +256,7 @@ def test_automatic_precheck_requires_pose_and_binding_before_first_motion(bound_
         env.wizard.state["binding"] = None
         run["binding"] = {}
     with pytest.raises(cw.AutoRunError) as error:
-        env.wizard._auto_phase_precheck(run)
+        env.wizard._auto_runner._auto_phase_precheck(run)
     assert error.value.park is False
     assert env.daemon.cmds == []
 
@@ -264,7 +264,7 @@ def test_automatic_precheck_requires_pose_and_binding_before_first_motion(bound_
 def test_automatic_precheck_accepts_bound_fresh_formal_phone_pose(bound_env):
     env = bound_env
     run = automatic_run(env)
-    env.wizard._auto_phase_precheck(run)
+    env.wizard._auto_runner._auto_phase_precheck(run)
     assert run["edge"]["frameSeq"] > 0
     assert run["edge"]["corners"] == env.quad["corners"]
     assert env.daemon.cmds == []
@@ -286,16 +286,16 @@ def test_phase1_real_sampling_does_not_learn_or_replay_changed_pose(bound_env, m
     point = {"id": "pose-safety-center", "u": .5, "v": .5}
     if moved:
         with pytest.raises(cw.AutoRunError) as error:
-            env.wizard._auto_phase1_point(run, point)
+            env.wizard._auto_runner._auto_phase1_point(run, point)
         assert error.value.code == "camera_measurement_error"
         assert len(run["samples"]) == 1
         assert run["samples"][0]["eligible"] is False
         with pytest.raises(cw.AutoRunError) as learning:
-            env.wizard._auto_update_arm_candidate(run)
+            env.wizard._auto_runner._auto_update_arm_candidate(run)
         assert learning.value.code == "arm_samples_insufficient"
         assert run["arm"] == previous_model
     else:
-        sample = env.wizard._auto_phase1_point(run, point)
+        sample = env.wizard._auto_runner._auto_phase1_point(run, point)
         assert sample["eligible"] is True
         assert sample["actualTouch"] == pytest.approx([540, 1200])
     assert env.daemon.tap_count == 1
@@ -314,7 +314,7 @@ def test_automatic_sample_cannot_rebase_reference_while_reporting(bound_env):
 
     env.daemon.on_tap = replace_reference
     with pytest.raises((cw.WizardError, cw.AutoRunError)):
-        env.wizard._auto_click_point(
+        env.wizard._auto_runner._auto_click_point(
             run, "replaced-reference", .5, .5, "PHASE1_ARM", use_camera=False)
     assert env.daemon.tap_count == 1
     assert len(run["samples"]) == 1
@@ -336,7 +336,7 @@ def test_automatic_report_rechecks_run_reference_and_binding(bound_env, fault):
             for saved, live in zip(run["edge"]["corners"], env.quad["corners"]):
                 saved[:] = live
         elif fault == "run_replaced":
-            env.wizard._auto["run"] = {**run}
+            env.wizard._auto_runner._auto["run"] = {**run}
         elif fault == "run_stopped":
             run["state"] = cw.AUTO_STATE_STOPPED
         elif fault == "binding_changed":
@@ -349,7 +349,7 @@ def test_automatic_report_rechecks_run_reference_and_binding(bound_env, fault):
 
     env.daemon.on_tap = change_during_report
     with pytest.raises((cw.WizardError, cw.AutoRunError)):
-        env.wizard._auto_click_point(
+        env.wizard._auto_runner._auto_click_point(
             run, "report-identity", .5, .5, "PHASE1_ARM", use_camera=False)
     assert env.daemon.tap_count == 1
     assert len(run["samples"]) == 1
@@ -364,7 +364,7 @@ def test_complete_auto_run_accepts_one_real_protocol_touch(
     wizard = rig.wizard
     binding = wizard._read_binding_facts()
     wizard.state["binding"] = deepcopy(binding)
-    wizard._auto["run"] = {
+    wizard._auto_runner._auto["run"] = {
         "runId": "bound-protocol-auto", "state": cw.AUTO_STATE_RUNNING,
         "phoneSessionId": rig.sid, "daemonSession": rig.daemon.session,
         "binding": deepcopy(binding), "edge": wizard._edge_quad(),

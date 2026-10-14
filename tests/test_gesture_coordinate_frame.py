@@ -291,7 +291,7 @@ class TestWizardSidecarSave:
         ime = _FakeIme(error=RuntimeError("boom: legacy metadata fetch failed"))
         wizard = _make_wizard(tmp_path, ime)
         run = {"phase": "PROMOTE", "events": []}
-        wizard._auto["run"] = run
+        wizard._auto_runner._auto["run"] = run
         wizard._save_gesture_coordinate_frame(bundle)  # 不抛
         assert gp.load_coordinate_frame("arm-01", data_root=tmp_path) is None
         events = run["events"]

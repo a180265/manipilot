@@ -1,6 +1,7 @@
 """A calibration run cannot combine samples after the phone has moved."""
 import pytest
 
+from drivers.calibration_auto_runner import AutoRunner
 from drivers.calibration_wizard import AutoRunError, CalibrationWizard, WizardError
 
 
@@ -11,13 +12,14 @@ def wizard_with_edge(live):
     wizard = object.__new__(CalibrationWizard)
     wizard._edge_detector = object()
     wizard._edge_quad = lambda: {"corners": live, "frameSeq": 2}
+    wizard._auto_runner = AutoRunner(wizard)  # Auto_CS#8：runner 自治，宿主仅提供 host 面
     return wizard
 
 
 def test_current_phone_position_allows_same_run():
     wizard = wizard_with_edge([[x + 1, y + 1] for x, y in SAVED])
     run = {"edge": {"corners": SAVED, "frameSeq": 1}}
-    wizard._auto_require_stable_phone(run)
+    wizard._auto_runner._auto_require_stable_phone(run)
     assert run["edge"]["frameSeq"] == 2
 
 
@@ -32,7 +34,7 @@ def test_phone_shift_or_contour_change_h01_semantics(live, tolerated):
     2026-09-29 真机定案由鲁棒拟合剔角容忍，返回可用四角。"""
     wizard = wizard_with_edge(live)
     run = {"edge": {"corners": SAVED, "frameSeq": 1}, "events": []}
-    result = wizard._auto_require_stable_phone(run, after_travel=True)
+    result = wizard._auto_runner._auto_require_stable_phone(run, after_travel=True)
     skips = [e for e in run["events"] if e.get("event") == "pose_gate_skipped"]
     if tolerated:
         assert result is not None and result.get("corners"), "单角噪声容忍后返回可用四角"
@@ -49,11 +51,11 @@ def test_missing_baseline_aborts_but_unlocatable_live_warns():
     H01 告警+None（R4-08-D：定位无法复核如实提示，不编造也不作担保）。"""
     wizard = wizard_with_edge(SAVED)
     with pytest.raises(AutoRunError):
-        wizard._auto_require_stable_phone({"edge": None})
+        wizard._auto_runner._auto_require_stable_phone({"edge": None})
     wizard._edge_quad = lambda: (_ for _ in ()).throw(
         WizardError("screen_edge_not_detected"))
     run = {"edge": {"corners": SAVED, "frameSeq": 1}, "events": []}
-    result = wizard._auto_require_stable_phone(run)
+    result = wizard._auto_runner._auto_require_stable_phone(run)
     assert result is None
     skips = [e for e in run["events"] if e.get("event") == "pose_gate_skipped"]
     assert skips and "screen_edge_not_detected" in str(skips[-1]["detail"].get("reason"))
@@ -65,7 +67,7 @@ def test_stale_stream_cannot_vouch_stability(monkeypatch):
     wizard = wizard_with_edge(SAVED)
     monkeypatch.setattr("drivers.calibration_wizard.time.sleep", lambda _: None)
     run = {"edge": {"corners": SAVED, "frameSeq": 2}, "events": []}
-    result = wizard._auto_require_stable_phone(run, after_travel=True)
+    result = wizard._auto_runner._auto_require_stable_phone(run, after_travel=True)
     assert result is None, "陈旧流不得返回可用四角"
     assert run["edge"]["frameSeq"] == 2
     skips = [e for e in run["events"] if e.get("event") == "pose_gate_skipped"]

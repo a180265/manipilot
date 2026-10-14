@@ -1267,7 +1267,7 @@ def test_p09_park_entries_check_park_own_confirmed_session(tmp_path):
     # 自动 run 收尾停车：只收 Z，不走 XY，事件留痕。
     run = {"safePark": dict(park), "z": {"zSafe": 8.0}}
     env.daemon.cmds.clear()
-    env.wizard._auto_safe_park(run, best_effort=True)
+    env.wizard._auto_runner._auto_safe_park(run, best_effort=True)
     assert run["lastPark"].get("zOnly") is True
     assert not any(command.startswith("XY ") for command in env.daemon.cmds)
     assert any(command.startswith("Z ") for command in env.daemon.cmds)
@@ -1843,7 +1843,7 @@ def test_auto_e_execution_failure_never_promotes(tmp_path, failure, failed_check
             env.wizard.auto_acceptance_record(run_id, "debug", failed_check, True)
     finally:
         env.wizard.auto_stop()
-        env.wizard._auto["thread"].join(timeout=2)
+        env.wizard._auto_runner._auto["thread"].join(timeout=2)
 
 
 def test_auto_acceptance_delete_key_ui_first_with_window_rebind(tmp_path):
@@ -2343,7 +2343,7 @@ def test_auto_arm_regression_rollback_keeps_previous_model(tmp_path):
             "actualTouch": [sx + offsets[i][0], sy + offsets[i][1]],
         })
     with pytest.raises(cw.AutoRunError, match="变差"):
-        env.wizard._auto_update_arm_candidate(run)
+        env.wizard._auto_runner._auto_update_arm_candidate(run)
     assert run["arm"]["residualRmsPx"] == 0.2  # 旧模型未被覆盖（rollback）
 
 
@@ -2809,7 +2809,7 @@ def test_auto_arm_fit_upgrades_to_quadratic(env):
                          for i in range(16)],
            "arm": None, "iteration": 1, "armHistory": [],
            "locks": {"armAffine": {}, "cameraToScreen": {}}}
-    env.wizard._auto_update_arm_candidate(run)
+    env.wizard._auto_runner._auto_update_arm_candidate(run)
     model = run["arm"]["robotToScreen"]
     assert "qx2" in model and "py2" in model, "16 点带二次畸变必须升级二次模型"
     assert run["arm"]["residualRmsPx"] < 0.5

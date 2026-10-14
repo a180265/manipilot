@@ -77,6 +77,7 @@ from drivers.calibration_wizard import (  # noqa: E402
 from adapters.vision.ocr import AppleVisionOcrEngine  # noqa: E402
 from drivers.daemon_protocol import (  # noqa: E402
     DEFAULT_TARGET_MODES,
+    split_segments,
     DOUBLE_TAP_FEATURE,
     LEASE_OWNER_DEBUG,
     TARGET_DISPLAY_NAMES,
@@ -2528,15 +2529,6 @@ def _check_feed(feed: float, axis: str) -> None:
     check_feed(feed, axis=axis)
 
 
-def _split(value: float, limit: float) -> list[float]:
-    """把位移拆成 ≤limit 的分段（daemon 单段行程软限位）。"""
-    if abs(value) <= limit:
-        return [value]
-    n = int(abs(value) / limit) + (1 if abs(value) % limit > 1e-9 else 0)
-    step = value / n
-    return [step] * n
-
-
 def _move_z_to(device: str, target_z: float, feed: float) -> dict:
     """把 Z 调整到悬停高度（相对分段，遵守单段 ≤10mm 软限位）。"""
     daemon = daemon_for(device)
@@ -2545,7 +2537,7 @@ def _move_z_to(device: str, target_z: float, feed: float) -> dict:
         dz = target_z - mpos["z"]
         if abs(dz) < 0.05:
             return mpos
-        for chunk in _split(dz, Z_STROKE_MAX - 0.5):
+        for chunk in split_segments(dz, Z_STROKE_MAX - 0.5):
             mpos = json.loads(daemon.cmd(f"Z {chunk:.3f} F{feed:g}"))
         return mpos
 

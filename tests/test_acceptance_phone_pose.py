@@ -78,7 +78,7 @@ def candidate(env):
         "binding": {"frameWidth": CAM_W, "frameHeight": CAM_H},
         "z": {"zSafe": 5.0}, "acceptance": {}, "samples": [],
     }
-    env.wizard._auto["run"] = run
+    env.wizard._auto_runner._auto["run"] = run
     return run
 
 
@@ -264,7 +264,7 @@ def test_auto_acceptance_cannot_switch_run_while_waiting(env, candidate, monkeyp
 
     def changed_run(*args, **kwargs):
         result = wait(*args, **kwargs)
-        env.wizard._auto["run"] = None if change == "ended" else deepcopy(candidate)
+        env.wizard._auto_runner._auto["run"] = None if change == "ended" else deepcopy(candidate)
         return result
 
     monkeypatch.setattr(env.ime, "wait_task_displayed", changed_run)

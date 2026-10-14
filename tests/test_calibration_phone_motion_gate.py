@@ -94,7 +94,7 @@ def test_phone_moving_during_arm_delay_never_reaches_calibration_press(
            # 补齐字段以到达目标门（绑定一致性由 r6_s1 套件单独断言）。
            "edge": {"corners": baseline,
                     "frameW": env.quad["frameW"], "frameH": env.quad["frameH"]}}
-    wizard._auto["run"] = run
+    wizard._auto_runner._auto["run"] = run
     sid = wizard.state["imeSessionId"]
     motions = []
 

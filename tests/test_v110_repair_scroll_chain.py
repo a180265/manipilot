@@ -348,7 +348,7 @@ def test_f07_2_calibration_completes_without_input_acceptance(tmp_path, monkeypa
     assert bundle["acceptance"]["debug"] is False
     assert (bundle["acceptance"]["deferred"] or {}).get("debug") is True
     run_id = bundle["autoCalibration"]["runId"]
-    run = env.wizard._auto.get("run")
+    run = env.wizard._auto_runner._auto.get("run")
     candidate = __import__("drivers.calibration_bundle", fromlist=["cb"]).load_candidate(
         "arm-01", run_id, tmp_path)
     assert candidate is not None and candidate.get("deferInputAcceptance") is True

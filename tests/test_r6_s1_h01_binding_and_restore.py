@@ -19,6 +19,7 @@ sys.path.insert(0, ".")
 sys.path.insert(0, "..")
 
 from drivers import calibration_bundle as cb
+from drivers.calibration_auto_runner import AutoRunner
 from drivers.calibration_wizard import AutoRunError, CalibrationWizard
 from tests.test_auto_calibration_phone_pose import SAVED, wizard_with_edge
 
@@ -30,7 +31,7 @@ def test_r6_s1_binding_frame_mismatch_hard_rejects():
            "binding": {"frameWidth": 999, "frameHeight": 480},
            "events": []}
     with pytest.raises(AutoRunError) as error:
-        wizard._auto_require_stable_phone(run)
+        wizard._auto_runner._auto_require_stable_phone(run)
     assert "binding_frame_mismatch" in str(error.value) or \
         getattr(error.value, "code", "") == "binding_frame_mismatch", str(error.value)
     # 硬拒不是告警：不得产生 pose_gate_skipped（绑定异常不属于 H01 采样姿态）
@@ -49,18 +50,18 @@ def test_r6_s1_pose_unverified_wording():
         raise ScreenEdgeError("edge_detect_failed", "当前帧无法定位手机四角")
     wizard._edge_quad = boom
     run = {"edge": {"corners": SAVED, "frameSeq": 1}, "events": []}
-    assert wizard._auto_require_stable_phone(run) is None
+    assert wizard._auto_runner._auto_require_stable_phone(run) is None
     detail = [e for e in run["events"]
               if e.get("event") == "pose_gate_skipped"][-1]["detail"]
     assert detail.get("measuredDisplacementPx") is None
     assert detail.get("categoryDisplay") == "采样姿态未核实提示", detail
-    summary = wizard._auto_run_summary(run)
+    summary = wizard._auto_runner._auto_run_summary(run)
     w = summary["poseWarnings"][-1]
     assert w["measuredDisplay"] == "姿态未核实", w
     # 可测得时仍为超限提示（不因文案修改变含糊）
     wizard2 = wizard_with_edge([[x + 30, y + 5] for x, y in SAVED])
     run2 = {"edge": {"corners": SAVED, "frameSeq": 1}, "events": []}
-    wizard2._auto_require_stable_phone(run2)
+    wizard2._auto_runner._auto_require_stable_phone(run2)
     d2 = [e for e in run2["events"]
           if e.get("event") == "pose_gate_skipped"][-1]["detail"]
     assert d2.get("categoryDisplay") == "采样姿态超限提示", d2
@@ -71,9 +72,7 @@ def _wizard_for_view(tmp_path, device="arm-01"):
     wizard.device = device
     wizard.data_root = Path(tmp_path)
     wizard._lock = threading.RLock()
-    wizard._auto_lock = threading.RLock()
-    wizard._auto = {"run": None, "thread": None, "cancel": threading.Event(),
-                    "lastRun": None, "action_lock": None}
+    wizard._auto_runner = AutoRunner(wizard)
     wizard.state = {}
     return wizard
 

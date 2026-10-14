@@ -107,7 +107,7 @@ def test_wizard_rejects_unrelated_metadata_without_overwriting_old_sidecar(tmp_p
         metadata["page"]["rotation"] = 1
     wizard.ime = _FakeIme(metadata=metadata)
     run = {"phase": "PROMOTE", "events": []}
-    wizard._auto["run"] = run
+    wizard._auto_runner._auto["run"] = run
 
     wizard._save_gesture_coordinate_frame(bundle)
 
@@ -120,7 +120,7 @@ def test_missing_metadata_records_reason_instead_of_silently_keeping_old_frame(t
     cb.save_bundle(bundle, tmp_path)
     wizard = _make_wizard(tmp_path, _FakeIme(metadata=None))
     run = {"phase": "PROMOTE", "events": []}
-    wizard._auto["run"] = run
+    wizard._auto_runner._auto["run"] = run
 
     wizard._save_gesture_coordinate_frame(bundle)
 

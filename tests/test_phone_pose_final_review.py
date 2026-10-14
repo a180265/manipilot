@@ -577,7 +577,7 @@ def test_automatic_calibration_drift_during_arming_wait_warns_and_rejects_sample
     后门兜底：姿态无法核实 → AutoRunError，样本不进学习。"""
     env = calibration_env
     env.wizard._phone_arm_lead_s = .25
-    env.wizard._auto["run"] = auto_run_for(env)
+    env.wizard._auto_runner._auto["run"] = auto_run_for(env)
 
     def phone_moves(_seconds):
         env.quad["corners"] = [[x + 6, y] for x, y in env.quad["corners"]]
@@ -586,7 +586,7 @@ def test_automatic_calibration_drift_during_arming_wait_warns_and_rejects_sample
     with pytest.raises(cw.AutoRunError, match="姿态无法核实"):
         env.wizard._tap_with_report(
             "moving-before-press", lambda: env.wizard._daemon_tap(3, 1500, 0))
-    run = env.wizard._auto["run"]
+    run = env.wizard._auto_runner._auto["run"]
     # H01 取舍：位移超限不拦停按压（人工测试兜底），但必须留痕可审计
     assert env.daemon.tap_count == 1
     skips = [e for e in run.get("events", [])
@@ -603,7 +603,7 @@ def test_automatic_calibration_sample_eligibility_requires_one_phone_pose(
         calibration_env, move_during_report):
     env = calibration_env
     run = auto_run_for(env)
-    env.wizard._auto["run"] = run
+    env.wizard._auto_runner._auto["run"] = run
     env.wizard._target_detector = env.green_from_armed()
     original = env.daemon.on_tap
 
@@ -615,7 +615,7 @@ def test_automatic_calibration_sample_eligibility_requires_one_phone_pose(
     env.daemon.on_tap = moved_while_touch_was_reported
     sample = None
     try:
-        sample = env.wizard._auto_click_point(
+        sample = env.wizard._auto_runner._auto_click_point(
             run, "pose-review-center", .5, .5, "PHASE1_ARM", use_camera=False)
     except (cw.WizardError, cw.AutoRunError):
         if not move_during_report:

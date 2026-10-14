@@ -135,7 +135,7 @@ def test_real_protocol_accepts_one_matching_touch(
     sample_id, pre = prepare(rig, prearmed, target)
     monkeypatch.setattr(cw.time, "sleep", lambda seconds: None)
     if automatic:
-        rig.wizard._auto["run"] = {
+        rig.wizard._auto_runner._auto["run"] = {
             "runId": "review-auto", "state": cw.AUTO_STATE_RUNNING,
             "phoneSessionId": rig.sid,
             "daemonSession": rig.daemon.session,
@@ -244,13 +244,13 @@ def test_active_auto_cancel_during_lead_rejects_before_motion(
         protocol_rig, monkeypatch, prearmed):
     rig = protocol_rig
     sample_id, pre = prepare(rig, prearmed)
-    rig.wizard._auto["run"] = {
+    rig.wizard._auto_runner._auto["run"] = {
         "runId": "review-auto", "state": cw.AUTO_STATE_RUNNING,
         "phoneSessionId": rig.sid,
     }
 
     def cancel_during_lead(seconds):
-        rig.wizard._auto["cancel"].set()
+        rig.wizard._auto_runner._auto["cancel"].set()
 
     monkeypatch.setattr(cw.time, "sleep", cancel_during_lead)
     motions = []
@@ -274,13 +274,13 @@ def test_changed_auto_run_cannot_authorize_original_operation(
         "runId": "review-auto", "state": cw.AUTO_STATE_RUNNING,
         "phoneSessionId": rig.sid,
     }
-    rig.wizard._auto["run"] = run
+    rig.wizard._auto_runner._auto["run"] = run
 
     def change_during_lead(seconds):
         if change == "removed":
-            rig.wizard._auto["run"] = None
+            rig.wizard._auto_runner._auto["run"] = None
         elif change == "replaced":
-            rig.wizard._auto["run"] = dict(run)
+            rig.wizard._auto_runner._auto["run"] = dict(run)
         else:
             run["state"] = cw.AUTO_STATE_STOPPED
 
@@ -452,7 +452,7 @@ def test_outer_auto_disarm_preserves_replacement_after_inner_gate_cleanup(
         assert_no_motion(rig, sample_id, pre)
     finally:
         # Reproduce the outer finally after _tap_with_report already cleaned up.
-        rig.wizard._auto_disarm(armed)
+        rig.wizard._auto_runner._auto_disarm(armed)
 
     assert rig.ime.get_session(rig.sid) == replacement
     assert replacement["armed"] == {"sampleId": sample_id, "sequence": 2}
