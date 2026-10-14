@@ -1952,31 +1952,28 @@ def _camera_point_to_robot(bundle: dict, robot_to_screen: dict,
 # ---------- 摄像头 ----------
 
 def fetch_camera_frame(device: str) -> tuple[bytes, int]:
+    """校准链取帧唯一入口：经 HttpFrameSource 单实现（Auto_CS#6）。
+
+    与观测链同一套契约（身份/必填头/新鲜度校验，失败同样收敛为
+    RuntimeError）；返回桥上原字节（证据存档与 MJPEG 不二次编码）。
+    """
     cfg = device_config(device)
-    expected_camera = str(cfg.get("camera_id") or "")
-    req = urllib.request.Request(camera_frame_url_for(device))
+    camera_id = str(cfg.get("camera_id") or "")
+    source = HttpFrameSource(
+        camera_frame_url_for(device),
+        expected_camera_id=camera_id,
+        expected_device_id=device,
+        allow_legacy=cfg.get("camera_mode") == "legacy_single",
+    )
     try:
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = resp.read()
-            seq = int(resp.headers.get("X-Frame-Seq", "0"))
-            actual_camera = resp.headers.get("X-Camera-Id")
-            actual_device = resp.headers.get("X-Device-Id")
-            legacy = cfg.get("camera_mode") == "legacy_single"
-            if not legacy and actual_camera != expected_camera:
-                raise RuntimeError(
-                    f"摄像头身份不匹配：期望 {expected_camera}，实际 {actual_camera or '未返回'}"
-                )
-            if not legacy and actual_device != device:
-                raise RuntimeError(
-                    f"摄像头设备绑定不匹配：期望 {device}，实际 {actual_device or '未返回'}"
-                )
+        data, seq = source.fetch_bytes()
     except Exception as exc:
         raise RuntimeError(
-            f"设备 {device} 取流失败：{exc}（摄像头 {expected_camera}）"
+            f"设备 {device} 取流失败：{exc}（摄像头 {camera_id}）"
         ) from exc
     if not data:
         raise RuntimeError("取流服务尚无画面（请检查 CameraHelper 对应通道）")
-    return data, seq
+    return data, int(seq or 0)
 
 
 def camera_status(device: str) -> dict:

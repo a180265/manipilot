@@ -14,7 +14,7 @@ import asyncio
 import copy
 import math
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1040,6 +1040,36 @@ class RealCameraDriver(CameraDriver):
         return payload
 
 
+@dataclass(frozen=True)
+class _BridgeJpeg:
+    """一次已通过校验的桥帧（原始字节+已解析响应头字段）。
+
+    _fetch_validated 的返回载体：fetch_bytes（校准链原字节通道）与
+    __call__（观测链解码通道）共同消费，保证两条链同一套头契约。
+    """
+
+    data: bytes
+    seq: int | None
+    camera_id: str | None
+    device_id: str | None
+    device_unique_id: str | None
+    legacy: bool
+    binding_revision: int | None
+    captured_at: str | None
+    received_at: str | None
+    width_header: int | None
+    height_header: int | None
+    camera_binding_id: str | None
+    source_geometry_id: str | None
+    source_generation_id: str | None
+    source_capture_seq: int | None
+    source_clock_id: str | None
+    source_captured_monotonic_ns: int | None
+    source_capture_uncertainty_ms: float | None
+    source_timing_provenance: str | None
+    frame_source: str | None
+
+
 class HttpFrameSource:
     """从本机取流桥（scripts/camera_frame_server.py）拉取 JPEG 帧并解码为 BGR。
 
@@ -1136,7 +1166,13 @@ class HttpFrameSource:
         if actual != expected:
             raise RuntimeError(f"取流桥身份不匹配：{name} 期望 {expected}，实际 {actual}")
 
-    def __call__(self) -> np.ndarray:
+    def _fetch_validated(self) -> _BridgeJpeg:
+        """取原始字节并完成身份/必填头/新鲜度/序号校验（单实现核心）。
+
+        校准链（fetch_bytes）与观测链（__call__）共用本方法，保证两条链对
+        同一帧服务的头契约、超时与失败语义一致。seq 活性状态
+        （_last_seq/stream_alive）在此维护。
+        """
         import urllib.request
 
         with urllib.request.urlopen(self.url, timeout=self.timeout) as response:
@@ -1176,50 +1212,83 @@ class HttpFrameSource:
                 "X-Source-Captured-Monotonic-Ns",
                 headers.get("X-Source-Captured-Monotonic-Ns"), required=False)
             uncertainty_raw = (headers.get("X-Source-Capture-Uncertainty-Ms") or "").strip()
-            try:
-                capture_uncertainty_ms = float(uncertainty_raw) if uncertainty_raw else None
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"取流桥响应头 X-Source-Capture-Uncertainty-Ms 无效：{uncertainty_raw!r}"
-                ) from exc
-        # R2-08：可证明采样时刻的帧按采样时刻（含误差裕量）判断新鲜度；
-        # 接收时间不能让早已采样的帧续鲜。无采样时钟证明的帧保持原
-        # 接收时间判断（兼容分支），不进入新链。
-        proven_sample_time = (
-            source_provenance == SOURCE_TIMING_PROVENANCE
-            and captured_monotonic_ns is not None)
-        if proven_sample_time:
-            uncertainty_s = (capture_uncertainty_ms or 0.0) / 1000.0
-            sample_age = (time.monotonic_ns() - captured_monotonic_ns) / 1e9 - uncertainty_s
-            if sample_age > self.max_age_seconds:
-                raise RuntimeError(
-                    f"取流桥返回过期采样：采样时刻距今 {sample_age:.3f}s"
-                    f"（含 ±{(capture_uncertainty_ms or 0.0):.1f}ms 误差）超过 "
-                    f"{self.max_age_seconds:.3f}s；接收时间不能替采样时间续鲜")
-            if -sample_age > 0.5 + uncertainty_s:
-                raise RuntimeError(
-                    f"取流桥返回未来采样时刻（{-sample_age:.3f}s）：拒绝")
-        if received_time is not None:
-            if received_time.tzinfo is None:
-                received_time = received_time.replace(tzinfo=timezone.utc)
-            age = (datetime.now(timezone.utc) - received_time.astimezone(timezone.utc)).total_seconds()
-            if not proven_sample_time and age > self.max_age_seconds:
-                raise RuntimeError(f"取流桥返回过期帧：帧年龄 {age:.3f}s")
-        if seq is not None and self._last_seq is not None and seq < self._last_seq:
-            raise RuntimeError(f"取流桥帧序号倒退：{self._last_seq} -> {seq}")
-        if seq is not None and seq != self._last_seq:
-            self._last_seq_at = time.monotonic()
-        self.stream_alive = bool(
-            seq is not None and self._last_seq_at is not None
-            and time.monotonic() - self._last_seq_at <= self.seq_staleness_seconds)
-        frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if uncertainty_raw:
+                try:
+                    capture_uncertainty_ms = float(uncertainty_raw)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"取流桥响应头 X-Source-Capture-Uncertainty-Ms 无效：{uncertainty_raw!r}"
+                    ) from exc
+            else:
+                capture_uncertainty_ms = None
+            # R2-08：可证明采样时刻的帧按采样时刻（含误差裕量）判断新鲜度；
+            # 接收时间不能让早已采样的帧续鲜。无采样时钟证明的帧保持原
+            # 接收时间判断（兼容分支），不进入新链。
+            proven_sample_time = (
+                source_provenance == SOURCE_TIMING_PROVENANCE
+                and captured_monotonic_ns is not None)
+            if proven_sample_time:
+                uncertainty_s = (capture_uncertainty_ms or 0.0) / 1000.0
+                sample_age = (time.monotonic_ns() - captured_monotonic_ns) / 1e9 - uncertainty_s
+                if sample_age > self.max_age_seconds:
+                    raise RuntimeError(
+                        f"取流桥返回过期采样：采样时刻距今 {sample_age:.3f}s"
+                        f"（含 ±{(capture_uncertainty_ms or 0.0):.1f}ms 误差）超过 "
+                        f"{self.max_age_seconds:.3f}s；接收时间不能替采样时间续鲜")
+                if -sample_age > 0.5 + uncertainty_s:
+                    raise RuntimeError(
+                        f"取流桥返回未来采样时刻（{-sample_age:.3f}s）：拒绝")
+            if received_time is not None:
+                if received_time.tzinfo is None:
+                    received_time = received_time.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - received_time.astimezone(timezone.utc)).total_seconds()
+                if not proven_sample_time and age > self.max_age_seconds:
+                    raise RuntimeError(f"取流桥返回过期帧：帧年龄 {age:.3f}s")
+            if seq is not None and self._last_seq is not None and seq < self._last_seq:
+                raise RuntimeError(f"取流桥帧序号倒退：{self._last_seq} -> {seq}")
+            if seq is not None and seq != self._last_seq:
+                self._last_seq_at = time.monotonic()
+            self.stream_alive = bool(
+                seq is not None and self._last_seq_at is not None
+                and time.monotonic() - self._last_seq_at <= self.seq_staleness_seconds)
+        return _BridgeJpeg(
+            data=data, seq=seq, camera_id=camera_id, device_id=device_id,
+            device_unique_id=unique_id, legacy=legacy,
+            binding_revision=binding_revision, captured_at=captured_at,
+            received_at=received_at, width_header=width_header,
+            height_header=height_header,
+            camera_binding_id=(headers.get("X-Camera-Binding-Id") or "").strip() or None,
+            source_geometry_id=source_geometry_id,
+            source_generation_id=source_generation,
+            source_capture_seq=source_capture_seq,
+            source_clock_id=(headers.get("X-Source-Clock-Id") or "").strip() or None,
+            source_captured_monotonic_ns=captured_monotonic_ns,
+            source_capture_uncertainty_ms=capture_uncertainty_ms,
+            source_timing_provenance=source_provenance,
+            frame_source=(headers.get("X-Frame-Source") or "").strip().lower() or None,
+        )
+
+    def fetch_bytes(self) -> tuple[bytes, int | None]:
+        """拉取桥上原始 JPEG 字节并完成全部头校验（不解码）。
+
+        供校准/证据链使用（Auto_CS#6）：调试台取流、MJPEG 转发与证据存档
+        必须拿到桥上原字节——二次解码再编码会改字节与 sha256 且有损。
+        身份/必填头/新鲜度/序号校验与 __call__ 完全同一套（本方法只少做
+        图像解码与分辨率核对）。
+        """
+        fetched = self._fetch_validated()
+        return fetched.data, fetched.seq
+
+    def __call__(self) -> np.ndarray:
+        fetched = self._fetch_validated()
+        frame = cv2.imdecode(np.frombuffer(fetched.data, dtype=np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
             raise RuntimeError("取流桥返回的帧无法解码")
         resolution = (int(frame.shape[1]), int(frame.shape[0]))
-        if width_header is not None and height_header is not None \
-                and resolution != (width_header, height_header):
+        if fetched.width_header is not None and fetched.height_header is not None \
+                and resolution != (fetched.width_header, fetched.height_header):
             raise RuntimeError(
-                f"取流桥分辨率响应头与 JPEG 不一致：头 {width_header}x{height_header}，"
+                f"取流桥分辨率响应头与 JPEG 不一致：头 {fetched.width_header}x{fetched.height_header}，"
                 f"图片 {resolution[0]}x{resolution[1]}"
             )
         if self.expected_width and self.expected_height \
@@ -1229,27 +1298,27 @@ class HttpFrameSource:
                 f"实际 {resolution[0]}x{resolution[1]}"
             )
         self.resolution_changed = self.last_resolution is not None and resolution != self.last_resolution
-        self._last_seq = seq
-        self.last_camera_id = camera_id
-        self.last_device_id = device_id
-        self.last_device_unique_id = unique_id
-        self.last_binding_revision = binding_revision
-        self.last_frame_seq = seq
-        self.last_captured_at = captured_at
-        self.last_received_at = received_at
+        self._last_seq = fetched.seq
+        self.last_camera_id = fetched.camera_id
+        self.last_device_id = fetched.device_id
+        self.last_device_unique_id = fetched.device_unique_id
+        self.last_binding_revision = fetched.binding_revision
+        self.last_frame_seq = fetched.seq
+        self.last_captured_at = fetched.captured_at
+        self.last_received_at = fetched.received_at
         self.last_resolution = resolution
         # R2-08：冻结帧包 v2 采样时序逐层透传（缺失保持 None，不补默认值）
-        self.last_camera_binding_id = (headers.get("X-Camera-Binding-Id") or "").strip() or None
-        self.last_source_geometry_id = source_geometry_id
-        self.last_source_generation_id = source_generation
-        self.last_source_capture_seq = source_capture_seq
-        self.last_source_clock_id = (headers.get("X-Source-Clock-Id") or "").strip() or None
-        self.last_source_captured_monotonic_ns = captured_monotonic_ns
-        self.last_source_capture_uncertainty_ms = capture_uncertainty_ms
-        self.last_source_timing_provenance = source_provenance
+        self.last_camera_binding_id = fetched.camera_binding_id
+        self.last_source_geometry_id = fetched.source_geometry_id
+        self.last_source_generation_id = fetched.source_generation_id
+        self.last_source_capture_seq = fetched.source_capture_seq
+        self.last_source_clock_id = fetched.source_clock_id
+        self.last_source_captured_monotonic_ns = fetched.source_captured_monotonic_ns
+        self.last_source_capture_uncertainty_ms = fetched.source_capture_uncertainty_ms
+        self.last_source_timing_provenance = fetched.source_timing_provenance
         # 帧来源标记（camera_helper 正式采集 / chrome_compat 兼容降级桥 / legacy 旧单路）
-        self.last_frame_source = (headers.get("X-Frame-Source") or "").strip().lower() or None
-        self.legacy_mode = legacy
+        self.last_frame_source = fetched.frame_source
+        self.legacy_mode = fetched.legacy
         return frame
 
 

@@ -29,12 +29,10 @@ OUTPUT = PROJECT_ROOT / "configs" / "view_register.json"
 
 
 def grab_frame() -> np.ndarray:
-    with urllib.request.urlopen(FRAME_BRIDGE_URL, timeout=3) as response:
-        data = response.read()
-    frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if frame is None:
-        raise RuntimeError("取流桥帧解码失败")
-    return frame
+    """经 HttpFrameSource 单实现取帧（Auto_CS#6）：旧单路兼容放行缺头。"""
+    from drivers.real_camera import HttpFrameSource
+
+    return HttpFrameSource(FRAME_BRIDGE_URL, allow_legacy=True)()
 
 
 def detect_green_crosses(frame: np.ndarray) -> list[tuple[float, float]]:

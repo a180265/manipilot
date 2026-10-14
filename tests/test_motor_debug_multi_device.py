@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import nullcontext
+from datetime import datetime, timezone
 
 import pytest
 
@@ -426,11 +427,21 @@ def test_http_rejects_cross_device_context(two_devices):
 
 
 def test_fetch_camera_frame_checks_camera_and_device_headers(two_devices, monkeypatch):
+    # Auto_CS#6：fetch_camera_frame 经 HttpFrameSource 单实现——正式链路要求
+    # v2 全套响应头（身份/绑定代际/序号/分辨率/接收时刻），与观测链同一契约。
     image = b"jpeg-bytes"
+    now_iso = datetime.now(timezone.utc).isoformat(
+        timespec="milliseconds").replace("+00:00", "Z")
     good_headers = {
-        "X-Frame-Seq": "12",
         "X-Camera-Id": "cam-01",
         "X-Device-Id": "arm-01",
+        "X-Camera-Unique-Id": "uvc-01",
+        "X-Binding-Revision": "7",
+        "X-Frame-Seq": "12",
+        "X-Frame-Width": "64",
+        "X-Frame-Height": "48",
+        "X-Received-At": now_iso,
+        "X-Captured-At": now_iso,
     }
     monkeypatch.setattr(
         debug.urllib.request,
@@ -445,7 +456,7 @@ def test_fetch_camera_frame_checks_camera_and_device_headers(two_devices, monkey
         "urlopen",
         lambda *_args, **_kwargs: FakeResponse(image, bad_headers),
     )
-    with pytest.raises(RuntimeError, match="设备绑定不匹配"):
+    with pytest.raises(RuntimeError, match="设备 arm-01 取流失败.*身份不匹配"):
         debug.fetch_camera_frame("arm-01")
 
 
