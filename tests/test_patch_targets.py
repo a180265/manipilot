@@ -1,5 +1,6 @@
 """monkeypatch 补丁目标存活扫描（2026-10-15，自 WX arm_fleet #11 双向移植；
-原型=sales_bot test_patch_targets，#5 复盘固化）。
+原型=sales_bot test_patch_targets，#5 复盘固化。判定规则改动须三处同步：
+sales_bot/WX arm_fleet/本仓，tests/ 不在 check_fleet_sync 扫描面、无脚本守护）。
 
 背景：模块拆分/常量外迁时，字符串路径补丁打在旧模块路径上会静默失效——
 setattr 不报错、消费代码读的是新模块自己的全局名、测试直接假红，只能靠人工
@@ -39,7 +40,9 @@ runtime 主模块外迁到 runtime.plugin_capabilities，测试字符串补丁�
    原则上不含；逻辑保留以防同类形态）：这类 shim 在 import 时把
    sys.modules[__name__] 换成真实模块，运行期补丁落在真实模块上——shim 一律
    从磁盘文件识别（与导入态无关），活性对跟随后的真实模块判定；shim 解析
-   不出真实名则跳过该补丁点。
+   不出真实名则跳过该补丁点。残余风险：未来若出 sys.modules 自替换的新文理
+   （如 sys.modules.update），本识别会漏认、把活补丁误判死——新 shim 形态须
+   同步扩 _SHIM_ASSIGN_RE。
 
 范围与豁免（其余）：
 - 只扫描本目录（tests/）顶层 *.py，只检查模块文件落在本树根下的目标；
@@ -60,8 +63,8 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent
 TREE_ROOT = TESTS_DIR.parent
 
-# 样本量门下限：可解析补丁点数的保守基线（2026-10-15 实测 272，取 ~81% 余量；
-# 见 test_scanner_sees_the_suite）。骤降说明扫描器坏了或解析错树，先核实再调。
+# 样本量门下限：可解析补丁点数的保守基线（2026-10-15 实测 272，下限取实测的
+# ~81%；见 test_scanner_sees_the_suite）。骤降说明扫描器坏了或解析错树，先核实再调。
 MIN_PATCH_SITES = 220
 
 # sys.modules[__name__] = ... 自替换 shim 的两种文理（2026-10-12 隔离手术形态）
@@ -104,14 +107,18 @@ def _canonical(mod_name: str, root: Path, _chain=frozenset()):
     m = _SHIM_TARGET_RE.search(src)
     if not m:
         return None
-    real = m.group(1)
+    targets = set(_SHIM_TARGET_RE.findall(src))
+    if len(targets) > 1:
+        return None  # 多个 import_module 字面量：跟随目标歧义 → 豁免该补丁点
+    real = targets.pop()
     if _tree_module_file(real, root) is None:
         return None
     return _canonical(real, root, _chain | {mod_name})
 
 
 def _module_liveness(mod_name: str, root: Path, cache={}):
-    """(defined, imported, loaded)：模块级定义名 / import 名 / 全部 Load 名。"""
+    """四元组 (defined, imported, loaded, parse_ok)：
+    模块级定义名 / import 名 / 全部 Load 名 / 源码可解析。"""
     key = (str(root), mod_name)
     if key in cache:
         return cache[key]
@@ -189,19 +196,17 @@ def _shadow_bindings(tree):
 
 
 def _collect_aliases(tree):
-    """(alias→dotted, root→{full dotted})：供别名/属性链两种形态解析。"""
-    aliases, plain = {}, {}
+    """alias→dotted 映射：供模块别名形态（`import x.y as z` 后 setattr(z,...)）解析。"""
+    aliases = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
                 if a.asname:
                     aliases[a.asname] = a.name
-                else:
-                    plain.setdefault(a.name.split(".")[0], set()).add(a.name)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             for a in node.names:
                 aliases[a.asname or a.name] = f"{node.module}.{a.name}"
-    return aliases, plain
+    return aliases
 
 
 def _resolve_string(dotted: str, root: Path):
@@ -246,7 +251,7 @@ def _collect_sites(tests_dir: Path | None = None, root: Path | None = None):
             sites.append({"file": path.name, "line": 0, "target": "<整文件语法错误>",
                           "kind": "parse", "live": False})
             continue
-        aliases, plain = _collect_aliases(tree)
+        aliases = _collect_aliases(tree)
         shadowed = _shadow_bindings(tree)
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -314,7 +319,7 @@ def test_scanner_sees_the_suite():
         "扫描器或测试形态变化，或测试树根定位错，先核实再调阈值")
 
 
-@pytest.mark.parametrize("site", PATCH_SITES,
+@pytest.mark.parametrize("site", SITES,
                          ids=lambda s: f"{s['file']}:{s['line']}:{s['target']}")
 def test_patch_target_is_read_by_its_module(site):
     assert site["live"], _dead_message(site)
@@ -392,9 +397,18 @@ def test_self_proof_dead_targets_are_bitten(tmp_path, monkeypatch):
     # 的影子条目——解析若经 find_spec/sys.modules 会被带偏，路径直取必须免疫
     monkeypatch.syspath_prepend(str(tmp_path))
     import importlib
+    import sys as _sys
 
     importlib.import_module("fakepkg.shim_old")
+    try:
+        _run_self_proof_assertions(tests_dir, tmp_path)
+    finally:
+        # 进程卫生：清掉合成包的 sys.modules 残留（含被替换的 shim 影子）
+        for _k in [k for k in _sys.modules if k.split(".")[0] == "fakepkg"]:
+            _sys.modules.pop(_k, None)
 
+
+def _run_self_proof_assertions(tests_dir: Path, tmp_path: Path):
     sites = _collect_sites(tests_dir=tests_dir, root=tmp_path)
     by_target = {}
     for s in sites:
