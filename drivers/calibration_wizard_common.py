@@ -38,6 +38,19 @@ STAGE_DISPLAY: dict[str, str] = {
 }
 
 
+# ---------- 目标档位（Auto_CS#20 纯观测通道） ----------
+# 向导的线性阶段机为动作校准设计；观测只需要相机/屏幕几何，不要求串口会话。
+# goal=observation 时：start 不要求机械臂连接，手机校准页 open 直接进入
+# SCREEN_GEOMETRY（屏幕坐标域取本会话校准页 open 上报），运动域操作整体禁用，
+# finish 从屏幕几何阶段直达 observation_ready（跳过 Z/XY/标靶/验收动作阶段）。
+GOAL_MOTION = "motion"
+GOAL_OBSERVATION = "observation"
+GOAL_DISPLAY: dict[str, str] = {
+    GOAL_MOTION: "动作校准",
+    GOAL_OBSERVATION: "纯观测校准",
+}
+
+
 DEBUG_ACCEPTANCE_CHECKS: tuple[str, ...] = (
     "ime_input_tap",     # 输入法：下发固定文本 → 点击候选 → 文字进入输入框
     "ime_delete_clear",  # 输入法：删除/长按清除 → 输入框被清空

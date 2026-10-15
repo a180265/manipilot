@@ -52,6 +52,9 @@ from drivers.screen_edge import ScreenEdgeError, classify_quad_change, quad_dige
 from drivers.target_archive import device_dir
 from drivers.calibration_wizard_common import (
     DEBUG_ACCEPTANCE_CHECKS,
+    GOAL_DISPLAY,
+    GOAL_MOTION,
+    GOAL_OBSERVATION,
     STAGE_DEBUG_ACCEPTANCE,
     STAGE_IDLE,
     STAGE_INVALIDATED,
@@ -457,6 +460,8 @@ class CalibrationWizard:
                     data.setdefault("binding", None)
                     data.setdefault("safePark", self._blank_safe_park())
                     data.setdefault("sessionRebind", self._blank_session_rebind())
+                    # Auto_CS#20：历史会话无 goal 字段——一律视为运动档（原语义）
+                    data.setdefault("goal", GOAL_MOTION)
                     rebind = data["sessionRebind"]
                     if not isinstance(rebind, dict):
                         data["sessionRebind"] = self._blank_session_rebind()
@@ -529,6 +534,9 @@ class CalibrationWizard:
             "schemaVersion": 1,
             "coordinateSpaceVersion": COORDINATE_SPACE_VERSION,
             "stage": STAGE_IDLE,
+            # 目标档位（Auto_CS#20）：motion=动作校准（原语义零变化）；
+            # observation=纯观测校准（零机械动作，产出 observation_ready）。
+            "goal": GOAL_MOTION,
             # 必须由调试台从手机心跳清单中选择真实 ID，不能使用示例值。
             "imeDeviceId": None,
             "imeSessionId": None,
@@ -595,14 +603,23 @@ class CalibrationWizard:
                 and not geo.get("edge") and not geo.get("homography")
                 and park.get("parkX") is None)
 
-    def _sync_bundle(self) -> dict:
+    def _sync_bundle(self, *, observation_rebuild: bool = False) -> dict:
         """把向导产物写入统一档案（status 保持 draft，finish 才置 ready）。
 
         ready 档案（已提升）不做整包重建：state 是手动流程视角，重建会冲掉
         promote 写入的几何/Z 参数/模型锁/验收标志。ready 时只做验收字段级
         合并历史兼容记录，其余一律保留档案现值；微信记录不参与门禁。
+        observation_rebuild（Auto_CS#20）：纯观测 finish 的显式一次性重建——
+        旧档案（含 ready/motion_ready/draft 的残留运动字段）一律不并入观测
+        档案；几何与绑定只认本会话证据（finish 已校验 edge+homography 在手），
+        以空白档案为底避免旧运动字段残留。
         """
         current = cb.load_bundle(self.device, self.data_root)
+        rebuild_base = None
+        if observation_rebuild:
+            current = None
+            rebuild_base = cb.new_bundle(
+                self.device, ime_device_id=self.state.get("imeDeviceId"))
         if current is not None and current.get("status") == cb.MOTION_READY_STATUS:
             # 补 E 只追加验收记录；自动校准模型不能被手动 seed 覆盖。
             merged = json.loads(json.dumps(current, ensure_ascii=False))
@@ -642,7 +659,7 @@ class CalibrationWizard:
             # 空草稿不得重建主档（规范 §5.2.1）。历史参数的恢复复核走
             # sessionRebind 机制，不由空白状态背书。
             return current
-        bundle = self._bundle()
+        bundle = rebuild_base if rebuild_base is not None else self._bundle()
         bundle["imeDeviceId"] = self.state["imeDeviceId"]
         bundle["daemonSession"] = self.state["daemonSession"]
         bundle["sessionRebind"] = deepcopy(
@@ -1050,6 +1067,29 @@ class CalibrationWizard:
         self._sync_bundle()
         self._save_state()
 
+    def _advance_after_phone_open(self, session: dict | None) -> None:
+        """手机校准页 open 后的阶段推进（watcher/wait_phone_open/state_view 兜底共用）。
+
+        运动档 → Z 阶段（原语义零变化）；纯观测档（Auto_CS#20）→ 直接进入
+        屏幕几何阶段：屏幕坐标域取本会话校准页 open 上报（与 F2 §6.2.1 同一
+        信任源，禁止猜测旧尺寸）；元数据缺失不推进（留在 precheck，由主动
+        诊断入口给出针对性提示）。
+        """
+        if self.state.get("goal") == GOAL_OBSERVATION:
+            screen = (session or {}).get("screen") or {}
+            width, height = screen.get("screenWidth"), screen.get("screenHeight")
+            orientation = screen.get("orientation")
+            if not (isinstance(width, int) and not isinstance(width, bool) and width > 0
+                    and isinstance(height, int) and not isinstance(height, bool)
+                    and height > 0
+                    and isinstance(orientation, str) and orientation.strip()):
+                return
+            self.state["screen"] = {"orientation": orientation,
+                                    "screenWidth": width, "screenHeight": height}
+            self._advance(STAGE_SCREEN_GEOMETRY)
+            return
+        self._advance(STAGE_Z_READY)
+
     def _check_screen_consistency(self, sample: dict) -> None:
         """触点回报的方向/尺寸与基线不符 → 失效（§5/§14）。"""
         orientation = sample.get("orientation") or "portrait"
@@ -1072,12 +1112,23 @@ class CalibrationWizard:
 
     # ---------- 生命周期 ----------
 
-    def start(self, ime_device_id: str | None = None) -> dict:
+    def start(self, ime_device_id: str | None = None, *,
+              goal: str | None = None) -> dict:
         with self._lock:
             self._require_no_auto_run("重新开始校准")
-            status = self.daemon.status()
-            if not status.get("connected") or not status.get("session"):
-                raise WizardError("机械臂未连接：请先在调试台连接设备再开始校准")
+            if goal not in (None, GOAL_MOTION, GOAL_OBSERVATION):
+                raise WizardError(
+                    f"未知校准目标档位：{goal}"
+                    f"（可选：{GOAL_DISPLAY[GOAL_MOTION]}、{GOAL_DISPLAY[GOAL_OBSERVATION]}）")
+            # Auto_CS#20：goal 缺省沿用当前会话档位（观测会话重建不悄悄翻回运动档）。
+            observation = (goal == GOAL_OBSERVATION
+                           or (goal is None
+                               and self.state.get("goal") == GOAL_OBSERVATION))
+            status = None
+            if not observation:
+                status = self.daemon.status()
+                if not status.get("connected") or not status.get("session"):
+                    raise WizardError("机械臂未连接：请先在调试台连接设备再开始校准")
             binding = self._read_binding_facts()
             ime_device = str(ime_device_id or self.state.get("imeDeviceId") or "").strip()
             # 只禁止空值自动兜底；显式传入的设备 ID 原样使用，不能按格式猜测真假。
@@ -1099,9 +1150,10 @@ class CalibrationWizard:
             session = self.ime.create_session(ime_device)
             preserved = previous
             preserved["stage"] = STAGE_PRECHECK
+            preserved["goal"] = GOAL_OBSERVATION if observation else GOAL_MOTION
             preserved["imeDeviceId"] = ime_device
             preserved["imeSessionId"] = session["sessionId"]
-            preserved["daemonSession"] = status["session"]
+            preserved["daemonSession"] = status["session"] if status else None
             preserved["binding"] = binding
             preserved.pop("screenSearchContext", None)
             preserved["invalidReason"] = None
@@ -1128,7 +1180,7 @@ class CalibrationWizard:
             self._sync_bundle()  # 立即落一份保留几何/历史的档案
             bundle = self._bundle()
             bundle["status"] = "draft"  # 新一轮校准：invalidated/ready 都回到 draft
-            bundle["daemonSession"] = status["session"]
+            bundle["daemonSession"] = status["session"] if status else None
             bundle["imeSessionId"] = session["sessionId"]
             bundle["sessionRebind"] = deepcopy(self.state["sessionRebind"])
             cb.save_bundle(bundle, self.data_root)
@@ -1178,7 +1230,7 @@ class CalibrationWizard:
                                 and self.state["stage"] == STAGE_PRECHECK
                                 and self.state.get("imeSessionId") == session_id):
                             self.state["phoneOpenedAt"] = _now()
-                            self._advance(STAGE_Z_READY)
+                            self._advance_after_phone_open(session)
 
         threading.Thread(target=watch, daemon=True,
                          name=f"wizard-phone-watch-{self.device}").start()
@@ -1257,12 +1309,17 @@ class CalibrationWizard:
         轮询在锁外进行避免阻塞页面状态刷新；已自动推进时立即返回。
         超时返回针对性诊断：clientState unknown → 手机端设备 ID 不一致或
         访问不到 8788（附输入法服务已知设备清单）；closed → 页面已退出。
+        纯观测档（Auto_CS#20）不要求机械臂会话，推进直接到屏幕几何阶段。
         """
         with self._lock:
             if self.state["stage"] == STAGE_Z_READY:
                 return {"open": True, "stage": self.state["stage"], "auto": True}
+            if (self.state.get("goal") == GOAL_OBSERVATION
+                    and self.state["stage"] == STAGE_SCREEN_GEOMETRY):
+                return {"open": True, "stage": self.state["stage"], "auto": True}
             self._require_stage(STAGE_PRECHECK)
-            self._require_session(allow_rebind=True)
+            if self.state.get("goal") != GOAL_OBSERVATION:
+                self._require_session(allow_rebind=True)
             sid = self.state["imeSessionId"]
             ime_device = self.state["imeDeviceId"]
         deadline = time.time() + timeout
@@ -1284,7 +1341,7 @@ class CalibrationWizard:
                 with self._lock:
                     if self.state["stage"] == STAGE_PRECHECK:
                         self.state["phoneOpenedAt"] = _now()
-                        self._advance(STAGE_Z_READY)
+                        self._advance_after_phone_open(last)
                     return {"open": True, "stage": self.state["stage"]}
             if last.get("status") != "active":
                 with self._lock:
@@ -1381,6 +1438,7 @@ class CalibrationWizard:
     def capture_hover_z(self) -> dict:
         """标定 Z 悬停高度：读当前 MPos.z 存为 hoverZ，并保存证据（§6.2）。"""
         with self._lock:
+            self._require_motion_goal()
             self._require_stage(STAGE_Z_READY)
             phone_reference = self._manual_z_phone_pose(scope="z")
             mpos = self._read_position()
@@ -1401,6 +1459,7 @@ class CalibrationWizard:
         """测试一次点击（kind=tap 带触点回报闭环 / kind=delete 仅机械执行记录）。
         普通点击限于 Z 阶段；长按允许后续阶段补测（§6.6）。"""
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("手动点击测试")
             if kind == "tap":
                 self._require_stage(STAGE_Z_READY)
@@ -1631,6 +1690,7 @@ class CalibrationWizard:
         """保存点击参数（kind=tap 需 ≥1 次合法回报；§6.3/§6.6）。
         普通点击必须在 Z 阶段保存；长按允许在后续阶段补测补存（§6.6 "保存或待验收"）。"""
         with self._lock:
+            self._require_motion_goal()
             if kind == "tap":
                 self._require_stage(STAGE_Z_READY)
             elif kind == "delete":
@@ -1691,6 +1751,7 @@ class CalibrationWizard:
         把探头对到标靶中心后，再点「测试点击」。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("显示标靶")
             self._require_stage(STAGE_XY)
             self._require_session()
@@ -1731,6 +1792,7 @@ class CalibrationWizard:
         否则布防+等待+点击一步完成。回报后配对 (机械, 屏幕) 并计算误差（§7.2）。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("手动 XY 采样点击")
             self._require_stage(STAGE_XY)
             self._require_session()
@@ -1859,6 +1921,7 @@ class CalibrationWizard:
         接受后自动为下一个未接受点显示标靶，减少现场点击次数。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_stage(STAGE_XY)
             trials = [t for t in self.state["xy"]["trials"] if t["index"] == index]
             if not trials:
@@ -1892,6 +1955,7 @@ class CalibrationWizard:
 
     def xy_clear(self) -> dict:
         with self._lock:
+            self._require_motion_goal()
             self._require_stage(STAGE_XY)
             self._disarm_preview()
             self.state["xy"] = {"accepted": [], "trials": [], "fit": None,
@@ -1907,6 +1971,7 @@ class CalibrationWizard:
         - RMS >3px 默认拒绝，操作者可 force=True 强行拟合（记录在案）。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_stage(STAGE_XY)
             accepted = self.state["xy"]["accepted"]
             if len(accepted) < 3:
@@ -1997,6 +2062,7 @@ class CalibrationWizard:
         不依赖人工对位精度（人工对位误差会直接淹没 ≤6px 的验收阈值）。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("手动验证点击")
             self._require_stage(STAGE_XY)
             fit = self.state["xy"].get("fit")
@@ -2042,6 +2108,7 @@ class CalibrationWizard:
     def xy_finish(self) -> dict:
         """3 个验证点全部通过 → XY 验收完成，进入视觉阶段（§7.4）。"""
         with self._lock:
+            self._require_motion_goal()
             self._require_stage(STAGE_XY)
             validation = self.state["xy"].get("validation", [])
             if len(validation) < len(XY_VALIDATION_POINTS):
@@ -2389,6 +2456,7 @@ class CalibrationWizard:
           matrix/发布指纹为空，不冒充已校准（§6.2/§7.1），不授予任何运动资格。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("标靶反算屏幕几何（占用手机布防与画面检测）")
             status = self._require_session(allow_rebind=True)
             if status.get("estop_locked"):
@@ -2841,6 +2909,7 @@ class CalibrationWizard:
         绿框名义位置 / 摄像头判定的位置 / 手机回报的接触点。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("手动视觉验证（真实走位点击）")
             self._require_stage(STAGE_XY, STAGE_SCREEN_GEOMETRY, STAGE_TARGET,
                                 STAGE_DEBUG_ACCEPTANCE, STAGE_WECHAT_ACCEPTANCE)
@@ -2948,6 +3017,7 @@ class CalibrationWizard:
         visualVerify）：全链路误差最大值、是否有超差点，供验收与留痕。
         """
         with self._lock:
+            self._require_motion_goal()
             tip = self._detect_tip()
             points = list(XY_PLAN_POINTS)
             if tip and tip[0] is not None:
@@ -3046,6 +3116,10 @@ class CalibrationWizard:
         # 运行期目标定位改为 OCR（用户拍板）：不再经过固定目标登记阶段，
         # 摄像头单应就绪后直接进入调试台验收
         if self.state["stage"] == STAGE_SCREEN_GEOMETRY:
+            if self.state.get("goal") == GOAL_OBSERVATION:
+                # Auto_CS#20：观测档停在屏幕几何阶段，由 finish 直接产出
+                # observation_ready（跳过 Z/XY/标靶/验收动作阶段）。
+                return
             self._advance(STAGE_DEBUG_ACCEPTANCE)
 
     # ---------- 目标阶段（§9） ----------
@@ -3064,6 +3138,7 @@ class CalibrationWizard:
     def target_save(self, name: str, nx: float, ny: float) -> dict:
         """登记/更新目标画面位置（仅存位置；机械坐标执行期按映射现算）。"""
         with self._lock:
+            self._require_motion_goal()
             self._require_stage(STAGE_TARGET, STAGE_DEBUG_ACCEPTANCE,
                                 STAGE_WECHAT_ACCEPTANCE)
             if name not in TARGET_DISPLAY_NAMES:
@@ -3080,6 +3155,7 @@ class CalibrationWizard:
     def target_test(self, name: str) -> dict:
         """目标测试点击：视觉/档案位置 → 单应 → 逆仿射 → 自动走位 → 布防点击 → 回报误差（§8.3）。"""
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("手动目标测试（真实走位点击）")
             self._require_stage(STAGE_TARGET)
             self._require_session()
@@ -3136,6 +3212,7 @@ class CalibrationWizard:
     def target_accept(self, name: str, accept: bool = True) -> dict:
         """人工确认目标测试结果：接受后才 validated（§8.3 接受此点）。"""
         with self._lock:
+            self._require_motion_goal()
             self._require_stage(STAGE_TARGET, STAGE_DEBUG_ACCEPTANCE)
             entry = self.state["targets"].get(name)
             if entry is None:
@@ -3384,6 +3461,7 @@ class CalibrationWizard:
         现场标记坐标和独立长按参数。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("手动验收执行（真实走位）")
             self._require_session()
             if kind != "debug":
@@ -3703,6 +3781,7 @@ class CalibrationWizard:
 
     def acceptance_record(self, kind: str, check: str, ok: bool, detail: str = "") -> dict:
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("手动验收确认")
             required = {"debug": DEBUG_ACCEPTANCE_CHECKS,
                         "wechat": WECHAT_ACCEPTANCE_CHECKS}.get(kind)
@@ -3743,6 +3822,7 @@ class CalibrationWizard:
         ``wechat_acceptance`` 阶段仅作兼容状态，不再要求微信测试会话。
         """
         with self._lock:
+            self._require_motion_goal()
             stage = self.state["stage"]
             if stage == STAGE_TARGET:
                 self._advance(STAGE_DEBUG_ACCEPTANCE)
@@ -3788,9 +3868,13 @@ class CalibrationWizard:
 
         微信测试会话不是机械臂校准前置；WX 发送仍由每次任务的目标、正文
         哈希、账号/会话和发送后效果证据门禁负责。
+        纯观测档（goal=observation）从屏幕几何阶段直达 observation_ready，
+        不要求机械臂会话（_finish_observation，Auto_CS#20）。
         """
         with self._lock:
             self._require_no_auto_run("手动完成校准（写 ready 与 candidate 提升互斥）")
+            if self.state.get("goal") == GOAL_OBSERVATION:
+                return self._finish_observation()
             self._require_session()
             self._require_stage(STAGE_DEBUG_ACCEPTANCE, STAGE_WECHAT_ACCEPTANCE,
                                 STAGE_READY)
@@ -3835,6 +3919,52 @@ class CalibrationWizard:
                 except ImeError:
                     pass
             return {"status": "ready", "stage": self.state["stage"]}
+
+    def _finish_observation(self) -> dict:
+        """纯观测档收尾（Auto_CS#20）：屏幕几何+摄像头单应 → observation_ready。
+
+        从 SCREEN_GEOMETRY 阶段直达（跳过 Z/XY/标靶/验收动作阶段），全程零
+        机械动作、不要求串口会话；产出相机-only 档案（运动字段一律未校准，
+        运行前运动门禁对其一律判 bundle_not_ready——纯观测档案永远不能驱动
+        动作）。观测不绑定 daemonSession：物理漂移由 screen-observation 的
+        live 四角定位每帧实测拒绝。坐标桥旁档与目标绑定快照是动作域产物，
+        观测档不写。
+        """
+        self._require_stage(STAGE_SCREEN_GEOMETRY)
+        geometry = self.state.get("geometry") or {}
+        if not (self.state.get("screen")
+                and (geometry.get("edge") or {}).get("corners")
+                and (geometry.get("homography") or {}).get("homography")):
+            raise WizardError(
+                "屏幕边缘基准或摄像头单应缺失：请先完成 edge_capture 与 "
+                "camera_fit（零机械动作），不能置 observation_ready")
+        self._require_binding()
+        self._sync_bundle(observation_rebuild=True)
+        bundle = self._bundle()
+        bundle["status"] = cb.OBSERVATION_READY_STATUS
+        bundle["daemonSession"] = None
+        cb.save_bundle(bundle, self.data_root)
+        # 显式落阶段（不经 _advance：观测档案已定稿，不再触发整包重建）
+        self.state["stage"] = STAGE_READY
+        self._save_state()
+        sid = self.state.get("imeSessionId")
+        if sid:
+            try:
+                self.ime.complete(sid)
+            except ImeError:
+                pass
+        return {"status": cb.OBSERVATION_READY_STATUS, "stage": self.state["stage"]}
+
+    def _require_motion_goal(self) -> None:
+        """纯观测档（goal=observation）禁用一切运动域操作（Auto_CS#20）。
+
+        零动作是观测通道的结构性保证而非使用约定：观测会话里任何走位/
+        点击/验收类入口都在触碰机械臂之前拒绝。
+        """
+        if self.state.get("goal") == GOAL_OBSERVATION:
+            raise WizardError(
+                "本向导会话为纯观测校准（observation）：不含机械臂动作阶段，"
+                "运动/验收类操作不可用；如需动作校准请以运动目标重新开始")
 
     def _save_gesture_coordinate_frame(self, bundle: dict) -> None:
         """坐标桥旁档（第 4.2/22.4 节）：完成/提升后尽力写入，独立于 bundle。
@@ -3936,6 +4066,7 @@ class CalibrationWizard:
         z_safe 省略时取当前 MPos.z；验证失败保留参数但 validated=False，不得启动自动校准。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_no_auto_run("确认点击参数（含一次测试点击）")
             # 这是新 daemon/IME 会话恢复执行资格的唯一复核入口；
             # 普通动作仍由 _require_session 的 rebind 门禁拦截。
@@ -4018,6 +4149,7 @@ class CalibrationWizard:
         daemon 会话与实际 MPos（规范 §5.4/P09），旧 confirmed 不算这次确认。
         """
         with self._lock:
+            self._require_motion_goal()
             self._require_session(allow_rebind=True)
             auto_safe = self.state["z"].get("autoSafe") or {}
             if auto_safe.get("zSafe") is None:
@@ -4114,6 +4246,7 @@ class CalibrationWizard:
     def candidate_restore(self, run_id: str) -> dict:
         """导入完整候选为待复核资料（P07）：不写 ready、不恢复执行资格。"""
         with self._lock:
+            self._require_motion_goal()
             report = self.candidate_recovery_report()
             item = next((entry for entry in report["items"]
                          if entry.get("runId") == run_id), None)
@@ -4160,6 +4293,8 @@ class CalibrationWizard:
     def auto_start(self, *, max_iterations: int | None = None,
                    point_plan: list[dict] | None = None,
                    defer_input_acceptance: bool = True) -> dict:
+        # 纯观测档拒绝在 runner 入口（Auto_CS#20）：本方法受 seam 守卫约束，
+        # 必须保持对 self._auto_runner 的纯委托。
         return self._auto_runner.auto_start(max_iterations=max_iterations, point_plan=point_plan, defer_input_acceptance=defer_input_acceptance)
 
 
@@ -4206,6 +4341,7 @@ class CalibrationWizard:
             if self._state_unrecoverable is not None:
                 view["stateHealth"] = copy.deepcopy(self._state_unrecoverable)
         view["stageDisplay"] = STAGE_DISPLAY.get(view["stage"], view["stage"])
+        view["goalDisplay"] = GOAL_DISPLAY.get(view.get("goal"), view.get("goal"))
         view["xyPlan"] = self.xy_plan()
         view["validationPlan"] = [{"index": i, "name": n, "u": u, "v": v}
                                   for i, (n, u, v) in enumerate(XY_VALIDATION_POINTS)]
@@ -4234,7 +4370,7 @@ class CalibrationWizard:
             with self._lock:
                 if self.state["stage"] == STAGE_PRECHECK:
                     self.state["phoneOpenedAt"] = _now()
-                    self._advance(STAGE_Z_READY)
+                    self._advance_after_phone_open(phone)
             view["stage"] = self.state["stage"]
             view["stageDisplay"] = STAGE_DISPLAY.get(view["stage"], view["stage"])
         return view
@@ -4248,5 +4384,8 @@ class CalibrationWizard:
         except Exception as exc:
             return {"clientState": None, "status": None, "error": str(exc)}
         return {"clientState": session.get("clientState"),
-                "status": session.get("status")}
+                "status": session.get("status"),
+                # open 上报的只读屏幕元数据：观测档（Auto_CS#20）阶段推进的
+                # 坐标域来源（与 F2 §6.2.1 同一信任源），亦供调试台显示。
+                "screen": deepcopy(session.get("screen") or None)}
 

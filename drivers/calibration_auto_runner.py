@@ -35,6 +35,7 @@ from drivers.calibration_wizard_common import (
     AUTO_STATE_STOPPED,
     AUTO_STATE_STOPPING,
     DEBUG_ACCEPTANCE_CHECKS,
+    GOAL_OBSERVATION,
     STAGE_DEBUG_ACCEPTANCE,
     STAGE_IDLE,
     STAGE_INVALIDATED,
@@ -248,7 +249,13 @@ class AutoRunner:
         操作员已确认 zSafe/tapDepth 与 SAFE PARK、屏幕基线可用、摄像头可用。
         自动校准不依赖手动 B/C/D 阶段：屏幕基线优先取向导现场回报，
         缺失时回退活动档案（首次触点回报时会再校验一致性）。
+        纯观测档（goal=observation，Auto_CS#20）在入口整体拒绝——观测会话
+        永不进入运动域（wizard.auto_start 是纯委托门面，seam 守卫约束）。
         """
+        if self.host.state.get("goal") == GOAL_OBSERVATION:
+            raise WizardError(
+                "本向导会话为纯观测校准（observation）：不含机械臂动作阶段，"
+                "自动校准不可用；如需动作校准请以运动目标重新开始")
         if type(defer_input_acceptance) is not bool:
             raise WizardError("deferInputAcceptance 必须是显式布尔值")
         with self.host._lock:

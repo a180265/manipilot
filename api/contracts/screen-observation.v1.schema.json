@@ -16,7 +16,7 @@
     "contract_version": {"const": "screen-observation.v1"},
     "device_id": {"type": "string", "minLength": 1},
     "camera_id": {"type": "string", "minLength": 1},
-    "daemon_session": {"type": "string", "minLength": 1},
+    "daemon_session": {"type": ["string", "null"], "minLength": 1},
     "wechat_account_id": {"type": ["string", "null"]},
     "binding_revision": {"type": "integer", "minimum": 0},
     "camera_device_unique_id": {"type": "string", "minLength": 1},

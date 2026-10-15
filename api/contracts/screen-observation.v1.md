@@ -26,7 +26,7 @@ WX `ScreenReader` 消费图像和 OCR，解释页面；WX `LiveObservationWorker
 |---|---|
 | contract_version | 固定 `screen-observation.v1` |
 | device_id、camera_id | 本次请求设备及其摄像头通道 |
-| daemon_session | 当前机械臂控制器会话，须与校准一致 |
+| daemon_session | 当前机械臂控制器会话，须与校准一致；纯观测档案（`observation_ready`，Auto_CS#20）不绑定串口会话，恒为 `null` |
 | wechat_account_id | 设备配置中的账号上下文，可为 `null` 或空字符串；不是画面识别的身份结论 |
 | binding_revision | 帧源绑定版本，整数 |
 | calibration_fingerprint | 当前 `cameraToScreen` 数据生成的 SHA-256 摘要，不代表全部校准条件已经永久有效 |

@@ -60,12 +60,15 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
     app.state.pre_enable_maintenance = maintenance
     if maintenance:
         # GET is not universally side-effect free (e.g. phone task polling).
-        # Only audited status and camera-source reads are exposed in this mode.
+        # Only audited status, camera-source and screen-observation reads are
+        # exposed in this mode (Auto_CS#20: screen-observation 是纯读证据——
+        # GET 无副作用、不领任务、不动电机，与 camera-source-frame 同类豁免).
         read_paths = re.compile(
             r"/(?:openapi\.json|docs(?:/oauth2-redirect)?|redoc|v1/(?:"
             r"system/(?:status|runtime-build)|daemons|tasks(?:/[^/]+)?|"
             r"alerts|audit-events|devices(?:/[^/]+(?:/"
-            r"(?:supervision|camera-source-frame(?:/[^/]+/image)?))?)?))/?"
+            r"(?:supervision|screen-observation|"
+            r"camera-source-frame(?:/[^/]+/image)?))?)?))/?"
         )
 
         @app.middleware("http")

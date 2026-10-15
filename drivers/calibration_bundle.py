@@ -32,6 +32,11 @@ V2_SCHEMA_VERSION = BUNDLE_SCHEMA_VERSION
 BUNDLE_FILENAME = "calibration_bundle.json"
 CANDIDATES_DIRNAME = "calibration_candidates"
 MOTION_READY_STATUS = "motion_ready"
+# Auto_CS#20 纯观测通道：相机-only 校准的晋升态（屏幕几何+摄像头单应即可，
+# 无机械臂动作阶段、不绑定串口会话）。只解除 screen-observation 的会话绑定；
+# 运行前运动门禁（validate_calibration_bundle）对该状态一律判 bundle_not_ready
+# ——纯观测档案永远不能驱动动作。
+OBSERVATION_READY_STATUS = "observation_ready"
 
 # 模型锁状态（v1.1 自动校准 §22；手动流程不写这些字段，门禁跳过）
 MODEL_LOCK_UNINITIALIZED = "UNINITIALIZED"

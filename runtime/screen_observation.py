@@ -80,13 +80,21 @@ def rectify(image: bytes, bundle: dict,
 
 
 def _validate_calibration(bundle: dict, device_id: str, device: dict) -> None:
+    # Auto_CS#20 纯观测通道：observation_ready 档案跳过 daemonSession 绑定
+    # （观测是纯读：相机+OCR，与机械臂状态无关）；物理漂移仍由 rectify 的
+    # live 四角定位每帧实测拒绝（"手机位置无法确认，禁止使用旧坐标"）。
+    # ready/motion_ready 原语义零变化（仍要求本设备当前会话）。
+    observation_only = bool(bundle) and \
+        bundle.get("status") == calibration_bundle.OBSERVATION_READY_STATUS
     if (not bundle or bundle.get("status") not in {
-            "ready", calibration_bundle.MOTION_READY_STATUS}
+            "ready", calibration_bundle.MOTION_READY_STATUS,
+            calibration_bundle.OBSERVATION_READY_STATUS}
             or bundle.get("deviceId") != device_id
             or bundle.get("cameraId") != device.get("camera_id")
-            or not device.get("daemon_session")
-            or bundle.get("daemonSession") != device["daemon_session"]):
-        raise ApiError("calibration_invalid", "屏幕观测需要本设备当前会话的有效校准")
+            or (not observation_only
+                and (not device.get("daemon_session")
+                     or bundle.get("daemonSession") != device["daemon_session"]))):
+        raise ApiError("calibration_invalid", "屏幕观测需要本设备当前状态的有效校准")
     try:
         width = int(bundle["screen"]["screenWidth"])
         height = int(bundle["screen"]["screenHeight"])
@@ -241,7 +249,9 @@ class ScreenObservationService:
                 raise ApiError("camera_unavailable", f"屏幕证据处理失败：{exc}") from exc
             result = {
                 "contract_version": "screen-observation.v1", "device_id": device_id,
-                "camera_id": device["camera_id"], "daemon_session": device["daemon_session"],
+                "camera_id": device["camera_id"],
+                # 纯观测档案（observation_ready）设备无串口会话：字段恒在，值可为 null
+                "daemon_session": device.get("daemon_session"),
                 "wechat_account_id": device.get("wechat_account_id"),
                 "binding_revision": frame["binding_revision"],
                 "camera_device_unique_id": frame["device_unique_id"],
@@ -375,7 +385,7 @@ def _build_source_observation(service, device_id: str, bundle: dict,
     }
     result = {
         "contract_version": "screen-observation.v1", "device_id": device_id,
-        "camera_id": device["camera_id"], "daemon_session": device["daemon_session"],
+        "camera_id": device["camera_id"], "daemon_session": device.get("daemon_session"),
         "wechat_account_id": device.get("wechat_account_id"),
         "camera_device_unique_id": physical_camera,
         "calibration_fingerprint": hashlib.sha256(
