@@ -2418,7 +2418,9 @@ def wizard_http(wizard: CalibrationWizard, action: str, body: dict) -> dict:
         error.code = "input_acceptance_removed"
         raise error
     if action == "start":
-        return wizard.start(body.get("imeDeviceId"))
+        # Auto_CS#20：goal="observation" = 纯观测校准档（零机械动作，产出
+        # observation_ready）；缺省/None 沿用会话既有档位（motion 语义不变）。
+        return wizard.start(body.get("imeDeviceId"), goal=body.get("goal"))
     if action == "cancel":
         return wizard.cancel()
     if action == "screen-geometry":

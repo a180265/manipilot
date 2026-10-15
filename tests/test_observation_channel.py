@@ -226,8 +226,8 @@ class FakeIme:
 class ObsEnv:
     """观测档向导环境：机械臂全程离线，相机/边缘/绿靶为注入检测器。"""
 
-    def __init__(self, tmp_path, *, binding_revision=1):
-        self.daemon = OfflineDaemon()
+    def __init__(self, tmp_path, *, binding_revision=1, daemon=None):
+        self.daemon = daemon or OfflineDaemon()
         self.ime = FakeIme()
         self.frame_seq = iter(range(1, 10 ** 6))
         self.quad = {"corners": [[10.0, 5.0], [950.0, 5.0],
@@ -458,6 +458,82 @@ def test_observation_recalibration_replaces_previous_ready_bundle(tmp_path):
     assert bundle["xy"]["robotToScreen"] is None  # 旧运动映射不并入观测档案
     assert bundle["camera"]["cameraToScreen"]["homography"] != old_homography
     assert bundle["screen"]["edgeModel"]["corners"] == env.quad["corners"]
+
+
+class SessionDaemon(OfflineDaemon):
+    """运动档起点仿真：status 报已连接；任何指令/位置读取仍视为测试失败。"""
+
+    def status(self):
+        return {"connected": True, "session": "sess-A", "device_present": True,
+                "estop_locked": False, "lease": None, "last_error": None}
+
+
+def test_observation_finish_after_motion_session_keeps_legacy_motion_fields(tmp_path):
+    """评审实测边界钉住：同一 wizard 先跑运动档会话，再 start(goal=observation)。
+
+    observation_rebuild 只隔离磁盘旧档；同会话 preserved state 里的旧
+    z/xy/safePark/targets 会复制进 observation_ready 档案（_sync_bundle 尾段
+    按 state 回填）。安全性不受影响：observation_ready 被运动门禁双重独立
+    拒绝（bundle_not_ready + daemon_session_unbound），档案仅供纯读；本测试
+    钉住该现状，防止 docstring 声明与实现再度脱节。
+    """
+    env = ObsEnv(tmp_path, daemon=SessionDaemon())
+    env.wizard.start("k40-01")  # 运动档会话：daemon 会话在手
+    assert env.wizard.state["goal"] == "motion"
+    # 造出运动档校准产物（直接播种 state，与既有向导测试同族做法）
+    with env.wizard._lock:
+        env.wizard.state["z"].update({
+            "hoverZ": 2.0,
+            "autoSafe": {"zSafe": 5.0, "tapDepth": 3.0, "validated": True},
+        })
+        env.wizard.state["xy"] = {
+            "accepted": [], "trials": [],
+            "fit": {"a": 10.0, "b": 0.0, "c": 100.0,
+                    "d": 0.0, "e": 8.0, "f": 200.0,
+                    "residualRmsPx": 0.2, "maxResidualPx": 0.4},
+            "validation": [], "validationPassed": True,
+        }
+        env.wizard.state["safePark"] = {
+            "confirmed": True, "parkX": 11.0, "parkY": 12.0, "parkZ": 5.0,
+            "source": "test",
+        }
+        env.wizard.state["targets"] = {
+            "ime_delete_key": {"nx": 0.1, "ny": 0.9, "enabled": True},
+        }
+        env.wizard._sync_bundle()
+        env.wizard._save_state()
+
+    # 同一向导实例改跑观测档：start(goal=observation) 保留 preserved state
+    env.wizard.start("k40-01", goal="observation")
+    assert env.wizard.state["goal"] == "observation"
+    assert env.wizard.state["z"]["hoverZ"] == 2.0  # preserved state 未清洗
+    env.open_phone()
+    wait_stage(env, cw.STAGE_SCREEN_GEOMETRY)
+    env.wizard.edge_capture()
+    env.wizard.camera_fit()
+    result = env.wizard.finish()
+    assert result["status"] == "observation_ready"
+    # 观测 finish 零机械动作
+    assert env.daemon.cmds == []
+
+    bundle = cb.load_bundle("arm-01", tmp_path)
+    assert bundle["status"] == "observation_ready"
+    assert bundle["daemonSession"] is None
+    # 遗留运动字段确实带入观测档案（docstring 已如实声明该边界）
+    assert bundle["z"]["hoverZ"] == 2.0
+    assert bundle["z"]["zSafe"] == 5.0
+    assert bundle["xy"]["robotToScreen"] is not None
+    assert bundle["safePark"]["parkX"] == 11.0
+    assert bundle["targets"]["ime_delete_key"]["enabled"] is True
+    # 双重独立拒绝：运动门禁对 observation_ready 一律不放行
+    fails = cb.validate_calibration_bundle(
+        bundle, device_id="arm-01", camera_id="cam-01",
+        camera_device_unique_id="uvc-test-01", binding_revision=1,
+        daemon_addr="127.0.0.1:8795", frame_width=CAM_W, frame_height=CAM_H,
+        daemon_session="sess-A")
+    codes = {item["code"] for item in fails}
+    assert "bundle_not_ready" in codes
+    assert "daemon_session_unbound" in codes
 
 
 def test_state_view_exposes_observation_goal(tmp_path):

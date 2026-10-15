@@ -610,9 +610,14 @@ class CalibrationWizard:
         promote 写入的几何/Z 参数/模型锁/验收标志。ready 时只做验收字段级
         合并历史兼容记录，其余一律保留档案现值；微信记录不参与门禁。
         observation_rebuild（Auto_CS#20）：纯观测 finish 的显式一次性重建——
-        旧档案（含 ready/motion_ready/draft 的残留运动字段）一律不并入观测
-        档案；几何与绑定只认本会话证据（finish 已校验 edge+homography 在手），
-        以空白档案为底避免旧运动字段残留。
+        磁盘旧档（含 ready/motion_ready/draft）不并入观测档案，以空白档案
+        为底；几何与绑定只认本会话证据（finish 已校验 edge+homography 在手）。
+        边界（#20 评审实测）：同一向导会话先跑过运动档再 start(goal=observation)
+        时，preserved state 里的旧 z/xy/safePark/targets 会随本函数尾段的
+        state 回填复制进观测档案（磁盘旧档隔离不等于 state 清洗）。这不构成
+        动作风险：observation_ready 被运动门禁双重独立拒绝
+        （validate_calibration_bundle 判 bundle_not_ready + daemonSession=None
+        判 daemon_session_unbound），档案仅供纯读使用。
         """
         current = cb.load_bundle(self.device, self.data_root)
         rebuild_base = None
