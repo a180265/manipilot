@@ -33,6 +33,12 @@ CameraHelper 只负责采集和上传画面（采集层），不控制机械臂�
 所有上传帧带 `X-Frame-Source: camera_helper` 正式来源标记；Chrome 兼容页帧带
 `chrome_compat` 降级标记，两者不允许同时写同一通道。
 
+## 窗口行为
+
+- 关闭窗口（红点）＝停止全部采集推流：进程留在程序坞，点程序坞图标（或再
+  `open dist/CameraHelper.app`）即唤回窗口，不必整体退出重开。
+- 彻底退出用 ⌘Q 或 `osascript -e 'quit app "CameraHelper"'`（启停台「停止」即此命令）。
+
 ## 断线与权限行为
 
 - macOS 未授权/拒绝摄像头权限：状态栏给出中文指引，不采集。

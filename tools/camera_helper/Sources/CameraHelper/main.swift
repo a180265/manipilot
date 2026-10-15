@@ -1549,7 +1549,7 @@ private final class ChannelRow {
 }
 
 @MainActor
-private final class AppDelegate: NSObject, NSApplicationDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow!
     private let uploader = FrameUploader()
     private var rows: [ChannelRow] = []
@@ -1587,6 +1587,24 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         rows.forEach { $0.stop() }
     }
 
+    /// 关窗语义＝停止全部采集推流：与用户「关掉它」的意图一致，避免无窗口
+    /// 却在后台继续推帧的暗态（启动/停止按钮随窗口不可见，暗态无法操作）。
+    /// 进程留在程序坞，点图标可唤回窗口。stop() 自带幂等护栏，与退出路径
+    /// （applicationWillTerminate）重复调用无副作用。
+    func windowWillClose(_ notification: Notification) {
+        stopAll()
+    }
+
+    /// 无窗口时点程序坞图标（reopen 事件）须唤回主窗口；缺此处理时
+    /// reopen 无人接，关窗后唯一出路是整体退出再 open。
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        return true
+    }
+
     private func buildWindow() {
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1160, height: 760),
@@ -1596,6 +1614,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         window.title = "Arm Fleet CameraHelper"
         window.center()
+        window.delegate = self
+        // 关窗后窗口对象须可复用（reopen 唤回），不随 close 释放。
+        window.isReleasedWhenClosed = false
 
         let root = NSStackView()
         root.orientation = .vertical
