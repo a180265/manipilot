@@ -3785,7 +3785,8 @@ function regionButtons() {
   const preview = usable && !REGION.drag && regionPreviewUsable();
   $("#btnRegionOpen").disabled = !usable;
   $("#btnRegionPreview").disabled = !usable || !!REGION.drag || !REGION.rect || !REGION.frame;
-  $("#btnRegionSave").disabled = !preview || REGION.preview.status !== "verified";
+  // 检测门已撤（业主 2026-10-16）：needs_review 预览同样可发布（检测仅参考）
+  $("#btnRegionSave").disabled = !preview;
   $("#btnRegionDraft").disabled = !preview;
   $("#btnRegionRefresh").disabled = REGION.busy || selectionPending || !S.contextId;
 }
