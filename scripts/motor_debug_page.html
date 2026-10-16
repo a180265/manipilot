@@ -1394,12 +1394,17 @@ function renderStatus(data) {
   }
   if (data.mpos) S.mpos = data.mpos;
   const d = data.daemon;
+  // 状态滞后连拍计数：单拍脱靶（瞬态）不打断已连接显示、不锁坐标动作，
+  // 连续 ≥3 拍（约 4.5s）才按「暂不可确认」处理（业主 2026-10-16 拍板）。
+  S.staleBeats = d.status_stale ? (S.staleBeats || 0) + 1 : 0;
   const btnConnect = $("#btnConnect"), btnDisconnect = $("#btnDisconnect");
   btnConnect.disabled = Boolean(d.status_stale) || !d.device_present || Boolean(d.session);
   btnDisconnect.disabled = Boolean(d.status_stale) || !d.connected || !d.session;
-  if (d.status_stale || String(d.last_error || "").includes("状态查询忙"))
+  if (d.session)
+    setBadge($("#bDaemon"), "ok", `已连接 · 锚点 ${String(d.session).slice(0, 6)}` +
+      (d.status_stale ? "（状态滞后）" : ""));
+  else if (d.status_stale || String(d.last_error || "").includes("状态查询忙"))
     setBadge($("#bDaemon"), "warn", "状态查询中");
-  else if (d.session) setBadge($("#bDaemon"), "ok", `已连接 · 锚点 ${String(d.session).slice(0, 6)}`);
   else if (!d.connected && d.device_present) setBadge($("#bDaemon"), "warn", "设备已插入 · 待连接");
   else setBadge($("#bDaemon"), "warn", "设备未插入");
   const rc = data.runtimeCalibration;
@@ -1410,7 +1415,8 @@ function renderStatus(data) {
   if (d.estop_locked) {
     banner.textContent = "⛔ 急停锁定中（daemon 级，所有普通运动已拒绝）：现场确认安全后点右上「🔓 急停复位」，并用硬件急停/断电作为最终手段。";
     banner.classList.add("show");
-  } else if (d.status_stale) {
+  } else if (d.status_stale && (S.staleBeats || 0) >= 3) {
+    // 单拍脱靶不锁动作（连接态徽章已标「状态滞后」）；连续 3 拍才算真滞后
     banner.textContent = "⚠ 当前状态暂不可确认，已锁定坐标动作；请等待状态刷新或人工核对。";
     banner.classList.add("show");
   } else if (!d.session && d.device_present) {
@@ -3618,7 +3624,7 @@ var REGION = {  // var：顶层可被 vm 测试环境枚举（cjs 竞态测试�
   frame: null,              // 冻结源帧 {evidenceId, img, width, height, jpegSha256, capturedAt}
   rect: null,               // 源归一化框 {x,y,width,height}（R2-15 冻结 rect 域）
   preview: null,            // 服务端 preview 响应（preview_id 单次消费）
-  previewScope: null, expiryTimer: null,
+  previewScope: null, expiryTimer: null, countdownTimer: null,
   saved: null,              // GET phone-search-region 响应
   versionRecord: null,      // 当前生效版本记录（相机/安装绑定详情，异步补读）
   drag: null, framing: false, busy: false,
@@ -3643,6 +3649,8 @@ function regionCurrent(scope) {
 function regionDiscardPreview() {
   if (REGION.expiryTimer !== null) clearTimeout(REGION.expiryTimer);
   REGION.expiryTimer = null;
+  if (REGION.countdownTimer !== null) clearInterval(REGION.countdownTimer);
+  REGION.countdownTimer = null;
   REGION.preview = null; REGION.previewScope = null;
 }
 
@@ -3993,7 +4001,15 @@ async function regionPreview() {
       throw new Error("预览响应无效或已过期，请重新预览");
     REGION.preview = preview;
     REGION.previewScope = {...scope, evidenceId: frame.evidenceId, rect: JSON.stringify(rect)};
+    // 有效期倒计时上屏（业主 2026-10-16：曾因不知 120s 窗口而保存失败）
+    REGION.countdownTimer = setInterval(() => {
+      const left = Math.max(0, Math.round((Date.parse(preview.expires_at) - Date.now()) / 1000));
+      regionMsg(`${status}。源像素 (${px.left},${px.top})-(${px.right},${px.bottom})。` +
+        `（预览剩余 ${left}s，请及时保存）`, false);
+    }, 1000);
     REGION.expiryTimer = setTimeout(() => {
+      if (REGION.countdownTimer !== null) clearInterval(REGION.countdownTimer);
+      REGION.countdownTimer = null;
       if (!regionCurrent(scope) || REGION.preview !== preview) return;
       regionDiscardPreview();
       regionMsg("预览已过期：请重新预览后再保存。", true);
@@ -4086,6 +4102,12 @@ async function regionSave(publish) {
   }
 }
 
+$("#btnRegionOpen").addEventListener("click", e => { e.preventDefault(); regionOpen(); });
+$("#btnRegionPreview").addEventListener("click", e => { e.preventDefault(); regionPreview(); });
+$("#btnRegionSave").addEventListener("click", e => { e.preventDefault(); regionSave(true); });
+$("#btnRegionDraft").addEventListener("click", e => { e.preventDefault(); regionSave(false); });
+$("#btnRegionDelete").addEventListener("click", e => { e.preventDefault(); regionDelete(); });
+
 async function regionDelete() {
   // 撤销生效范围（业主 2026-10-16：删错框重来的正规入口）。代理走
   // POST /api/phone-search-region/delete（fleet DELETE 契约 body 必空，
@@ -4114,12 +4136,6 @@ async function regionDelete() {
     regionEndBusy(op);
   }
 }
-
-$("#btnRegionOpen").addEventListener("click", e => { e.preventDefault(); regionOpen(); });
-$("#btnRegionPreview").addEventListener("click", e => { e.preventDefault(); regionPreview(); });
-$("#btnRegionSave").addEventListener("click", e => { e.preventDefault(); regionSave(true); });
-$("#btnRegionDraft").addEventListener("click", e => { e.preventDefault(); regionSave(false); });
-$("#btnRegionDelete").addEventListener("click", e => { e.preventDefault(); regionDelete(); });
 $("#btnRegionRefresh").addEventListener("click", async e => {
   e.preventDefault();
   if (REGION.busy || selectionPending) return;

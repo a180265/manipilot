@@ -522,12 +522,13 @@ def _auto_proxy(method: str, path: str, body: dict | None = None) -> dict:
     if path.startswith(_LAYOUT_PATH_PREFIX):
         for key, value in _layout_identity_headers().items():
             req.add_header(key, value)
-        if method == "GET":
-            # Fleet GET 契约：两个公共头必填（关联 ID 代理生成；版本按路由）
+        if method in ("GET", "DELETE"):
+            # Fleet 契约公共头：关联 ID 代理生成（DELETE 契约亦必填）
             req.add_header("X-Correlation-Id", str(uuid.uuid4()))
-            version = _layout_get_contract_version(path)
-            if version:
-                req.add_header("X-Layout-Contract-Version", version)
+            if method == "GET":
+                version = _layout_get_contract_version(path)
+                if version:
+                    req.add_header("X-Layout-Contract-Version", version)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             raw = resp.read()
@@ -1329,7 +1330,9 @@ class DaemonClient:
     CONNECT_TIMEOUT = 3.0
     STATUS_TIMEOUT = 1.0
     CONTROL_TIMEOUT = 2.0
-    MPOS_TIMEOUT = 0.25
+    # 0.25s 曾在 USB 链路抖动时高频脱靶（业主 2026-10-16 拍板放宽）：
+    # 状态查询宁慢勿误，单拍失败=「状态查询中」闪断+坐标动作锁一拍。
+    MPOS_TIMEOUT = 0.6
     MPOS_WAIT_TIMEOUT = 3.0
     STATUS_CANCEL_INTERVAL = 0.05
 
@@ -4032,8 +4035,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, b"not found", "text/plain")
         except Exception as exc:
             # GET=轮询/只读（1.5~30s 周期刷新），失败由页面徽章/横幅即时呈现，
-            # 不记 ops 日志（与 WX 仓 2026-10-16 拍板同源：轮询失败不进库）。
-            # 动作/写操作的失败仍由各自动作处理器内的 log_op(kind=api_xxx) 记录。
+            # 不记 ops 日志——曾把 ops 日志刷成 98.8% 轮询噪音（7.4 万行里 7.3 万
+            # 行 api_error；业主 2026-10-16 拍板：轮询失败不进库）。动作/写操作
+            # 的失败仍由各自动作处理器内的 log_op(kind=api_xxx) 记录。
             status, payload = api_error(exc)
             self._json(payload, code=status)
         finally:
