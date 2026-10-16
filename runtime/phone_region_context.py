@@ -167,6 +167,14 @@ def locate_quad_in_region(image, region: dict, saved_corners,
         if not dup:
             found.append(cand)
     if not found:
+        # 现场诊断（2026-10-16 换臂）：失败帧转储（PNG 无损——JPEG 重编码会
+        # 抹平细反光条，离线复现会失真偏乐观），供比对定位失败的真实画面
+        try:
+            import time as _t
+            cv2.imwrite(f"/tmp/locate_fail_{int(_t.time()*1000)}.png", image)
+            cv2.imwrite(f"/tmp/locate_fail_crop_{int(_t.time()*1000)}.png", crop)
+        except Exception:
+            pass
         raise RegionContextError(
             "screen_not_located", "粗框内无法定位手机屏幕；请确认手机亮屏停在框内")
     # 框=搜索范围：取框内最大面积者（画框人保证框住的是目标屏）

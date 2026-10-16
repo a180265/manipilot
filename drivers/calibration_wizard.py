@@ -150,35 +150,175 @@ TAP_DWELL_MAX_MS = 2000
 CALIBRATED_TRAVEL_FEED = 5000.0
 
 
+def _ridge_fit_quad(contour, seed, tolerance_px: float = 32.0):
+    """主脊四边拟合：每边取种子带内「距离直方图最密脊」的点拟合直线。
+
+    笔杆反光条与屏幕边平行时，带内存在两条平行点群（真边 + 反光条边缘），
+    Huber 拟合会掉进两人群之间；按直方图质量取主脊锁定多数点群——真边
+    总比反光条长。真帧边点因 JPEG 噪声散布 ~±3px，直方图先经 [1,2,4,2,1]
+    核平滑再选峰，入选半径 ±2.5px（本拟合仅供反光擦除定位环带，±3px
+    精度足够；最终四角由完整检测链二遍复检裁决）。任一边支撑不足/
+    近平行/非凸返回 None。
+    """
+    import cv2 as _cv2
+    points = contour.reshape(-1, 2).astype(float)
+    expected = np.asarray(seed, dtype=float)
+    sides = np.roll(expected, -1, axis=0) - expected
+    lengths = np.linalg.norm(sides, axis=1)
+    if (lengths <= 0).any():
+        return None
+    normals = np.column_stack((-sides[:, 1], sides[:, 0])) / lengths[:, None]
+    distances = ((points[:, None, :] - expected) * normals).sum(axis=2)
+    lines = []
+    for index in range(4):
+        start, side, length = expected[index], sides[index], lengths[index]
+        tangent = side / length
+        along = (points - start) @ tangent / length
+        band = ((along >= .12) & (along <= .88)
+                & (np.abs(distances[:, index]) <= tolerance_px))
+        selected = points[band]
+        if len(selected) < max(12, .3 * length):
+            return None
+        offsets = distances[band, index]
+        hist, edges = np.histogram(
+            offsets, bins=np.arange(-tolerance_px, tolerance_px + 1.0, 1.0))
+        if hist.max() <= 0:
+            return None
+        smooth = np.convolve(hist, np.array([1.0, 2.0, 4.0, 2.0, 1.0]), "same")
+        peak = int(np.argmax(smooth))
+        ridge = (edges[peak] + edges[peak + 1]) / 2.0
+        if 0 < peak < len(hist) - 1 and smooth[peak] > 0:
+            denominator = (smooth[peak - 1] - 2 * smooth[peak] + smooth[peak + 1])
+            if abs(denominator) > 1e-9:
+                delta = 0.5 * (smooth[peak - 1] - smooth[peak + 1]) / denominator
+                if abs(delta) <= 1.0:
+                    ridge += float(delta)
+        inliers = selected[np.abs(offsets - ridge) <= 2.5]
+        if len(inliers) < max(12, .15 * length):
+            return None
+        direction = _cv2.fitLine(
+            inliers.astype(np.float32), _cv2.DIST_L2, 0, .01, .01).reshape(4)
+        normal = np.array([-direction[1], direction[0]], dtype=float)
+        normal = normal / np.linalg.norm(normal)
+        lines.append((normal, float(normal @ direction[2:])))
+    intersections = []
+    for index in range(4):
+        previous, current = lines[index - 1], lines[index]
+        matrix = np.array([previous[0], current[0]])
+        if abs(float(np.linalg.det(matrix))) < .2:
+            return None
+        intersections.append(np.linalg.solve(matrix, [previous[1], current[1]]))
+    quad = np.asarray(intersections, dtype=np.float32)
+    if not np.isfinite(quad).all() or not _cv2.isContourConvex(quad):
+        return None
+    return quad
+
+
+def _erase_outside_quad_glare(frame):
+    """笔杆反光擦除（两遍修复第一遍，2026-10-16 换臂现场）。
+
+    笔杆伸出屏幕外的金属反光会并入屏幕亮斑，凸包出界触发遮挡守卫拒绝定位。
+    用主脊四边拟合（见 _ridge_fit_quad）在原始轮廓上求屏幕四边形——主脊
+    选多数点群，反光条与真边平行也不会拉偏；垃圾画面在边支撑/近平行/凸性
+    门照旧失败，不会乱锁。然后把四边形外 ±40px 环带内的亮像素擦黑，交回
+    完整检测链复检。
+    返回 (帧, 四边形内部掩码)；拟合不可得时掩码为 None、帧原样。
+    离线验证：19:17 现场 8 帧失败帧 7/7 恢复，四角误差 0.7-0.8px。
+    """
+    import cv2 as _cv2
+    from drivers import screen_edge as _se
+    gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    otsu_val, threshold = _cv2.threshold(
+        gray, 0, 255, _cv2.THRESH_BINARY + _cv2.THRESH_OTSU)
+    contours, _ = _cv2.findContours(
+        threshold, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_NONE)
+    quad = None
+    for contour in sorted(contours, key=_cv2.contourArea, reverse=True)[:5]:
+        area = _cv2.contourArea(contour)
+        if not (width * height * _se.MIN_AREA_RATIO <= area <= width * height * .90):
+            continue
+        seed = _se._quad_from_contour(_cv2.convexHull(contour))
+        if seed is None:
+            continue
+        fitted = _ridge_fit_quad(contour, seed)
+        if fitted is None:
+            continue
+        edges = np.linalg.norm(
+            np.roll(fitted, -1, axis=0) - np.asarray(fitted), axis=1)
+        if float(edges.min() / edges.max()) < 0.30:
+            # 长宽比合理性门（2026-10-16 现场实测教训）：屏幕暗下去时最大
+            # 亮斑会变成画面边缘的环境竖条（247x720≈1:2.9），主脊拟合照样
+            # 能锁出四边形——擦除+填充会把假屏"修"成完整屏幕（586px 假阳性，
+            # 比定位失败更危险）。手机屏（横/竖）短长边比实测 ≥0.45。
+            continue
+        quad = np.asarray(fitted, dtype=np.float32)
+        break
+    if quad is None:
+        return frame, None
+    quad = np.asarray(quad, dtype=np.float32)
+    inside = np.zeros((height, width), np.uint8)
+    _cv2.fillPoly(inside, [quad.astype(np.int32)], 255)
+    ring = (_cv2.dilate(inside, _cv2.getStructuringElement(
+        _cv2.MORPH_ELLIPSE, (81, 81))) > 0) & (inside == 0)
+    out = frame.copy()
+    out[ring & (gray >= otsu_val)] = 0
+    return out, inside
+
+
+def _pen_clean_single_pass(frame):
+    """笔杆清理单遍：擦亮（屏外反光）→ 填暗（屏内遮挡）。"""
+    import cv2 as _cv2
+    try:
+        frame, inside = _erase_outside_quad_glare(frame)
+    except Exception:
+        inside = None  # 擦亮失败不阻塞：填暗段与原行为照旧
+    gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
+    otsu_val, mask = _cv2.threshold(gray, 0, 255, _cv2.THRESH_BINARY + _cv2.THRESH_OTSU)
+    kernel = _cv2.getStructuringElement(_cv2.MORPH_ELLIPSE, (121, 121))
+    closed = _cv2.morphologyEx(mask, _cv2.MORPH_CLOSE, kernel)
+    n, labels, stats, _ = _cv2.connectedComponentsWithStats(closed)
+    if n <= 1:
+        return frame
+    largest = 1 + int(np.argmax(stats[1:, _cv2.CC_STAT_AREA]))
+    screen_mask = labels == largest
+    if inside is not None:
+        screen_mask = screen_mask & (inside > 0)
+    bright_pixels = frame[screen_mask & (gray >= otsu_val)]
+    if bright_pixels.size == 0:
+        return frame
+    median_bgr = np.median(bright_pixels, axis=0)
+    filled = frame.copy()
+    fill = screen_mask & (gray < otsu_val * 0.7)
+    filled[fill] = median_bgr
+    return filled
+
+
 def clean_pen_occlusion(frame):
     """笔杆遮挡清理（业主产品决策 2026-10-16：机械臂点击必入画，检测须排除笔杆）。
 
-    原理：亮屏（Otsu）掩码 + 大核闭运算填充笔杆暗遮挡 + 最大连通域约束
-    （防环境亮斑并入），遮挡像素抬亮为屏幕中位色。四角定位只看屏幕完整
-    亮区外轮廓。全暗帧/无亮区时原样返回（定位照旧报 screen_not_located）。
-    离线验证：33/26px 遮挡漂移帧清理后回到 0.4-1.4px；全遮挡帧恢复可定位。
-    任何 OpenCV 异常（小尺寸/全暗合成帧等）原样返回帧——清理是尽力而为，
-    失败不伤害定位。
+    两段清理，执行两遍（首遍的填暗为次遍的擦亮提供干净语境——采样期笔杆
+    贴屏入画的重反光单遍不足，2026-10-16 真帧实测：单遍 0/9、双遍 9/9）：
+    1. 擦亮（两遍修复）：笔杆伸出屏幕外的金属反光并入亮斑会让遮挡守卫
+       拒绝——主脊拟合屏幕四边形（_ridge_fit_quad）、擦掉四边形外
+       ±40px 环带内亮像素；
+    2. 填暗：亮屏（Otsu）掩码 + 大核闭运算填充笔杆暗遮挡 + 最大连通域
+       约束，遮挡像素抬亮为屏幕中位色。有四边形时填充只发生在四边形
+       内部——否则闭运算会把已擦黑的环带桥接回笔杆残段再填亮，反光
+       复活（实测）。
+    全暗帧/无亮区/拟合不可得时原样返回（清理是尽力而为，失败不伤害定位）。
+    离线验证：33/26px 遮挡漂移帧清理后回到 0.4-1.4px；全遮挡帧恢复可定位；
+    停驻态反光帧（19:17 JPEG 存证）7/7、采样态真帧（PNG 无损存证）9/9 恢复。
     """
     import cv2 as _cv2
     try:
-        gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
-        otsu_val, mask = _cv2.threshold(gray, 0, 255, _cv2.THRESH_BINARY + _cv2.THRESH_OTSU)
-        kernel = _cv2.getStructuringElement(_cv2.MORPH_ELLIPSE, (121, 121))
-        closed = _cv2.morphologyEx(mask, _cv2.MORPH_CLOSE, kernel)
-        n, labels, stats, _ = _cv2.connectedComponentsWithStats(closed)
-        if n <= 1:
-            return frame
-        largest = 1 + int(np.argmax(stats[1:, _cv2.CC_STAT_AREA]))
-        screen_mask = labels == largest
-        bright_pixels = frame[screen_mask & (gray >= otsu_val)]
-        if bright_pixels.size == 0:
-            return frame
-        median_bgr = np.median(bright_pixels, axis=0)
-        filled = frame.copy()
-        fill = screen_mask & (gray < otsu_val * 0.7)
-        filled[fill] = median_bgr
-        return filled
+        out = frame
+        for _ in range(2):
+            nxt = _pen_clean_single_pass(out)
+            if _cv2.absdiff(nxt, out).max() == 0:
+                break
+            out = nxt
+        return out
     except Exception:
         return frame
 # 布防→点击的前置等待：K40 校准页只在轮询(750ms)看到布防后才上报触点，
@@ -2209,58 +2349,107 @@ class CalibrationWizard:
             raise PoseUnlocatable("摄像头不可用：调试台未接入取流桥")
         region = deepcopy(self._current_search_region())
         ensure_current = self._pin_screen_search_context(region)
-        jpg, seq = self._camera_fetch()
-        ensure_current()
         import cv2  # 局部导入（仓内惯例）：笔杆遮挡清理需要
-        frame_raw = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
-        frame_dec = (clean_pen_occlusion(frame_raw)
-                     if frame_raw is not None else None)
         if region is not None:
             # S2-06/07：初始定位与回退都只在本台粗框内；上下文失效为终态
             # WizardError（不是 H01 姿态提示），输出恢复原图坐标。
-            frame = frame_raw
-            if frame is None:
-                raise WizardError("取流桥帧解码失败")
             size = region["source_size"]
-            if frame.shape[:2] != (size["height"], size["width"]):
-                raise WizardError("region_context_invalid：取流图像尺寸与搜索范围不一致")
-            # 检测顺序（2026-10-16 换臂现场教训）：原始帧优先——笔杆跨屏幕
-            # 边界时，清理器会把屏外区域修补成屏幕色（伪亮斑破坏四边），
-            # 清理帧反而必失败；原始失败（笔杆遮挡断边）才用清理帧重试。
-            # 粗框内定位同为原始帧优先、清理帧兜底。
-            from drivers.screen_edge import locate_screen_quad
+            # 锚定梯度优先（2026-10-16 采样态真帧 9/9、0.8-1.2px）：笔杆暗影
+            # 切断亮斑/反光改变轮廓语境时，区域分割类检测（自由+清理）全灭，
+            # §6.1.1 梯度带内直线拟合不做区域分割，不受切断影响。无锚（换臂
+            # bootstrap 首次定位）或锚整体失效（旧档案错位）时落入自由检测
+            # 级联（业主 2026-10-16 拍板）。锚过期时梯度自拒（偏离守卫），
+            # 只是多一次尝试的代价。
+            anchor = expected_corners or self._bundle_edge_corners()
             region_exc = None
-            for label, frame in (("full_frame_raw", frame_raw),
-                                 ("full_frame_cleaned", frame_dec)):
+            if anchor is not None:
                 try:
-                    located_full = locate_screen_quad(
-                        frame,
-                        expected_corners=expected_corners or self._bundle_edge_corners(),
-                        tolerance_px=32, require_fittable=True)
+                    jpg, seq = self._camera_fetch()
+                    g_quad = self._gradient_edge_quad(jpg, seq, anchor)
                     ensure_current()
-                    return {"corners": located_full["corners"],
-                            "frameW": frame.shape[1], "frameH": frame.shape[0],
-                            "area": None, "frameSeq": seq,
-                            "source": label}
+                    return {"corners": g_quad["corners"],
+                            "frameW": g_quad["frameW"], "frameH": g_quad["frameH"],
+                            "area": None, "frameSeq": g_quad.get("frameSeq", seq),
+                            "source": "gradient_anchored"}
                 except Exception as exc:
                     region_exc = exc
+            # 暗场景曝光摇摆重试（业主 2026-10-16）：屏幕强制自动变暗后，
+            # 相机自动曝光会摇摆——同一场景有的帧对比度够、有的不够
+            # （离线单帧全通、运行中连续失败的实证）。最多 3 轮，每轮重新
+            # 取帧：全图原始帧优先、清理帧兜底、粗框内再 raw/cleaned；
+            # 任一命中即返回。全部落空才判无法定位。
+            from drivers.screen_edge import locate_screen_quad
             from runtime.phone_region_context import locate_quad_in_region
-            for label, frame in (("raw", frame_raw), ("cleaned", frame_dec)):
+            for attempt in range(3):
                 try:
-                    located = locate_quad_in_region(
-                        frame, region, expected_corners or self._bundle_edge_corners())
-                    ensure_current()
-                    return {"corners": located["corners"],
-                            "frameW": located["frameW"], "frameH": located["frameH"],
-                            "area": None, "frameSeq": seq,
-                            "source": f"search_region_{label}"}
+                    jpg, seq = self._camera_fetch()
+                    frame_raw = cv2.imdecode(
+                        np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+                    frame_dec = (clean_pen_occlusion(frame_raw)
+                                 if frame_raw is not None else None)
                 except Exception as exc:
                     region_exc = exc
-            # 梯度回退同框：locate_quad_in_region 已含全部回退；仍失败
-            # = 框内不可定位（终态，不回全图）。
+                    time.sleep(0.7)
+                    continue
+                if frame_raw is None:
+                    region_exc = WizardError("取流桥帧解码失败")
+                    time.sleep(0.7)
+                    continue
+                if frame_raw.shape[:2] != (size["height"], size["width"]):
+                    raise WizardError(
+                        "region_context_invalid：取流图像尺寸与搜索范围不一致")
+                for label, frame in (("full_frame_raw", frame_raw),
+                                     ("full_frame_cleaned", frame_dec)):
+                    # 自由检测不锚定期望角（业主 2026-10-16 拍板）：换臂/
+                    # 换机后旧预测角整体错位，锚定必失败；全图自由检测在
+                    # 本场景实测稳定命中。粗框路径同样自由检测。有锚时加
+                    # 一致性守卫：清理帧在暗屏上可能把绿靶残影/环境亮块
+                    # 「修」成假屏（实测 587px 偏差），超锚 2×容差按失败
+                    # 处理（§6.1.1 偏离上限口径），交给姿态门按原语义裁决。
+                    try:
+                        located_full = locate_screen_quad(
+                            frame, tolerance_px=32, require_fittable=True)
+                        if anchor is not None and float(np.max(np.hypot(
+                                np.asarray(located_full["corners"])[:, 0]
+                                - np.asarray(anchor)[:, 0],
+                                np.asarray(located_full["corners"])[:, 1]
+                                - np.asarray(anchor)[:, 1]))) > 64.0:
+                            raise ScreenEdgeError("自由检测结果与锚偏差超限，按失败处理")
+                        ensure_current()
+                        return {"corners": located_full["corners"],
+                                "frameW": frame.shape[1], "frameH": frame.shape[0],
+                                "area": None, "frameSeq": seq,
+                                "source": label}
+                    except Exception as exc:
+                        region_exc = exc
+                for label, frame in (("raw", frame_raw), ("cleaned", frame_dec)):
+                    try:
+                        located = locate_quad_in_region(frame, region, None)
+                        ensure_current()
+                        return {"corners": located["corners"],
+                                "frameW": located["frameW"], "frameH": located["frameH"],
+                                "area": None, "frameSeq": seq,
+                                "source": f"search_region_{label}"}
+                    except Exception as exc:
+                        region_exc = exc
+                # 暗屏唤醒击（业主 2026-10-16 设计）：探头正悬停在手机上方，
+                # 连发两击点亮屏幕（暗屏单击点亮/锁屏双击唤醒），下一轮定位
+                # 在亮屏上进行。唤醒击失败不阻塞：下一轮定位自行给出结论。
+                try:
+                    auto_safe = (self.host.state.get("z") or {}).get("autoSafe") or {}
+                    w_depth = float(auto_safe.get("tapDepth") or 8.0)
+                    w_feed = float(auto_safe.get("tapFeed") or 2000)
+                    self.host._daemon_tap(w_depth, w_feed, 0)
+                    time.sleep(0.25)
+                    self.host._daemon_tap(w_depth, w_feed, 0)
+                except Exception:
+                    pass
+                time.sleep(0.5)
             raise WizardError(
                 f"粗框内无法定位手机屏幕：{region_exc}；"
                 "请改善轮廓可见度或重新核验搜索范围") from region_exc
+        jpg, seq = self._camera_fetch()
+        ensure_current()
         try:
             quad = self._edge_detector(jpg)
         except ScreenEdgeError as free_exc:

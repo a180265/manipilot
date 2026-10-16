@@ -1283,17 +1283,44 @@ class AutoRunner:
             try:
                 quad = self.host._edge_quad(
                     expected_corners=self.host._bundle_edge_corners())
-                if type(quad.get("frameSeq")) is not int or quad["frameSeq"] < 0:
-                    raise ValueError("手机定位缺少持续推流的帧序号")
-                run["edge"] = {"corners": quad["corners"],
-                               "frameW": quad["frameW"], "frameH": quad["frameH"],
-                               "frameSeq": quad["frameSeq"],
-                               "capturedAt": _now()}
-            except Exception as exc:
-                raise AutoRunError(
-                    "camera_measurement_error", f"本轮校准无法定位手机屏幕：{exc}",
-                    classification="camera_measurement_error",
-                    routed_to="CAMERA_RECALIBRATION", park=False) from exc
+            except Exception as first_exc:
+                # 暗屏唤醒重试（业主 2026-10-16 设计）：屏幕强制自动变暗后
+                # 定位必然失败；探头在手机上方（tapAnchor 与当前会话一致）
+                # 时，连发两击点亮屏幕后重试一次定位。仍失败才判失败。
+                anchor = ((self.host.state.get("z") or {}).get("tapAnchor") or {})
+                if not (anchor.get("daemonSession")
+                        and anchor.get("daemonSession") == self.host.state.get("daemonSession")):
+                    raise AutoRunError(
+                        "camera_measurement_error",
+                        f"本轮校准无法定位手机屏幕：{first_exc}",
+                        classification="camera_measurement_error",
+                        routed_to="CAMERA_RECALIBRATION", park=False) from first_exc
+                try:
+                    # 不调 ensure_debug_lease：运行期租约为 runner 自持，
+                    # debug 租约互斥会把唤醒击挤掉（2026-10-16 现场实测）。
+                    auto_safe = (self.host.state.get("z") or {}).get("autoSafe") or {}
+                    w_depth = float(auto_safe.get("tapDepth") or 8.0)
+                    w_feed = float(auto_safe.get("tapFeed") or 2000)
+                    self.host._daemon_tap(w_depth, w_feed, 0)
+                    time.sleep(0.25)
+                    self.host._daemon_tap(w_depth, w_feed, 0)
+                    time.sleep(0.8)
+                except Exception:
+                    pass  # 唤醒击失败不改变判定：下面的重试定位自行给出结论
+                try:
+                    quad = self.host._edge_quad(
+                        expected_corners=self.host._bundle_edge_corners())
+                except Exception as exc:
+                    raise AutoRunError(
+                        "camera_measurement_error", f"本轮校准无法定位手机屏幕：{exc}",
+                        classification="camera_measurement_error",
+                        routed_to="CAMERA_RECALIBRATION", park=False) from exc
+            if type(quad.get("frameSeq")) is not int or quad["frameSeq"] < 0:
+                raise ValueError("手机定位缺少持续推流的帧序号")
+            run["edge"] = {"corners": quad["corners"],
+                           "frameW": quad["frameW"], "frameH": quad["frameH"],
+                           "frameSeq": quad["frameSeq"],
+                           "capturedAt": _now()}
         # 预检=基础资格门（首次走位前），不是采样姿态复核：帧冻结/超限
         # 在此拒绝（R4-08-C 基础资格与采样告警分别断言；park=False 零动作）。
         self._auto_require_stable_phone(run, on_out_of_range="reject")
@@ -1353,7 +1380,10 @@ class AutoRunner:
                 # （多边界并存滞回），同锚使该滞回在两次捕获间抵消，
                 # 剩余偏差才是真实的手机移动（2026-09-29 真机实测 8.9px
                 # 确定性假阳性的根因）。
-                quad = self.host._edge_quad()
+                # 传 run 基准角（2026-10-16）：采样期笔杆暗影切断亮斑时
+                # 区域分割检测全灭，_edge_quad 的锚定梯度路径需要此锚。
+                quad = self.host._edge_quad(
+                    expected_corners=deepcopy(edge.get("corners")) or None)
                 seq = quad.get("frameSeq")
                 if type(seq) is int and seq > previous_seq:
                     break
@@ -1389,7 +1419,8 @@ class AutoRunner:
             for _attempt in range(3):
                 if _attempt > 0:
                     time.sleep(2.0 * _attempt)
-                    quad = self.host._edge_quad()
+                    quad = self.host._edge_quad(
+                        expected_corners=deepcopy(edge.get("corners")) or None)
                     seq = quad.get("frameSeq")
                 try:
                     fit_pose_robust(edge["corners"], quad["corners"], max_movement=10.0,
@@ -1440,6 +1471,33 @@ class AutoRunner:
                 # 不是采样姿态复核——超限/无法核实仍拒绝（留痕照记）。
                 # 姿态定位不可得（PoseUnlocatable 家族）保持原类型传播：
                 # z_confirm_safe 按用户拍板 2026-09-29 只对这一族缺席留痕。
+                #
+                # 锚点点击唤醒豁免（业主 2026-10-16 设计）：tapAnchor 与当前
+                # daemon 会话一致 = 点击位置是操作员已核实的安全位置，不依赖
+                # 相机可见性——暗屏/遮挡时定位必然失败，此时点击本身就是唤醒
+                # 手段，放行并留痕。
+                anchor = ((self.host.state.get("z") or {}).get("tapAnchor") or {})
+                if (anchor.get("daemonSession")
+                        and anchor.get("daemonSession") == self.host.state.get("daemonSession")):
+                    _pose_gate_skip(
+                        "锚点点击唤醒：定位不可得但锚点与当前会话一致，放行点击",
+                        stage="post_travel" if after_travel else "sampling",
+                        measured_px=measured, threshold_px=4.0)
+                    # 暗屏单击点亮 / 锁屏双击唤醒（业主 2026-10-16 设计，与
+                    # WX 双击唤醒一致）：连发两击（间隔 ~250ms）——暗屏时第一击
+                    # 点亮、第二击产生触点；锁屏时两击构成双击唤醒，唤醒后的
+                    # 正式点击（调用方随后的 z/tap 流程）产生触点回报。
+                    try:
+                        self.host.daemon.ensure_debug_lease()
+                        auto_safe = (self.host.state.get("z") or {}).get("autoSafe") or {}
+                        w_depth = float(auto_safe.get("tapDepth") or 8.0)
+                        w_feed = float(auto_safe.get("tapFeed") or 2000)
+                        self.host._daemon_tap(w_depth, w_feed, 0)
+                        time.sleep(0.25)
+                        self.host._daemon_tap(w_depth, w_feed, 0)
+                    except Exception:
+                        pass  # 唤醒击失败不阻塞：后续正式点击按原流程执行
+                    return None
                 if isinstance(exc, PoseUnlocatable):
                     raise exc
                 raise AutoRunError(

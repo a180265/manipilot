@@ -11,7 +11,7 @@ SAVED = [[30, 20], [270, 20], [270, 220], [30, 220]]
 def wizard_with_edge(live):
     wizard = object.__new__(CalibrationWizard)
     wizard._edge_detector = object()
-    wizard._edge_quad = lambda: {"corners": live, "frameSeq": 2}
+    wizard._edge_quad = lambda **kwargs: {"corners": live, "frameSeq": 2}
     wizard._auto_runner = AutoRunner(wizard)  # Auto_CS#8：runner 自治，宿主仅提供 host 面
     return wizard
 
@@ -52,7 +52,7 @@ def test_missing_baseline_aborts_but_unlocatable_live_warns():
     wizard = wizard_with_edge(SAVED)
     with pytest.raises(AutoRunError):
         wizard._auto_runner._auto_require_stable_phone({"edge": None})
-    wizard._edge_quad = lambda: (_ for _ in ()).throw(
+    wizard._edge_quad = lambda **kwargs: (_ for _ in ()).throw(
         WizardError("screen_edge_not_detected"))
     run = {"edge": {"corners": SAVED, "frameSeq": 1}, "events": []}
     result = wizard._auto_runner._auto_require_stable_phone(run)

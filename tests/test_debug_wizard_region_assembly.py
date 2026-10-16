@@ -116,5 +116,7 @@ def test_debug_factory_reads_selected_region_and_bounds_detection(tmp_path, monk
     if case.startswith("gradient"):
         assert len(gradient_calls) == 1
         assert np.array_equal(gradient_calls[0][1], np.asarray(expected) - [50, 30])
-    assert reads and captures == [True]
+    # 成功=单帧；失败=3 轮曝光摇摆重试各取一帧（业主 2026-10-16 语义）
+    assert reads and (captures == [True] if case in {"first", "gradient"}
+                      else len(captures) == 3)
     assert daemon.cmds == []
