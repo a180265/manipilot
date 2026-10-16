@@ -284,7 +284,19 @@ class LayoutRegionStore:
     def attach_state(self, state: LayoutStateStore) -> None:
         self._typed_state = state
 
-    def get_pointer(self, device_id: str) -> dict | None:
+    def delete_pointer(self, device_id: str) -> dict:
+        """撤销生效范围（业主 2026-10-16：删错框重来的正规入口）。版本历史保留作审计。"""
+        with self._lock:
+            row = self._query_one(
+                "SELECT revision FROM layout_region_pointer WHERE device_id=?",
+                (device_id,))
+            if row is None:
+                return {"deleted": False, "revision": None}
+            self._save("DELETE FROM layout_region_pointer WHERE device_id=?",
+                       (device_id,))
+            return {"deleted": True, "revision": int(row["revision"])}
+
+    def get_pointer(self, device_id: str) -> dict | None:    def get_pointer(self, device_id: str) -> dict | None:
         row = self._query_one(
             "SELECT * FROM layout_region_pointer WHERE device_id=?", (device_id,))
         if row is None:
