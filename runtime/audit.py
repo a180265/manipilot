@@ -8,6 +8,7 @@ from __future__ import annotations
 # 运维与平台动作的中文显示
 ACTION_DISPLAY: dict[str, str] = {
     "device_pause": "暂停设备",
+    "region_delete": "撤销生效粗框",
     "device_resume": "恢复设备",
     "device_quarantine": "隔离设备",
     "device_unquarantine": "解除隔离",
