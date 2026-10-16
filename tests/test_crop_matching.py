@@ -33,14 +33,19 @@ def test_roi_containing_two_phones_is_not_verified():
     assert result["detected_quad"] is None
 
 
-def test_large_roi_does_not_hide_a_smaller_second_screen():
+def test_large_roi_locks_onto_global_fit_result():
+    """多候选不再否决（业主 2026-10-16 拍板：人工框直接采信）：大框内大小
+    两块屏，判定=全裁图严格拟合的裁决结果（与下游校准/姿态门同一检测器），
+    不再用低阶轮廓启发式做更严的第二意见。"""
     frame = np.full((1000, 1600, 3), 18, np.uint8)
     cv2.rectangle(frame, (100, 100), (550, 900), (200, 200, 200), -1)
     cv2.rectangle(frame, (1000, 300), (1100, 480), (230, 230, 230), -1)
     result = _detect_in_rect(
         frame, {"left": 0, "top": 0, "right": 1600, "bottom": 1000})
-    assert result["status"] == "needs_review", result
-    assert result["reason_codes"] == ["multiple_screen_candidates"]
+    assert result["status"] == "verified", result
+    points = np.array([[p["x"], p["y"]] for p in result["detected_quad"]])
+    np.testing.assert_allclose(
+        points, [[100, 100], [550, 100], [550, 900], [100, 900]], atol=2)
 
 
 @pytest.mark.parametrize("rect", [
@@ -214,24 +219,25 @@ def test_region_preview_rejects_reencoded_or_replaced_source(region_service):
     assert error.value.code == "archive_invalid"
 
 
-def test_region_save_rechecks_phone_inside_crop(region_service):
+def test_publish_trusts_operator_rect_without_detection_gate(region_service):
+    """检测门已撤（业主 2026-10-16）：发布不再被检测状态拦截——即使保存时
+    当前帧里手机已消失也照常发布。真正的门在使用时：下游校准/姿态门用
+    detect_screen_quad 实际定位，框里没手机会在使用时大声失败。"""
     import uuid
-    from runtime.layout_region import RegionError
 
     svc, bridge = region_service
     old = bridge.push(_scene())
     bridge.push(_scene())
     view = svc.preview("arm-01", _preview_request(old["evidence_id"]), "operator")
     assert view["status"] == "verified"
-    # Keep the outside rectangle; losing the selected phone must still reject.
     changed = _scene()
     changed[60:530, 60:390] = 18
     bridge.push(changed)
-    with pytest.raises(RegionError) as error:
-        svc.save("arm-01", {
-            "client_request_id": str(uuid.uuid4()), "expected_revision": 0,
-            "publish": True, "preview_id": view["preview_id"],
-            "region_digest": view["region_digest"],
-        }, "operator")
-    assert error.value.code == "items_unverified"
-    assert svc._store.get_pointer("arm-01") is None
+    result = svc.save("arm-01", {
+        "client_request_id": str(uuid.uuid4()), "expected_revision": 0,
+        "publish": True, "preview_id": view["preview_id"],
+        "region_digest": view["region_digest"],
+    }, "operator")
+    assert result["status"] == "verified", result
+    pointer = svc._store.get_pointer("arm-01")
+    assert pointer is not None and pointer["selected_version"] >= 1

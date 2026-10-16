@@ -231,9 +231,12 @@ class EvidenceStore:
         if file_path:
             sidecar = (self._dir / file_path).with_suffix(".json")
             try:
+                # record 可能携带帧字节（测试桥/部分来源即含）：sidecar 只担
+                # 元数据与标记，bytes 用 default=str 降级，不因序列化炸掉标记。
                 sidecar.write_text(json.dumps(record, ensure_ascii=False,
-                                              indent=2), encoding="utf-8")
-            except OSError:
+                                              indent=2, default=str),
+                                   encoding="utf-8")
+            except (OSError, TypeError):
                 pass  # 标记落盘失败不阻塞业务；DB 标记已生效
 
     def purge_source_frame(self, evidence_id: str) -> bool:

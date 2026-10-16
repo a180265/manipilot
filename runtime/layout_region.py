@@ -9,9 +9,10 @@ R2-15（2026-10-04 第二轮）：
   缺可信字段拒绝）。
 - 预览另取当前新鲜可信源帧（同设备/安装/来源几何），在粗框内实际检测手机；
   source_binding.evidence_id 指向本次检测帧（可与框选证据不同）。
-- 保存时再次核验当前来源新鲜度、预览期限与发布空闲；publish=true 要求检测
-  唯一/完整/未裁断且设备空闲，publish=false 允许 needs_review 草稿（不改生效
-  指针）。检测在保存时重跑——冻结后手机移出框/来源停止推进不能用旧检测发布。
+- 保存时再次核验当前来源新鲜度、预览期限与发布空闲；检测状态仅作预览参考
+  信息，不拦发布（业主 2026-10-16 拍板：人工画框直接采信）；publish=false 存
+  needs_review 草稿不改生效指针。真正的门在使用时（下游 detect_screen_quad
+  实际定位，框里没手机会在使用时大声失败）。
 - 预览/草稿/操作台账落 layout_typed_state（region_preview 一次消费、
   region_draft 不可变、operation/intent 幂等）。
 
@@ -429,8 +430,9 @@ def _detect_in_rect(frame_bgr: np.ndarray, pixel_rect: dict) -> dict:
     - 检测只在粗框裁图运行，仍用 drivers.screen_edge 严格四边拟合；
       粗框不是四角，检测结果加回裁剪偏移后才是原图坐标；
     - verified 要求：唯一屏幕四边形且完整落在粗框内（未裁断）；
-    - 手机在框外 → screen_outside_region；多候选 → multiple_screen_candidates；
-      全帧暗屏 → dark_screen；其余未检出 → phone_not_located。
+    - 手机在框外 → screen_outside_region；多候选不再单独否决，与单候选同路
+      全裁图严格拟合裁决（详见函数体内注释）；全帧暗屏 → dark_screen；
+      其余未检出 → phone_not_located。
     """
     failure = {"status": "needs_review",
                "reason_codes": ["screen_outside_region"],
@@ -449,25 +451,30 @@ def _detect_in_rect(frame_bgr: np.ndarray, pixel_rect: dict) -> dict:
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     frame_dark = (float(gray.mean()) <= _DARK_BRIGHTNESS_MAX
                   and float(gray.std()) < _DARK_TEXTURE_MAX)
-    if len(_screen_candidates(crop)) >= 2:
-        return {"status": "needs_review",
-                "reason_codes": ["multiple_screen_candidates"],
-                "detected_quad": None}
+    # 多候选不再一票否决（业主 2026-10-16：手画框被杂物候选卡成仅可存草稿）。
+    # _screen_candidates 只是低阶轮廓启发式（Otsu 双极性，24×24 矩形亮块即
+    # 入围；屏幕+机身边框/桌面矩形杂物轻松凑满两个，且矩形杂物同样能过严
+    # 格拟合），而下游消费方（校准向导、姿态门、屏幕观察）一律以
+    # detect_screen_quad 全裁图结果为准——门槛应当预演下游行为，不是做更严
+    # 的第二意见。多候选与单候选同路：全裁图严格拟合裁决，命中严格入框即
+    # verified，框太紧/框外照旧给对应复核原因。
     from drivers.screen_edge import ScreenEdgeError, detect_screen_quad
+    # 冻结语义：verified 要求检测四角严格落在粗框内（不得贴边/裁断）。
+    margin = 1.0
+
+    def _strictly_inside(corners) -> bool:
+        return all(left + margin < point[0] < right - margin
+                   and top + margin < point[1] < bottom - margin
+                   for point in corners)
+
     try:
         found = detect_screen_quad(crop)
     except ScreenEdgeError:
         found = None
     if found is not None:
         corners = np.asarray(found["corners"], np.float64) + [left, top]
-        # 冻结语义：verified 要求检测四角严格落在粗框内（不得贴边/裁断）。
         # 手机贴满/超出框 = 框太紧 → screen_outside_region（提示稍大于手机重画）。
-        margin = 1.0
-        strictly_inside = all(
-            left + margin < point[0] < right - margin
-            and top + margin < point[1] < bottom - margin
-            for point in corners)
-        if strictly_inside:
+        if _strictly_inside(corners):
             return {"status": "verified", "reason_codes": [],
                     "detected_quad": [{"x": round(float(px), 2),
                                        "y": round(float(py), 2)}
@@ -747,27 +754,13 @@ class LayoutRegionService:
         # ③ 来源复验：当前新鲜帧与预览来源一致
         identity = self._source_identity(self._env_get("evidence_get")(
             preview["source_binding"]["evidence_id"]))
-        _frame_record, frame_bytes = self._fresh_frame(device_id, identity)
+        _frame_record, _frame_bytes = self._fresh_frame(device_id, identity)
         operation_id = str(uuid.uuid4())
         if publish:
-            if preview.get("status") != "verified":
-                raise RegionError(
-                    "items_unverified",
-                    "检测未唯一/完整通过，不能发布生效；可保存 needs_review 草稿")
-            # 保存时在当前帧粗框内重跑检测（冻结后手机移出框/来源停止推进
-            # 不能用旧检测发布）
-            image = _decode_jpeg(frame_bytes)
-            expected_size = preview["source_binding"]["source_size"]
-            if (image.shape[1], image.shape[0]) != (
-                    expected_size["width"], expected_size["height"]):
-                raise RegionError("source_binding_changed",
-                                  "保存时原图尺寸已变化：请重新框选")
-            outcome = _detect_in_rect(image, preview["pixel_rect"])
-            if outcome["status"] != "verified":
-                raise RegionError(
-                    "items_unverified",
-                    "当前来源检测未通过（" +
-                    "、".join(outcome["reason_codes"]) + "）：不能发布")
+            # 检测门已撤（业主 2026-10-16 拍板：人工画框直接采信——画框人必
+            # 把手机画入范围）。检测状态仅作预览参考信息，不再拦截发布；下
+            # 游校准向导/姿态门在使用时仍以 detect_screen_quad 实际定位，框
+            # 画得不好会在使用时大声失败，不会静默错。
             idle_getter = self._env_get("device_idle")
             if idle_getter is not None and not idle_getter(device_id):
                 raise RegionError("device_busy",

@@ -4031,7 +4031,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(404, b"not found", "text/plain")
         except Exception as exc:
-            log_op("api_error", {"path": path}, ok=False, detail=str(exc))
+            # GET=轮询/只读（1.5~30s 周期刷新），失败由页面徽章/横幅即时呈现，
+            # 不记 ops 日志（与 WX 仓 2026-10-16 拍板同源：轮询失败不进库）。
+            # 动作/写操作的失败仍由各自动作处理器内的 log_op(kind=api_xxx) 记录。
             status, payload = api_error(exc)
             self._json(payload, code=status)
         finally:

@@ -17,14 +17,19 @@ def _anchor(reference, search):
     return {"id": "probe", "reference_rect": reference, "search_region": search}
 
 
-def test_mixed_bright_and_dark_screens_are_ambiguous():
+def test_mixed_bright_and_dark_locks_onto_strict_fit_screen():
+    """亮屏+暗屏并存不再判歧义（业主 2026-10-16）：判定=全裁图严格拟合
+    （拟合器只认亮屏极性，暗屏对它不可见——与下游校准/姿态门行为一致，
+    门槛预演下游而不是更严的第二意见）。"""
     frame = np.full((600, 900, 3), 100, np.uint8)
     cv2.rectangle(frame, (100, 100), (340, 480), (230,) * 3, -1)
     cv2.rectangle(frame, (600, 180), (650, 260), (0,) * 3, -1)
     outcome = _detect_in_rect(
         frame, {"left": 30, "top": 30, "right": 870, "bottom": 550})
-    assert outcome["status"] == "needs_review"
-    assert outcome["reason_codes"] == ["multiple_screen_candidates"]
+    assert outcome["status"] == "verified", outcome
+    points = np.array([[p["x"], p["y"]] for p in outcome["detected_quad"]])
+    np.testing.assert_allclose(
+        points, [[100, 100], [340, 100], [340, 480], [100, 480]], atol=2)
 
 
 @pytest.mark.parametrize("search", [{}, [], False, None])

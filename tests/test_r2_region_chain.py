@@ -315,10 +315,10 @@ def test_r2_15_binding_change_between_evidence_and_fresh_frame(chain):
     assert body["error"]["code"] == "layout_binding_changed"
 
 
-def test_r2_15_zero_detection_draft_cannot_publish(chain):
-    """零手机检测：needs_review 预览（detected_quad=null）；publish=true 拒绝
-    且指针不变；publish=false 存草稿（draft_saved，pending_draft 可见），
-    草稿不改生效指针。"""
+def test_r2_15_zero_detection_preview_advisory_publish_trusts_rect(chain):
+    """零手机检测：needs_review 预览（detected_quad=null）仅作参考信息；
+    检测门已撤（业主 2026-10-16 拍板：人工框直接采信），publish=true 照常
+    发布生效。真正的门在使用时（下游 detect_screen_quad 实际定位）。"""
     from tests.layout_d2_helpers import encode_jpeg
     bridge = chain["bridge"]
     context_id = _console_context(chain)
@@ -336,36 +336,21 @@ def test_r2_15_zero_detection_draft_cannot_publish(chain):
     assert preview["detected_quad"] is None
     assert "phone_not_located" in preview["reason_codes"] or \
         "dark_screen" in preview["reason_codes"]
-    # publish=true 拒绝：未验证的检测不能发布生效
-    status, body = _console_post(
+    # publish=true：检测不通过也照常发布（人工框直接采信）
+    status, saved = _console_post(
         chain["console"], "/api/phone-search-region/save",
         {"deviceId": "arm-01", "contextId": context_id,
          "preview_id": preview["preview_id"],
          "region_digest": preview["region_digest"],
          "expected_revision": 0, "publish": True})
-    assert status == 409, (status, body)
-    assert body["error"]["code"] == "layout_items_unverified"
-    # publish=false：合规 needs_review 草稿，selected 不变
-    status, preview2 = _console_post(
-        chain["console"], "/api/phone-search-region/preview",
-        {**_page_preview_request(old_frame["evidence_id"], rect),
-         "contextId": context_id})
-    assert status == 200
-    status, saved = _console_post(
-        chain["console"], "/api/phone-search-region/save",
-        {"deviceId": "arm-01", "contextId": context_id,
-         "preview_id": preview2["preview_id"],
-         "region_digest": preview2["region_digest"],
-         "expected_revision": 0, "publish": False})
     assert status == 200, saved
-    assert saved["status"] == "draft_saved"
-    assert saved["selected_version"] is None
+    assert saved["status"] == "verified"
+    assert saved["selected_version"] == saved["saved_version"]
     status, view = _console_get(chain["console"],
                                 "/api/phone-search-region?device=arm-01",
                                 context_id)
     assert status == 200, view
-    assert view["pending_draft"] is not None
-    assert view["selected"] is None
+    assert view["selected"] is not None
 
 
 def test_r2_15_preview_expiry_blocks_save(chain):
@@ -395,9 +380,9 @@ def test_r2_15_preview_expiry_blocks_save(chain):
     assert body["error"]["code"] == "layout_preview_expired"
 
 
-def test_r2_15_page_removed_phone_cannot_publish_old_detection(chain):
-    """冻结后手机移出框/来源停止推进：旧检测不能发布——保存前重取新鲜帧
-    实际再检测（不是复用预览时结论）。"""
+def test_r2_15_publish_after_phone_removed_trusts_operator_rect(chain):
+    """检测门已撤（业主 2026-10-16）：保存前仍重取新鲜帧核对来源身份
+    （几何/绑定不变），但不再因手机移出/暗屏拒绝发布——真门在使用时。"""
     bridge = chain["bridge"]
     context_id = _console_context(chain)
     frame = bridge.push(phone_scene())
@@ -418,17 +403,14 @@ def test_r2_15_page_removed_phone_cannot_publish_old_detection(chain):
          "preview_id": preview["preview_id"],
          "region_digest": preview["region_digest"],
          "expected_revision": 0, "publish": True})
-    # 保存时来源核验不得沿用旧检测结论：手机移出/暗屏 → 拒绝发布
-    assert status == 409, (status, body)
-    assert body["error"]["code"] in (
-        "layout_items_unverified", "layout_source_unavailable",
-        "layout_binding_changed")
+    # 来源身份仍核对（几何/绑定），但手机移出/暗屏不再拦截发布
+    assert status == 200, body
+    assert body["status"] == "verified"
     status, view = _console_get(chain["console"],
                                 "/api/phone-search-region?device=arm-01",
                                 context_id)
     assert status == 200, view
-    assert view["status"] in ("unregistered", "needs_review")
-    assert view["selected"] is None
+    assert view["selected"] is not None
 
 
 def test_r2_15_zero_mechanical_input_actions(chain):
