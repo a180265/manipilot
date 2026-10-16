@@ -296,7 +296,7 @@ class LayoutRegionStore:
                        (device_id,))
             return {"deleted": True, "revision": int(row["revision"])}
 
-    def get_pointer(self, device_id: str) -> dict | None:    def get_pointer(self, device_id: str) -> dict | None:
+    def get_pointer(self, device_id: str) -> dict | None:
         row = self._query_one(
             "SELECT * FROM layout_region_pointer WHERE device_id=?", (device_id,))
         if row is None:
