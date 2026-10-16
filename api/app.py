@@ -183,6 +183,11 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
 
         # R3-17-P4：手机身份 Provider——配对凭据（生产）优先，登记凭据
         # （R2-21 测试/内部装配）兜底；无凭据统一 401（旧输入法需升级配对）。
+        # 业主产品决策 2026-10-16：未配置配对信任材料（ime_pairing_trust 空）=
+        # 开放部署模式，不注入手机身份门（填 IP+端口直连即用；LAN 明文前提下
+        # 身份/撤销能力不启用）；配置了信任材料的部署仍强制配对身份。
+        _ime_pairing_enforced = (runtime is not None and getattr(
+            runtime, "ime_pairing_trust", None) is not None)
         def phone_identity_provider(token):
             rt_ = getattr(app.state, "runtime", None)
             if rt_ is None or not token:
@@ -198,7 +203,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
 
         app.include_router(create_screen_ime_router(
             ime_service, camera_source_for, geometry_provider=geometry_provider,
-            phone_identity_provider=phone_identity_provider,
+            phone_identity_provider=phone_identity_provider if _ime_pairing_enforced else None,
             pairing_provider=pairing_provider))
         # gesture-capture.v1 手机采样协议路由（规范第 5.2 节，同挂 8788）。
         # D 接口请求①：手机侧 5 端点同款 token 门（W4-001：与 screen_ime

@@ -145,7 +145,42 @@ DEFAULT_REQUIRED_TARGETS: tuple[str, ...] = ()
 TOUCH_REPORT_TIMEOUT_S = 6.0
 TAP_DWELL_MAX_MS = 2000
 # 标定完成后的 XY 走位速度；点击下压速度仍使用已校准的 tap.feed。
+# 维持 5000（业主 2026-10-16 拍板：高速执行，降速方案否决）——走位瞬态
+# 与笔杆遮挡改由 clean_pen_occlusion 检测层排除（见下）与姿态门沉降复核。
 CALIBRATED_TRAVEL_FEED = 5000.0
+
+
+def clean_pen_occlusion(frame):
+    """笔杆遮挡清理（业主产品决策 2026-10-16：机械臂点击必入画，检测须排除笔杆）。
+
+    原理：亮屏（Otsu）掩码 + 大核闭运算填充笔杆暗遮挡 + 最大连通域约束
+    （防环境亮斑并入），遮挡像素抬亮为屏幕中位色。四角定位只看屏幕完整
+    亮区外轮廓。全暗帧/无亮区时原样返回（定位照旧报 screen_not_located）。
+    离线验证：33/26px 遮挡漂移帧清理后回到 0.4-1.4px；全遮挡帧恢复可定位。
+    任何 OpenCV 异常（小尺寸/全暗合成帧等）原样返回帧——清理是尽力而为，
+    失败不伤害定位。
+    """
+    import cv2 as _cv2
+    try:
+        gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
+        otsu_val, mask = _cv2.threshold(gray, 0, 255, _cv2.THRESH_BINARY + _cv2.THRESH_OTSU)
+        kernel = _cv2.getStructuringElement(_cv2.MORPH_ELLIPSE, (121, 121))
+        closed = _cv2.morphologyEx(mask, _cv2.MORPH_CLOSE, kernel)
+        n, labels, stats, _ = _cv2.connectedComponentsWithStats(closed)
+        if n <= 1:
+            return frame
+        largest = 1 + int(np.argmax(stats[1:, _cv2.CC_STAT_AREA]))
+        screen_mask = labels == largest
+        bright_pixels = frame[screen_mask & (gray >= otsu_val)]
+        if bright_pixels.size == 0:
+            return frame
+        median_bgr = np.median(bright_pixels, axis=0)
+        filled = frame.copy()
+        fill = screen_mask & (gray < otsu_val * 0.7)
+        filled[fill] = median_bgr
+        return filled
+    except Exception:
+        return frame
 # 布防→点击的前置等待：K40 校准页只在轮询(750ms)看到布防后才上报触点，
 # 否则 ACTION_UP 被静默忽略（armed==null 直接 return）——点击必须落在
 # 手机已看到布防之后，否则真实竞态会随机吞掉触点（现场 7 次中 6 次丢失）。
@@ -2202,16 +2237,35 @@ class CalibrationWizard:
         ensure_current = self._pin_screen_search_context(region)
         jpg, seq = self._camera_fetch()
         ensure_current()
+        import cv2  # 局部导入（仓内惯例）：笔杆遮挡清理需要
+        frame_dec = clean_pen_occlusion(
+            cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR))
         if region is not None:
             # S2-06/07：初始定位与回退都只在本台粗框内；上下文失效为终态
             # WizardError（不是 H01 姿态提示），输出恢复原图坐标。
-            import cv2 as _cv2
-            frame = _cv2.imdecode(np.frombuffer(jpg, np.uint8), _cv2.IMREAD_COLOR)
+            frame = frame_dec
             if frame is None:
                 raise WizardError("取流桥帧解码失败")
             size = region["source_size"]
             if frame.shape[:2] != (size["height"], size["width"]):
                 raise WizardError("region_context_invalid：取流图像尺寸与搜索范围不一致")
+            # 笔杆遮挡交叉检测（业主 2026-10-16）：优先全图清理检测——
+            # 离线实测全图路径亚像素稳定、粗框裁剪路径在笔杆遮挡下偏 7-8px
+            # （裁剪丢失定位上下文）。全图失败时回退粗框路径（多候选/边界
+            # 保护保留，语义不变）。
+            from drivers.screen_edge import locate_screen_quad
+            try:
+                located_full = locate_screen_quad(
+                    frame,
+                    expected_corners=expected_corners or self._bundle_edge_corners(),
+                    tolerance_px=32, require_fittable=True)
+                ensure_current()
+                return {"corners": located_full["corners"],
+                        "frameW": frame.shape[1], "frameH": frame.shape[0],
+                        "area": None, "frameSeq": seq,
+                        "source": "full_frame_cleaned"}
+            except Exception as full_exc:
+                region_exc = full_exc
             from runtime.phone_region_context import locate_quad_in_region
             try:
                 located = locate_quad_in_region(

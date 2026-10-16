@@ -73,6 +73,7 @@ from drivers.calibration_wizard import (  # noqa: E402
     DEFAULT_REQUIRED_TARGETS,
     ImeCalibrationClient,
     CalibrationWizard,
+    ImeError,
 )
 from adapters.vision.ocr import AppleVisionOcrEngine  # noqa: E402
 from drivers.daemon_protocol import (  # noqa: E402

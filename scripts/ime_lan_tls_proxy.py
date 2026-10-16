@@ -32,7 +32,7 @@ CERT_FILE = os.environ.get("IME_TLS_CERT", "")
 KEY_FILE = os.environ.get("IME_TLS_KEY", "")
 
 # 手机白名单（与模板一致；逐条前缀，不做通配）
-ALLOWED_PREFIXES = ("/api/v1/pairings", "/api/v1/devices", "/api/v1/tasks")
+ALLOWED_PREFIXES = ("/api/v1/pairings", "/api/v1/devices", "/api/v1/tasks", "/api/v1/calibrations")
 # 不向下游透传的可伪造头（大小写不敏感比较）
 STRIP_HEADERS = {"x-ime-forwarded", "x-layout-forwarder-token", "x-debug-forwarded-for",
                  "x-forwarded-for", "x-forwarded-proto", "x-real-ip",

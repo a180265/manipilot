@@ -164,8 +164,25 @@ def locate_quad_in_region(image, region: dict, saved_corners,
                 continue
             found.append(np.asarray(detected["corners"], dtype=float))
         if len(found) > 1:
-            raise RegionContextError(
-                "multiple_screen_candidates", "粗框内存在多个屏幕候选")
+            # 双极性交叉核对：两极性都检出且四角高度重叠=同一物理屏幕（过曝
+            # 白屏在反色下同样构成可检四边形），取正常极性结果算单一候选；
+            # 仅当两极性四角明显不重叠（中心偏移大或面积悬殊）才判多候选。
+            # 2026-10-16 现场：过曝校准页被本规则误拒（业主设备实测）。
+            a, b = found[0], found[1]
+            center_offset = float(np.hypot(
+                a[:, 0].mean() - b[:, 0].mean(), a[:, 1].mean() - b[:, 1].mean()))
+            area_a = float((a[:, 0].max() - a[:, 0].min()) * (a[:, 1].max() - a[:, 1].min()))
+            area_b = float((b[:, 0].max() - b[:, 0].min()) * (b[:, 1].max() - b[:, 1].min()))
+            scale = max(area_a, area_b, 1.0)
+            size_ratio = min(area_a, area_b) / scale
+            span = max(float((a[:, 0].max() - a[:, 0].min())),
+                       float((a[:, 1].max() - a[:, 1].min())),
+                       float((b[:, 0].max() - b[:, 0].min())),
+                       float((b[:, 1].max() - b[:, 1].min())), 1.0)
+            if center_offset > 0.25 * span or size_ratio < 0.36:
+                raise RegionContextError(
+                    "multiple_screen_candidates", "粗框内存在多个屏幕候选")
+            found = [found[0]]
         if found:
             quad = found[0]
         else:

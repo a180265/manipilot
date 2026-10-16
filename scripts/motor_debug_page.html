@@ -3936,12 +3936,16 @@ async function regionOpen() {
     await img.decode();
     if (!regionCurrent(scope)) return;
     const sf = source.source_frame || {};
+    // camera-source-frame.v2 载荷字段为 width/height（frame_width/height 为旧
+    // 契约名，兼容读取）——载荷缺整数尺寸时画框无法开始（2026-10-16 实测）。
+    const frameW = Number.isInteger(sf.frame_width) ? sf.frame_width : sf.width;
+    const frameH = Number.isInteger(sf.frame_height) ? sf.frame_height : sf.height;
     if (source.device_id !== device || !source.evidence_id ||
-        !Number.isInteger(sf.frame_width) || !Number.isInteger(sf.frame_height) ||
-        sf.frame_width !== img.naturalWidth || sf.frame_height !== img.naturalHeight)
+        !Number.isInteger(frameW) || !Number.isInteger(frameH) ||
+        frameW !== img.naturalWidth || frameH !== img.naturalHeight)
       throw new Error("源帧设备或原始图尺寸不一致，请重新取帧");
     REGION.frame = {evidenceId: source.evidence_id, img,
-                    width: sf.frame_width, height: sf.frame_height,
+                    width: frameW, height: frameH,
                     jpegSha256: source.jpeg_sha256,
                     capturedAt: source.captured_at || ""};
     REGION.rect = null; REGION.preview = null;

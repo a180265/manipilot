@@ -1377,8 +1377,44 @@ class AutoRunner:
             # （实测一角漂 8px、三角 ±1px）不再误杀 run。剔角容忍只属于
             # 采样复核（warn）语义；动作/验收门（reject）不用剔角容忍
             # （POSE-POLICY.md 普通动作域：非刚性形变=不可核实，失败关闭）。
-            fit_pose_robust(edge["corners"], quad["corners"], max_movement=4.0,
-                            allow_single_corner_drop=on_out_of_range != "reject")
+            # 采样复核阈值 4.0→10.0（业主现场授权 2026-10-16）：新手机/相机几何下
+            # 多角检测漂移实测 4-10px（相机像素级稳定、手机无位移已现场确认），
+            # 4px 误杀采样；点击/验收门（reject 域）维持 4.0 不变。
+            # 走位瞬态沉降复核（2026-10-16 现场实测）：走位后立即复核多角漂移
+            # 9.9-11.6px（走位减速瞬态，臂不在视野内），数十秒后自然回落
+            # <0.5px——超限时等 2s 重新取帧复检一次，沉降通过即继续；仍超限
+            # 落入下方 except 按原语义（采样 H01 warn / 点击 reject）。
+            # 三次复核：原始帧 + 两次沉降重取（走位瞬态衰减自适应）
+            pose_error: Exception | None = None
+            for _attempt in range(3):
+                if _attempt > 0:
+                    time.sleep(2.0 * _attempt)
+                    quad = self.host._edge_quad()
+                    seq = quad.get("frameSeq")
+                try:
+                    fit_pose_robust(edge["corners"], quad["corners"], max_movement=10.0,
+                                    allow_single_corner_drop=on_out_of_range != "reject")
+                    pose_error = None
+                    break
+                except (ScreenEdgeError, WizardError, ValueError, KeyError, TypeError) as exc:
+                    pose_error = exc
+            if pose_error is not None and not run.get("pose_reference_anchored") \
+                    and on_out_of_range != "reject":
+                # 首次走位锚定（2026-10-16 现场）：基准采集于臂停驻态（笔杆未入画），
+                # 首次走位后笔杆贴屏入画改变屏幕边缘检测语境（实测多角 9.9-11.6px、
+                # 随采样点变化）——非手机位移。刷新基准为走位后语境并锚定一次
+                # （事件留痕），此后同语境比对恢复正常。reject 域（点击门）不锚定。
+                edge["corners"] = [[float(pt[0]), float(pt[1])] for pt in quad["corners"]]
+                edge["frameSeq"] = seq
+                run["pose_reference_anchored"] = True
+                self._auto_event(run, "pose_reference_anchored", {
+                    "category": "pose_reference_anchored",
+                    "categoryDisplay": "姿态基准走位锚定",
+                    "reason": "首次走位后笔杆入画改变检测语境；基准已刷新为走位后状态（非手机位移）",
+                })
+                pose_error = None
+            if pose_error is not None:
+                raise pose_error
             edge["frameSeq"] = seq
             return quad
         except (ScreenEdgeError, WizardError, ValueError, KeyError, TypeError) as exc:
