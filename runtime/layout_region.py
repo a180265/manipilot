@@ -952,14 +952,21 @@ class LayoutRegionService:
 
     # ================= 读取/版本 =================
     def get(self, device_id: str) -> dict:
-        from runtime.phone_region_context import RegionContextError, load_region_context
+        # 指针已删（撤销生效范围后重画路径，业主 2026-10-16）≠ 数据损坏：
+        # 版本历史保留作审计，读取按「未登记」返回（revision 0），面板照常
+        # 允许重新框选。指针存在时才走 load_region_context 的完整校验
+        # （摘要/字段损坏仍终态拒绝）。
+        pointer = self._store.get_pointer(device_id)
+        record = None
+        if pointer is not None:
+            from runtime.phone_region_context import RegionContextError, load_region_context
 
-        try:
-            context = load_region_context(self._store, device_id)
-        except RegionContextError as exc:
-            raise RegionError("items_unverified", exc.message) from exc
-        pointer = context["pointer"] if context is not None else None
-        record = context["region"] if context is not None else None
+            try:
+                context = load_region_context(self._store, device_id)
+            except RegionContextError as exc:
+                raise RegionError("items_unverified", exc.message) from exc
+            pointer = context["pointer"]
+            record = context["region"]
         draft_version, _draft = self._store.latest_draft(device_id)
         reasons: list[str] = []
         selected_ref = None

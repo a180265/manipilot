@@ -353,6 +353,60 @@ def test_r2_15_zero_detection_preview_advisory_publish_trusts_rect(chain):
     assert view["selected"] is not None
 
 
+def test_delete_pointer_then_read_is_unregistered_not_terminal(chain):
+    """删除生效范围后读取按「未登记」返回（revision 0、selected=null），
+    面板可立即重新框选——不是终态错误（业主 2026-10-16：删完就画不了=
+    死锁 bug）。版本历史保留；再次发布正常重建指针。"""
+    bridge = chain["bridge"]
+    context_id = _console_context(chain)
+    from tests.layout_d2_helpers import encode_jpeg
+    dark = np.full((480, 640, 3), 18, dtype=np.uint8)
+    old_frame = bridge.push(dark)
+    bridge.push(dark)
+    rect = {"x": 0.3, "y": 0.3, "width": 0.4, "height": 0.5}
+    # 先发布一版（检测门已撤，暗帧也放行）
+    status, preview = _console_post(
+        chain["console"], "/api/phone-search-region/preview",
+        {**_page_preview_request(old_frame["evidence_id"], rect),
+         "contextId": context_id})
+    assert status == 200, preview
+    status, saved = _console_post(
+        chain["console"], "/api/phone-search-region/save",
+        {"deviceId": "arm-01", "contextId": context_id,
+         "preview_id": preview["preview_id"],
+         "region_digest": preview["region_digest"],
+         "expected_revision": 0, "publish": True})
+    assert status == 200, saved
+    # 删除生效范围
+    status, body = _console_post(
+        chain["console"], "/api/phone-search-region/delete",
+        {"deviceId": "arm-01", "contextId": context_id})
+    assert status == 200 and body["deleted"] is True, body
+    # 回归点：读取按未登记返回，不是 layout_items_unverified 终态
+    status, view = _console_get(chain["console"],
+                                "/api/phone-search-region?device=arm-01",
+                                context_id)
+    assert status == 200, view
+    assert view["status"] == "unregistered", view
+    assert view["revision"] == 0, view
+    assert view["selected"] is None
+    assert view["pending_draft"] is None
+    # 重画路径畅通：再次预览+发布正常重建指针
+    status, preview2 = _console_post(
+        chain["console"], "/api/phone-search-region/preview",
+        {**_page_preview_request(old_frame["evidence_id"], rect),
+         "contextId": context_id})
+    assert status == 200, preview2
+    status, saved2 = _console_post(
+        chain["console"], "/api/phone-search-region/save",
+        {"deviceId": "arm-01", "contextId": context_id,
+         "preview_id": preview2["preview_id"],
+         "region_digest": preview2["region_digest"],
+         "expected_revision": 0, "publish": True})
+    assert status == 200, saved2
+    assert saved2["selected_version"] == saved2["saved_version"]
+
+
 def test_r2_15_preview_expiry_blocks_save(chain):
     """预览期限（120 秒）过期后保存拒绝（409 layout_preview_expired）。"""
     bridge = chain["bridge"]

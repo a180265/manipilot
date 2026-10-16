@@ -4550,6 +4550,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(_auto_proxy(
                     "POST", f"/v1/devices/{device}/phone-search-region/preview",
                     upstream))
+            elif path == "/api/phone-search-region/delete":
+                require_context(device, body.get("contextId"), motion=False)
+                # DELETE 契约 body 必须为 null（api:empty）；带体被 wire 拒。
+                self._json(_auto_proxy(
+                    "DELETE", f"/v1/devices/{device}/phone-search-region", None))
+
             elif path == "/api/phone-search-region/save":
                 # FIX-12/R2-15：粗框保存——冻结 save_request 闭集
                 # {contract_version, correlation_id, client_request_id,

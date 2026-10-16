@@ -1792,6 +1792,32 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         except Exception as exc:  # 域异常 → 冻结外壳
             return _layout_fail(request, exc)
 
+    @app.delete("/v1/devices/{device_id}/phone-search-region")
+    async def delete_phone_search_region(device_id: str, request: Request):
+        try:
+            # 身份门强制；wire 冻结契约暂未覆盖 region_delete（登记撰写归
+            # 后续票），本路由按管理面直呼（限本机回环+转发身份）。
+            principal = _require_principal(request, "region_delete")
+            correlation = new_id("region_delete")
+            result = await asyncio.to_thread(
+                _region_svc(request).delete_pointer, device_id)
+            # 删除零留痕曾致「生效范围莫名消失」排障困惑（2026-10-16）：
+            # 这里补一条事件审计（review_records 只覆盖 save/publish 族）。
+            rt(request).audit.record(
+                "region_delete", operator_id=principal,
+                device_id=device_id, correlation_id=correlation,
+                detail={"deleted": bool(result.get("deleted")),
+                        "revision": result.get("revision")})
+            # wire 冻结契约暂未覆盖 region_delete（撰写归后续票）：
+            # 响应按 layout-ok 同形手工构造（不走 ROUTE_CONTRACT_VERSIONS 查表）。
+            body = {**result, "contract_version": "layout-region-delete.v1",
+                    "correlation_id": correlation}
+            return json_response(body, "region_delete", correlation)
+        except LayoutHttpError:
+            raise
+        except Exception as exc:
+            return _layout_fail(request, exc)
+
     @app.post("/v1/devices/{device_id}/phone-search-region/preview")
     async def preview_phone_search_region(device_id: str, request: Request):
         try:

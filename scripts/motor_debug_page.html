@@ -156,6 +156,7 @@
     <button class="primary" id="btnRegionOpen">① 取当前绑定相机源帧并框选</button>
     <button id="btnRegionPreview" disabled>② 预览确认</button>
     <button id="btnRegionSave" disabled>③ 保存并发布</button>
+    <button id="btnRegionDelete" class="danger">🗑 删除已保存范围</button>
     <button id="btnRegionDraft" disabled>保存草稿（不发布）</button>
     <button id="btnRegionRefresh">读取当前范围</button>
     <span class="hint" id="regionBindingText"></span>
@@ -4085,10 +4086,40 @@ async function regionSave(publish) {
   }
 }
 
+async function regionDelete() {
+  // 撤销生效范围（业主 2026-10-16：删错框重来的正规入口）。代理走
+  // POST /api/phone-search-region/delete（fleet DELETE 契约 body 必空，
+  // 页面语义参数由代理收敛进受信转发）。
+  if (REGION.busy || REGION.drag || !REGION.ready ||
+      !regionCurrent(regionSnapshot())) return;
+  const scope = regionSnapshot(), device = scope.device;
+  const op = regionBeginBusy(device);
+  try {
+    const result = await api("/api/phone-search-region/delete", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({deviceId: device, contextId: scope.contextId}),
+    });
+    if (!regionCurrent(scope)) return;
+    if (typeof result.deleted !== "boolean")
+      throw new Error("删除结果未知：响应不完整，请读取当前范围核对，不要重复提交");
+    regionDiscardPreview();
+    const refreshed = await regionSelectDevice(device);
+    if (refreshed && regionCurrent(refreshed.scope))
+      regionMsg(result.deleted ?
+        `已撤销生效范围（原指针 revision ${result.revision}）；版本历史保留，可重新框选保存。` :
+        "本就没有生效范围，无需撤销。", !refreshed.loaded);
+  } catch (e) {
+    if (regionCurrent(scope)) regionMsg(`删除失败：${e.message}`, true);
+  } finally {
+    regionEndBusy(op);
+  }
+}
+
 $("#btnRegionOpen").addEventListener("click", e => { e.preventDefault(); regionOpen(); });
 $("#btnRegionPreview").addEventListener("click", e => { e.preventDefault(); regionPreview(); });
 $("#btnRegionSave").addEventListener("click", e => { e.preventDefault(); regionSave(true); });
 $("#btnRegionDraft").addEventListener("click", e => { e.preventDefault(); regionSave(false); });
+$("#btnRegionDelete").addEventListener("click", e => { e.preventDefault(); regionDelete(); });
 $("#btnRegionRefresh").addEventListener("click", async e => {
   e.preventDefault();
   if (REGION.busy || selectionPending) return;
