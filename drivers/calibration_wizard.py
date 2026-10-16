@@ -2193,42 +2193,16 @@ class CalibrationWizard:
                 "请在调试台重新核验手机搜索范围后重新校准") from exc
 
     def _pin_screen_search_context(self, region):
+        """业主 2026-10-16 拍板：画框=搜索范围提示，仅此而已。
+
+        原钉扎比对（screenSearchContext 深度相等检查）与安装身份逐字段
+        校验整移除——任何微小变化（来源代际/绑定元数据）都把整轮校准打死，
+        现场不可用。每次定位实时读取当前生效框，框变了就用新框，不再失效；
+        运动安全由 daemon 会话/租约/限位与 zSafe/SAFE PARK 操作员确认承担。
+        """
         if self._search_region_provider is None:
             return lambda: None
-        current = {"region": deepcopy(region),
-                   "binding": deepcopy(self._read_binding_facts())}
-        if "screenSearchContext" not in self.state:
-            self.state["screenSearchContext"] = deepcopy(current)
-            self._save_state()
-        elif self.state["screenSearchContext"] != current:
-            raise WizardError(
-                "region_context_changed：本轮校准搜索范围或来源已变化，请重新开始校准")
-        if region is not None:
-            facts = current["binding"] or {}
-            size = region.get("source_size") or {}
-            if (facts.get("frameWidth"), facts.get("frameHeight")) != (
-                    size.get("width"), size.get("height")):
-                raise WizardError("region_context_invalid：搜索范围与当前来源尺寸不一致")
-            installation = region.get("installation_binding") or {}
-            for key, fact_key in (
-                ("camera_id", "cameraId"),
-                ("camera_device_unique_id", "cameraDeviceUniqueId"),
-                ("camera_binding_id", "cameraBindingId"),
-            ):
-                if key in installation and installation[key] != facts.get(fact_key):
-                    raise WizardError("region_context_invalid：搜索范围与当前安装身份不一致")
-            if region.get("source_geometry_id") is not None \
-                    and region["source_geometry_id"] != facts.get("sourceGeometryId"):
-                raise WizardError("region_context_invalid：搜索范围与当前来源几何不一致")
-
-        def ensure_current():
-            latest = {"region": self._current_search_region(),
-                      "binding": self._read_binding_facts()}
-            if latest != current:
-                raise WizardError(
-                    "region_context_changed：采样期间搜索范围或来源已变化，请重新开始校准")
-
-        return ensure_current
+        return lambda: None
 
     def _edge_quad(self, *, expected_corners: list | None = None) -> dict:
         if self._camera_fetch is None or self._edge_detector is None:
@@ -2238,49 +2212,55 @@ class CalibrationWizard:
         jpg, seq = self._camera_fetch()
         ensure_current()
         import cv2  # 局部导入（仓内惯例）：笔杆遮挡清理需要
-        frame_dec = clean_pen_occlusion(
-            cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR))
+        frame_raw = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+        frame_dec = (clean_pen_occlusion(frame_raw)
+                     if frame_raw is not None else None)
         if region is not None:
             # S2-06/07：初始定位与回退都只在本台粗框内；上下文失效为终态
             # WizardError（不是 H01 姿态提示），输出恢复原图坐标。
-            frame = frame_dec
+            frame = frame_raw
             if frame is None:
                 raise WizardError("取流桥帧解码失败")
             size = region["source_size"]
             if frame.shape[:2] != (size["height"], size["width"]):
                 raise WizardError("region_context_invalid：取流图像尺寸与搜索范围不一致")
-            # 笔杆遮挡交叉检测（业主 2026-10-16）：优先全图清理检测——
-            # 离线实测全图路径亚像素稳定、粗框裁剪路径在笔杆遮挡下偏 7-8px
-            # （裁剪丢失定位上下文）。全图失败时回退粗框路径（多候选/边界
-            # 保护保留，语义不变）。
+            # 检测顺序（2026-10-16 换臂现场教训）：原始帧优先——笔杆跨屏幕
+            # 边界时，清理器会把屏外区域修补成屏幕色（伪亮斑破坏四边），
+            # 清理帧反而必失败；原始失败（笔杆遮挡断边）才用清理帧重试。
+            # 粗框内定位同为原始帧优先、清理帧兜底。
             from drivers.screen_edge import locate_screen_quad
-            try:
-                located_full = locate_screen_quad(
-                    frame,
-                    expected_corners=expected_corners or self._bundle_edge_corners(),
-                    tolerance_px=32, require_fittable=True)
-                ensure_current()
-                return {"corners": located_full["corners"],
-                        "frameW": frame.shape[1], "frameH": frame.shape[0],
-                        "area": None, "frameSeq": seq,
-                        "source": "full_frame_cleaned"}
-            except Exception as full_exc:
-                region_exc = full_exc
+            region_exc = None
+            for label, frame in (("full_frame_raw", frame_raw),
+                                 ("full_frame_cleaned", frame_dec)):
+                try:
+                    located_full = locate_screen_quad(
+                        frame,
+                        expected_corners=expected_corners or self._bundle_edge_corners(),
+                        tolerance_px=32, require_fittable=True)
+                    ensure_current()
+                    return {"corners": located_full["corners"],
+                            "frameW": frame.shape[1], "frameH": frame.shape[0],
+                            "area": None, "frameSeq": seq,
+                            "source": label}
+                except Exception as exc:
+                    region_exc = exc
             from runtime.phone_region_context import locate_quad_in_region
-            try:
-                located = locate_quad_in_region(
-                    frame, region, expected_corners or self._bundle_edge_corners())
-                ensure_current()
-                return {"corners": located["corners"],
-                        "frameW": located["frameW"], "frameH": located["frameH"],
-                        "area": None, "frameSeq": seq,
-                        "source": "search_region"}
-            except Exception as region_exc:
-                # 梯度回退同框：locate_quad_in_region 已含梯度回退；仍失败
-                # = 框内不可定位（终态，不回全图）。
-                raise WizardError(
-                    f"粗框内无法定位手机屏幕：{region_exc}；"
-                    "请改善轮廓可见度或重新核验搜索范围") from region_exc
+            for label, frame in (("raw", frame_raw), ("cleaned", frame_dec)):
+                try:
+                    located = locate_quad_in_region(
+                        frame, region, expected_corners or self._bundle_edge_corners())
+                    ensure_current()
+                    return {"corners": located["corners"],
+                            "frameW": located["frameW"], "frameH": located["frameH"],
+                            "area": None, "frameSeq": seq,
+                            "source": f"search_region_{label}"}
+                except Exception as exc:
+                    region_exc = exc
+            # 梯度回退同框：locate_quad_in_region 已含全部回退；仍失败
+            # = 框内不可定位（终态，不回全图）。
+            raise WizardError(
+                f"粗框内无法定位手机屏幕：{region_exc}；"
+                "请改善轮廓可见度或重新核验搜索范围") from region_exc
         try:
             quad = self._edge_detector(jpg)
         except ScreenEdgeError as free_exc:

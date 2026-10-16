@@ -204,7 +204,7 @@
   </div>
 
   <!-- B · Z 点击校准 -->
-  <details id="wzB"><summary><b>B · Z 轴与点击参数校准</b></summary>
+  <details id="wzB" hidden><summary><b>B · Z 轴与点击参数校准</b></summary>
     <div class="row">
       <button class="primary" id="btnWzHover">标定 Z 轴高度</button>
       <span class="hint" id="wzHoverInfo">悬停高度未标定（先把探头 Z 点动到屏幕上方安全悬停位再标定）</span>
@@ -243,7 +243,7 @@
 
   <!-- C · XY 屏幕校准 -->
   <!-- 2026-10-16 恢复显示：新臂 bootstrap 强制要求人工 C 流程建种子（runner 安全线），C 是唯一入口 -->
-  <details id="wzC"><summary><b>C · XY 屏幕关系校准（5 点 + 3 验证点）</b></summary>
+  <details id="wzC" hidden><summary><b>C · XY 屏幕关系校准（5 点 + 3 验证点）</b></summary>
     <div class="hint">每点流程：<b>① 显示标靶</b>（标靶会<b>一直显示</b>在手机校准页上）→
       看着摄像头用左侧 <b>XY 点动</b>把探头移到标靶中心 → <b>② 测试点击</b>（自动点击并等回报）→
       核对「回报 px / 误差」→ 满意点 <b>接受此点</b>（自动显示下一个标靶），不满意就点动修正后重测。
@@ -268,7 +268,7 @@
   </details>
 
   <!-- D · 屏幕边缘与摄像头校准 -->
-  <details id="wzD"><summary><b>D · 屏幕边缘与摄像头校准</b></summary>
+  <details id="wzD" hidden><summary><b>D · 屏幕边缘与摄像头校准</b></summary>
     <div class="row">
       <button class="primary" id="btnWzEdge">采集屏幕边缘基准</button>
       <button class="primary" id="btnWzCamFit">拟合摄像头→屏幕单应（屏幕平面标靶法）</button>

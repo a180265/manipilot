@@ -124,15 +124,13 @@ def context_matches_bundle(ctx: dict, bundle: dict) -> None:
 
 def locate_quad_in_region(image, region: dict, saved_corners,
                           *, require_unique: bool = True) -> dict:
-    """粗框裁剪内定位屏幕四角，返回原图坐标（frameW/frameH=完整来源尺寸）。
+    """粗框内定位手机屏幕（业主 2026-10-16 定案：框=搜索范围，仅此而已）。
 
-    语义与 layout_geometry.locate_in_region 一致：框内多候选拒绝；
-    自由阈值检测失败时梯度回退仍在同一裁剪图内（锚点平移），不越框；
-    四角触及裁剪边（屏幕被框裁断）拒绝。
+    框内直接做双极性屏幕检测，跨极性同屏去重后取最大面积者；
+    无期望角锚定、无梯度回退、无候选数否决。
+    屏幕被框裁断时拒绝（框画得太紧的唯一保护）。
     """
-    from drivers import screen_pose
-    from drivers.screen_edge import (
-        ScreenEdgeError, locate_quad_by_gradient_lines, locate_screen_quad)
+    from drivers.screen_edge import ScreenEdgeError, detect_screen_quad
 
     height, width = image.shape[:2]
     try:
@@ -142,72 +140,38 @@ def locate_quad_in_region(image, region: dict, saved_corners,
     crop = image[top:bottom, left:right]
     if crop.shape[0] < 40 or crop.shape[1] < 40:
         raise RegionContextError("region_context_invalid", "生效粗框过小，无法定位")
-    if require_unique and len(_screen_candidates(crop)) >= 2:
-        raise RegionContextError(
-            "multiple_screen_candidates", "粗框内存在多个屏幕候选")
-    saved = None
-    expected = None
-    if saved_corners is not None:
-        saved = screen_pose.validate_corners(saved_corners)
-        expected = saved - [left, top]
-    quad = None
-    free_error: Exception | None = None
-    from drivers.screen_edge import detect_screen_quad
-    if saved_corners is None:
-        # 初始校准（无 saved 预测）：自由检测只在裁剪图内（两极性），
-        # 多候选拒绝，四角加回偏移；不回全图。
-        found = []
-        for image in (crop, cv2.bitwise_not(crop)):
-            try:
-                detected = detect_screen_quad(image)
-            except ScreenEdgeError:
-                continue
-            found.append(np.asarray(detected["corners"], dtype=float))
-        if len(found) > 1:
-            # 双极性交叉核对：两极性都检出且四角高度重叠=同一物理屏幕（过曝
-            # 白屏在反色下同样构成可检四边形），取正常极性结果算单一候选；
-            # 仅当两极性四角明显不重叠（中心偏移大或面积悬殊）才判多候选。
-            # 2026-10-16 现场：过曝校准页被本规则误拒（业主设备实测）。
-            a, b = found[0], found[1]
+    found = []
+    for image_p in (crop, cv2.bitwise_not(crop)):
+        try:
+            detected = detect_screen_quad(image_p)
+        except ScreenEdgeError:
+            continue
+        cand = np.asarray(detected["corners"], dtype=float)
+        dup = False
+        for other in found:
             center_offset = float(np.hypot(
-                a[:, 0].mean() - b[:, 0].mean(), a[:, 1].mean() - b[:, 1].mean()))
-            area_a = float((a[:, 0].max() - a[:, 0].min()) * (a[:, 1].max() - a[:, 1].min()))
-            area_b = float((b[:, 0].max() - b[:, 0].min()) * (b[:, 1].max() - b[:, 1].min()))
-            scale = max(area_a, area_b, 1.0)
-            size_ratio = min(area_a, area_b) / scale
-            span = max(float((a[:, 0].max() - a[:, 0].min())),
-                       float((a[:, 1].max() - a[:, 1].min())),
-                       float((b[:, 0].max() - b[:, 0].min())),
-                       float((b[:, 1].max() - b[:, 1].min())), 1.0)
-            if center_offset > 0.25 * span or size_ratio < 0.36:
-                raise RegionContextError(
-                    "multiple_screen_candidates", "粗框内存在多个屏幕候选")
-            found = [found[0]]
-        if found:
-            quad = found[0]
-        else:
-            raise RegionContextError(
-                "screen_not_located", "粗框内无法定位手机屏幕")
-    else:
-        try:
-            located = locate_screen_quad(
-                crop, expected.tolist(), tolerance_px=32,
-                require_fittable=True, reject_clipped_candidate=True)
-            quad = np.asarray(located["corners"], dtype=float)
-        except ScreenEdgeError as exc:
-            free_error = exc
-    if quad is None and saved_corners is not None:
-        # 梯度回退锚在同一裁剪图内（预测四角平移），天然不越框。
-        try:
-            gradient = locate_quad_by_gradient_lines(
-                crop, expected.tolist(), tolerance_px=32.0)
-            quad = np.asarray(gradient["corners"], dtype=float)
-        except ScreenEdgeError as gradient_exc:
-            free_error = free_error or gradient_exc
-    if quad is None:
+                cand[:, 0].mean() - other[:, 0].mean(),
+                cand[:, 1].mean() - other[:, 1].mean()))
+            area_c = float((cand[:, 0].max() - cand[:, 0].min())
+                           * (cand[:, 1].max() - cand[:, 1].min()))
+            area_o = float((other[:, 0].max() - other[:, 0].min())
+                           * (other[:, 1].max() - other[:, 1].min()))
+            span = max(float(cand[:, 0].max() - cand[:, 0].min()),
+                       float(cand[:, 1].max() - cand[:, 1].min()),
+                       float(other[:, 0].max() - other[:, 0].min()),
+                       float(other[:, 1].max() - other[:, 1].min()), 1.0)
+            if (center_offset <= 0.25 * span
+                    and min(area_c, area_o) / max(area_o, area_c, 1.0) >= 0.36):
+                dup = True
+                break
+        if not dup:
+            found.append(cand)
+    if not found:
         raise RegionContextError(
-            "screen_not_located",
-            f"粗框内无法定位手机屏幕：{free_error or '未检出'}")
+            "screen_not_located", "粗框内无法定位手机屏幕；请确认手机亮屏停在框内")
+    # 框=搜索范围：取框内最大面积者（画框人保证框住的是目标屏）
+    quad = max(found, key=lambda q: float(
+        (q[:, 0].max() - q[:, 0].min()) * (q[:, 1].max() - q[:, 1].min())))
     corners = quad + [left, top]
     if (np.any(corners <= [left + 1, top + 1])
             or np.any(corners >= [right - 1, bottom - 1])):
