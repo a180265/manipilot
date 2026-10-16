@@ -384,10 +384,30 @@ def _screen_candidates(crop_bgr: np.ndarray) -> list[np.ndarray]:
                    >= .8 * min(cv2.contourArea(quad), cv2.contourArea(other))
                    for other in unique):
                 continue
+            # 过曝屏的反色候选与正向候选中心重合、面积相近=同一物理屏幕：
+            # 反向 Otsu 阈值不同导致轮廓内缩/外扩，交集比阈值不一定过——
+            # 按中心+面积判同物去重（2026-10-16 过曝校准页实测二次保存失败根因）。
+            if any(_same_screen_quad(quad, other) for other in unique):
+                continue
             unique.append(quad)
             if len(unique) >= 2:
                 return unique
     return unique
+
+
+def _same_screen_quad(a: np.ndarray, b: np.ndarray) -> bool:
+    """两四边形中心重合且面积相近=同一物理屏幕（跨极性轮廓内缩容忍）。"""
+    ax, ay = float(a[:, 0].mean()), float(a[:, 1].mean())
+    bx, by = float(b[:, 0].mean()), float(b[:, 1].mean())
+    span = max(float(a[:, 0].max() - a[:, 0].min()),
+               float(a[:, 1].max() - a[:, 1].min()),
+               float(b[:, 0].max() - b[:, 0].min()),
+               float(b[:, 1].max() - b[:, 1].min()), 1.0)
+    area_a = float((a[:, 0].max() - a[:, 0].min()) * (a[:, 1].max() - a[:, 1].min()))
+    area_b = float((b[:, 0].max() - b[:, 0].min()) * (b[:, 1].max() - b[:, 1].min()))
+    center_offset = float(np.hypot(ax - bx, ay - by))
+    size_ratio = min(area_a, area_b) / max(area_a, area_b, 1.0)
+    return center_offset <= 0.25 * span and size_ratio >= 0.36
 
 
 def _detect_in_rect(frame_bgr: np.ndarray, pixel_rect: dict) -> dict:
@@ -682,6 +702,10 @@ class LayoutRegionService:
         }
 
     # ================= 保存 =================
+    def delete_pointer(self, device_id: str) -> dict:
+        """撤销生效范围（业主 2026-10-16：删错框重来的正规入口）。委托存储层。"""
+        return self._store.delete_pointer(device_id)
+
     def save(self, device_id: str, request: dict, principal: str) -> dict:
         correlation_id = request.get("correlation_id")
         client_request_id = request.get("client_request_id")

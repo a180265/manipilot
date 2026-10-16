@@ -1422,7 +1422,11 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
     async def _wire_request(request: Request, route_id: str,
                             path_params: dict):
         """装配 wire 请求视图并按冻结 schema 校验；返回 (view, body)。"""
-        if request.method == "GET":
+        if request.method == "GET" or (
+                request.method == "DELETE"
+                and not request.headers.get("content-length")):
+            # GET 无体；DELETE 允许空体直呼（无 content-length 时跳过
+            # content-type 检查——api:empty 路由的合法形态）。
             body = None
         else:
             content_type = (request.headers.get("content-type") or "").split(

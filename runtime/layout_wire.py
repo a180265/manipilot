@@ -80,6 +80,7 @@ CODE_ALIASES = {
 
 # 路由 contract_version（routes.json 权威值的只读镜像；结构以 routes.json 为准）
 ROUTE_CONTRACT_VERSIONS = {
+    "region_delete": "layout-region-delete.v1",
     "region_get": "phone-search-region-read.v1",
     "region_preview": "phone-search-region-preview.v1",
     "region_save": "phone-search-region-write.v1",
