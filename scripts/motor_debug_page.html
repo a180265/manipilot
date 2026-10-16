@@ -1415,8 +1415,9 @@ function renderStatus(data) {
   if (d.estop_locked) {
     banner.textContent = "⛔ 急停锁定中（daemon 级，所有普通运动已拒绝）：现场确认安全后点右上「🔓 急停复位」，并用硬件急停/断电作为最终手段。";
     banner.classList.add("show");
-  } else if (d.status_stale && (S.staleBeats || 0) >= 3) {
-    // 单拍脱靶不锁动作（连接态徽章已标「状态滞后」）；连续 3 拍才算真滞后
+  } else if (d.status_stale && !d.session && (S.staleBeats || 0) >= 3) {
+    // 已连接时状态查询脱靶不亮此横幅（业主 2026-10-16 拍板：连上就别翻牌子；
+    // 运动真安全由 daemon 侧会话/租约/限位守卫）。未连接且连续 3 拍查不到才提示。
     banner.textContent = "⚠ 当前状态暂不可确认，已锁定坐标动作；请等待状态刷新或人工核对。";
     banner.classList.add("show");
   } else if (!d.session && d.device_present) {
