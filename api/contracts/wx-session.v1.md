@@ -50,6 +50,14 @@ WX 持久保存每台设备当前执行会话和操作任务；提交前写记�
 
 ## 打开动作证据
 
+2026-10-17 插件1.8.1兼容扩展：`open_conversation/focus_input/return_main` 在原任务内
+支持目标区域内微移。默认中心，只有两帧新鲜证据明确证明未生效且原目标稳定才补点，
+每个目标最多三次。未知结果不补点；发送、删除、候选栏和一次性标读授权不扩展。
+各步骤 `detail` 兼容新增 `click_retry`（效果、原因、尝试证据与次数）、
+`contact_count`（实际接触次数，未知为null）与 `contact_count_status`。
+提交已接受不代表完成；WX按原任务查询结果，旧回执不猜一次接触。
+请求外壳及payload不变，区域坐标仍由Fleet侧管理。
+
 `GET /v1/tasks/{task_id}` 的 `step_log` 中，成功的 `open_conversation` 完成记录包含：
 
 ```json

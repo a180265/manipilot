@@ -123,6 +123,8 @@ class RealCameraDriver(CameraDriver):
         def check_original():
             if any(ref.get(key) != value for key, value in original.items()):
                 raise ValueError("动态文字定位结果被改写，禁止沿用原落点")
+            if ref.get("cameraPolygon") != original.get("cameraPolygon"):
+                raise ValueError("动态文字四角被改写，禁止添加未经定位的安全区")
             if time.monotonic() - record["created"] > 2.0:
                 raise ValueError("原文字定位已过期，请重新定位，不能由新帧续鲜")
             _fresh_source_seq(record["source"], None)
@@ -158,6 +160,20 @@ class RealCameraDriver(CameraDriver):
         if (not observed.get("found") or observed.get("text") != original.get("text")
                 or not np.allclose(observed.get("bbox"), original.get("bbox"), rtol=0, atol=2.0)):
             raise ValueError("原文字行已移动、消失或不能唯一确认，禁止点击旧落点")
+        if original.get("cameraPolygon") is not None:
+            try:
+                previous = np.asarray(original["cameraPolygon"], dtype=float)
+                current = np.asarray(observed.get("cameraPolygon"), dtype=float)
+                if (previous.shape != (4, 2) or current.shape != (4, 2)
+                        or not np.isfinite(previous).all() or not np.isfinite(current).all()):
+                    raise ValueError("文字四角形状无效")
+                homography = record["bundle"]["camera"]["cameraToScreen"]["homography"]
+                previous = np.asarray([cb.apply_homography(homography, *p) for p in previous])
+                current = np.asarray([cb.apply_homography(homography, *p) for p in current])
+                if float(np.max(np.linalg.norm(current - previous, axis=1))) > 2.0:
+                    raise ValueError("文字四角已移动")
+            except (ValueError, TypeError, KeyError, OverflowError) as exc:
+                raise ValueError("原文字四角已变化或无法复核，禁止点击旧落点") from exc
         verified_at = time.monotonic()
 
         def final_check():
@@ -914,7 +930,9 @@ class RealCameraDriver(CameraDriver):
                 located = None
             else:
                 cx, cy = layout.camera_point(located["cameraX"], located["cameraY"])
-                located.update(cameraX=cx, cameraY=cy, bbox=[
+                polygon = [list(layout.camera_point(x, y))
+                           for x, y in ((x1, y1), (x2, y1), (x2, y2), (x1, y2))]
+                located.update(cameraX=cx, cameraY=cy, cameraPolygon=polygon, bbox=[
                     box["x"], box["y"], box["x"] + box["width"], box["y"] + box["height"]])
         if located is None:
             if exact:
@@ -1013,6 +1031,16 @@ class RealCameraDriver(CameraDriver):
         if layout is not None:
             self._ensure_layout_current(layout)
             result.update(layout.selected.references, coordinateVersion="calibrated_camera.v1")
+            # Recovery must distinguish keyboard/page transitions and compare
+            # the actual measured target, never a persisted nominal click box.
+            result.update(layout_state=layout.state, click_targets={
+                item["id"]: {"status": item["status"],
+                             "safe_rect": copy.deepcopy(item.get("safe_rect"))}
+                for item in (layout.check or {}).get("item_results", [])
+                if item.get("kind") == "target"
+            })
+            result["click_target_frame_size"] = {
+                "width": int(layout.image.shape[1]), "height": int(layout.image.shape[0])}
         return result
 
     async def _capture_for_operation(self) -> dict:

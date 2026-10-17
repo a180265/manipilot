@@ -484,8 +484,9 @@ class LayoutFrame:
                  "识别过程中校准已变化，请重新观测", "geometry_changed")
         self.selected.ensure_current()
 
-    def target(self, target_id, target_ref=None):
+    def target(self, target_id, target_ref=None, *, click_attempt=0):
         """Resolve a verified item in this frame, never a persisted click point."""
+        from drivers.click_points import rectangle_point
         target_ref = target_ref or {}
         for key, expected in (
             ("template_version", self.selected.template["version"]),
@@ -508,9 +509,11 @@ class LayoutFrame:
         rect = result["safe_rect"] if definition["mode"] == "tap" else result["resolved_rect"]
         _require(rect is not None, "当前点击目标缺少安全区")
         height, width = self.image.shape[:2]
-        point = self.inverse @ np.array([
-            (rect["x"] + rect["width"] / 2) * width,
-            (rect["y"] + rect["height"] / 2) * height, 1])
+        screen_point, retry_supported, safety = rectangle_point(
+            target_id, rect, width, height, click_attempt)
+        retry_supported = retry_supported and definition["mode"] == "tap"
+        _require(not click_attempt or retry_supported, "此目标不支持替代点击落点")
+        point = self.inverse @ np.array([*screen_point, 1])
         _require(np.isfinite(point).all() and abs(point[2]) > 1e-10,
                  "目标中心无法反投影", "geometry_changed")
         cx, cy = point[:2] / point[2]
@@ -521,6 +524,9 @@ class LayoutFrame:
                 "coordinate_version": "calibrated_camera.v1",
                 "frame_seq": self.source["source_frame_seq"],
                 "frame_sha256": self.source.get("image_sha256"),
+                "click_attempt": click_attempt, "click_retry_supported": retry_supported,
+                "click_point": {"screen": screen_point.tolist(), "camera": [float(cx), float(cy)],
+                                "safety": safety},
                 "layout_state": self.state, **self.selected.references}
 
     def verify_target_point(self, target_id, resolved, bundle):

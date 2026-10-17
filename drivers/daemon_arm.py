@@ -34,6 +34,7 @@ from drivers import calibration_bundle
 from drivers import ui_targets
 from drivers import screen_gestures
 from drivers import screen_pose
+from drivers import click_points
 from drivers.arm import ArmDriver, DriverError
 from drivers.daemon_protocol import (
     DEFAULT_DAEMON_ADDR,
@@ -107,7 +108,7 @@ DYNAMIC_COMBOS_IN_USE = {
 }
 # 任务快照固化的 target_ref 身份字段：解析前抓取，走位后/接触前复核未被改写。
 DYNAMIC_REF_IDENTITY_KEYS = (
-    "source", "cameraX", "cameraY", "bbox", "frameW", "frameH", "frameSeq",
+    "source", "cameraX", "cameraY", "bbox", "cameraPolygon", "frameW", "frameH", "frameSeq",
     "frameSha256", "coordinateVersion", "template_ref", "adaptation_ref",
     "installation_region_ref", "locationId", "sourceCapturedAt", "sourceReceivedAt",
 )
@@ -615,7 +616,11 @@ class DaemonArmDriver(ArmDriver):
         return check
 
     # ---------- 目标解析 ----------
-    async def _resolve_action_target(self, target):
+    async def _resolve_action_target(self, target, *, allow_click_attempt=False):
+        if isinstance(target, dict) and target.get("click_attempt", 0) != 0 and not allow_click_attempt:
+            error = DriverError("driver_policy_rejected", "替代落点仅允许用于 arm.click 单次点击")
+            error.motion_not_started = True
+            raise error
         layout = None
         dynamic_snapshot = None
         ref = (target.get("target_ref") or {}) if isinstance(target, dict) else {}
@@ -663,7 +668,9 @@ class DaemonArmDriver(ArmDriver):
                     error = DriverError("driver_policy_rejected", str(exc))
                     error.motion_not_started = True
                     raise error from exc
-        resolved = await self._call(self._resolve_business_target, target, layout_frame=layout)
+        trusted_ocr = bool(dynamic_snapshot and callable(dynamic_snapshot.get("text_check")))
+        resolved = await self._call(self._resolve_business_target, target, layout_frame=layout,
+                                    trusted_ocr=trusted_ocr)
         return (*resolved, layout, dynamic_snapshot)
 
     def _pin_dynamic_visual_context(self, target, ref, frame, expected) -> dict:
@@ -884,7 +891,8 @@ class DaemonArmDriver(ArmDriver):
 
         return check_frame, check_current
 
-    def _resolve_business_target(self, target: dict, *, layout_frame=None) -> tuple[str, dict, dict, dict]:
+    def _resolve_business_target(self, target: dict, *, layout_frame=None,
+                                 trusted_ocr=False) -> tuple[str, dict, dict, dict]:
         if not isinstance(target, dict):
             raise DriverError("driver_policy_rejected", "业务目标必须是对象")
         target_id = target.get("target_id")
@@ -892,6 +900,12 @@ class DaemonArmDriver(ArmDriver):
             raise DriverError(
                 "driver_policy_rejected",
                 "业务 arm.click 只接受 target_id（设备级固定目标）；裸位移仅限调试/标定接口")
+        try:
+            click_attempt = click_points.validate_attempt(target_id, target.get("click_attempt", 0))
+        except ValueError as exc:
+            error = DriverError("driver_policy_rejected", str(exc))
+            error.motion_not_started = True
+            raise error from exc
         target_ref = target.get("target_ref") or {}
         if not isinstance(target_ref, dict):
             raise DriverError("driver_policy_rejected", "target_ref 必须是目标对象")
@@ -946,7 +960,7 @@ class DaemonArmDriver(ArmDriver):
         if layout_frame is not None:
             try:
                 layout_frame.ensure_current(calibration)
-                entry = layout_frame.target(target_id, target_ref)
+                entry = layout_frame.target(target_id, target_ref, click_attempt=click_attempt)
             except (ValueError, TypeError, KeyError) as exc:
                 error = DriverError("driver_policy_rejected", str(exc))
                 error.motion_not_started = True
@@ -998,6 +1012,33 @@ class DaemonArmDriver(ArmDriver):
                 # 不再读相机帧尺寸（此前 KeyError/域混算的根因）。
                 entry["frameW"] = frame_w
                 entry["frameH"] = frame_h
+            elif (dynamic_source == "camera_ocr" and trusted_ocr
+                  and target_id in click_points.RETRY_TARGETS):
+                from runtime.layout_geometry import mapping_error_bound
+
+                model = (calibration.get("camera") or {}).get("cameraToScreen") or {}
+                screen = calibration.get("screen") or {}
+                try:
+                    matrix = np.asarray(model.get("homography"), dtype=float).reshape(3, 3)
+                except (TypeError, ValueError):
+                    matrix = None
+                try:
+                    chosen, screen_point, supported, safety = click_points.ocr_point(
+                        target_id, target_ref.get("bbox"), [camera_x, camera_y], matrix,
+                        mapping_error_bound(calibration),
+                        [screen.get("screenWidth") or screen.get("widthPx"),
+                         screen.get("screenHeight") or screen.get("heightPx")], click_attempt,
+                        camera_polygon=target_ref.get("cameraPolygon"),
+                        require_polygon=any(target_ref.get(key) is not None for key in
+                                            ("template_ref", "adaptation_ref", "installation_region_ref")))
+                except ValueError as exc:
+                    error = DriverError("driver_policy_rejected", str(exc))
+                    error.motion_not_started = True
+                    raise error from exc
+                entry.update(nx=float(chosen[0] / frame_w), ny=float(chosen[1] / frame_h),
+                             click_attempt=click_attempt, click_retry_supported=supported,
+                             click_point={"screen": screen_point.tolist() if screen_point is not None else None,
+                                          "camera": chosen.tolist(), "safety": safety})
         else:
             # 2026-09-04 三步收敛：业务固定目标只认校准后登记层（ui_targets），
             # 旧 bundle targets 兑底已移除——未登记/未启用一律明确拒绝，
@@ -1022,6 +1063,22 @@ class DaemonArmDriver(ArmDriver):
                 raise DriverError("driver_policy_rejected", "目标坐标超出摄像头画面")
         if entry.get("targetMode") not in ("tap", "hover_only"):
             raise DriverError("driver_policy_rejected", "目标动作模式无效")
+        if "click_attempt" not in entry:
+            if click_attempt:
+                error = DriverError("driver_policy_rejected", "目标缺少可信安全区，不支持替代点击落点")
+                error.motion_not_started = True
+                raise error
+            frame = calibration.get("frame") or {}
+            if entry.get("target_source") == "live_ime_geometry":
+                screen_point = [entry["nx"] * entry["frameW"], entry["ny"] * entry["frameH"]]
+                camera_point = None
+            else:
+                screen_point = None
+                camera_point = [entry["nx"] * (frame.get("width") or calibration.get("frameW", 1)),
+                                entry["ny"] * (frame.get("height") or calibration.get("frameH", 1))]
+            entry.update(click_attempt=0, click_retry_supported=False,
+                         click_point={"screen": screen_point, "camera": camera_point,
+                                      "safety": {"source": "unavailable"}})
         try:
             if entry.get("target_source") == "live_ime_geometry":
                 # FIX-15（§11.13.2）：live 几何坐标已是手机屏幕像素
@@ -1702,7 +1759,7 @@ class DaemonArmDriver(ArmDriver):
         self._check_ready()
         generation = self._stop_generation
         target_id, entry, resolved, _calib, layout, dynamic_snapshot = \
-            await self._resolve_action_target(target)
+            await self._resolve_action_target(target, allow_click_attempt=True)
         if (target_id in {"ime_candidate_bar", "ime_delete_key", "send_button"}
                 and not self._input_switch_allowed(_calib)):
             raise DriverError("input_switch_disabled", "输入与发送未允许（开关关闭），禁止输入、清除或发送点击")
@@ -1775,6 +1832,9 @@ class DaemonArmDriver(ArmDriver):
                                        "ui_fixed_target": "设备固定目标（校准后登记）"}.get(
                                            entry.get("target_source", "fixed_target"), "其他") ,
             "resolved_robot_xy": [resolved["robotX"], resolved["robotY"]],
+            "click_attempt": entry["click_attempt"],
+            "click_retry_supported": entry["click_retry_supported"],
+            "click_point": entry["click_point"],
             "phases": phases,
             "motion_verified": verified,
             "outcome_hint": outcome_hint,
@@ -1795,6 +1855,9 @@ class DaemonArmDriver(ArmDriver):
             "frame_sha256": entry.get("frame_sha256"),
             "frame_seq": entry.get("frame_seq"),
             "coordinate_version": entry.get("coordinate_version"),
+            "click_attempt": result["click_attempt"],
+            "click_retry_supported": result["click_retry_supported"],
+            "click_point": result["click_point"],
         })
         self.action_log.append({"action": "click", "target": dict(target), "result": result})
         return result

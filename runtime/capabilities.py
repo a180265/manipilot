@@ -109,7 +109,7 @@ BASE_CAPABILITIES: list[dict] = [
     {
         "capability_id": "arm.click",
         "name_display": "机械臂点击",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "device_type": "arm",
         "risk_level": "高",
         "data_scope": "无业务数据",
@@ -120,9 +120,24 @@ BASE_CAPABILITIES: list[dict] = [
         "input_schema": {
             "type": "object",
             "required": ["target_id"],
-            "properties": {"target_id": {"type": "string"}},
+            "properties": {
+                "target_id": {"type": "string"},
+                "click_attempt": {
+                    "type": "integer", "enum": [0, 1, 2], "default": 0,
+                    "description": "0 点原中心；1/2 请求同目标安全区内的替代落点。"
+                    "仅会话行、返回键和输入框支持，每次调用只点击一次；"
+                    "调用方必须先确认上次未生效，未知结果禁止重试。",
+                },
+            },
         },
-        "output_schema": {"type": "object"},
+        "output_schema": {
+            "type": "object",
+            "properties": {
+                "click_attempt": {"type": "integer", "enum": [0, 1, 2]},
+                "click_retry_supported": {"type": "boolean"},
+                "click_point": {"type": "object", "description": "本次屏幕/相机落点及安全区来源，不含识别文本"},
+            },
+        },
     },
     {
         "capability_id": "arm.double_tap",
@@ -421,11 +436,11 @@ class CapabilityRegistry:
         """注册平台基础能力（幂等）。"""
         for capability in BASE_CAPABILITIES:
             existing = self._store.get_capability(capability["capability_id"])
-            gesture_upgrade = (
+            platform_upgrade = (
                 existing is not None and existing.get("source") == "platform"
-                and capability["capability_id"] in {"arm.double_tap", "arm.swipe"}
+                and capability["capability_id"] in {"arm.click", "arm.double_tap", "arm.swipe"}
                 and existing.get("version") == "1.0.0" and capability["version"] == "1.1.0")
-            if existing is None or gesture_upgrade:
+            if existing is None or platform_upgrade:
                 self._store.save_capability(dict(capability))
 
     def register(self, capability: dict) -> dict:

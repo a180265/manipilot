@@ -85,6 +85,9 @@ WX 只传正向物理屏幕归一化点和完整校准绑定，不传机械坐�
 [screen-proof.v1](screen-proof.v1.md) 定义设备级页面/区域档案、只读元数据和
 `camera.observe_regions` 通用视觉证据。WX 只消费结果，不持有区域坐标。
 
+[bounded-click.v1](bounded-click.v1.md) 定义 `arm.click` 的可选微移序号、
+同目标安全范围和单次动作语义。业务效果核验及有限重试由插件承担。
+
 [screen-observation.v1](screen-observation.v1.md) 和同名 Schema 补录现有
 `GET /v1/devices/{device_id}/screen-observation` 的屏幕图像/OCR 响应及错误外壳，
 包括校准无效的 HTTP 409。它不同于 `screen-proof.v1` 区域证据和
