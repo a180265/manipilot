@@ -26,7 +26,9 @@ def profile_path(device_id, data_root=None):
     return root / "devices" / device_id / "screen_proof.json"
 
 
-def binding(device_id, data_root=None, *, allow_motion_ready=False):
+def binding(device_id, data_root=None, *, allow_motion_ready=True):
+    # motion_ready（自动校准晋级态）视同就绪：发送门禁证据的登记/读取
+    # 必须对晋级档案可用（fleet 读端 2026-10-17 已同口径），默认放行。
     bundle = cb.load_bundle(device_id, data_root)
     statuses = {"ready", cb.MOTION_READY_STATUS} if allow_motion_ready else {"ready"}
     if not bundle or bundle.get("status") not in statuses or bundle.get("deviceId") != device_id:

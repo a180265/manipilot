@@ -3390,7 +3390,9 @@ def save_screen_proof(device, body, action):
     if body.get("confirmed") is not True:
         raise ValueError("请人工确认当前页面和选区；登记不会执行任何机械动作")
     state = daemon_for(device).status()
-    _, bundle = screen_proof.binding(device, DATA_DIR)
+    # motion_ready（自动校准晋级态）与 fleet 读端同一放行口径——
+    # 否则 motion_ready 档案在调试台永远「校准尚未就绪」，登记入口死锁。
+    _, bundle = screen_proof.binding(device, DATA_DIR, allow_motion_ready=True)
     if not state.get("session") or state["session"] != bundle.get("daemonSession"):
         raise ValueError("机械臂会话与校准不一致，请先重新校准")
     if state.get("lease"):
