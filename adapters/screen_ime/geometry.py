@@ -258,3 +258,76 @@ def fit_quadratic(samples: list[dict]) -> dict:
         "residuals": residuals,
         "residualRms": math.sqrt(sum(r * r for r in residuals) / len(residuals)),
     }
+
+
+def fit_calibration_model(samples: list[dict]) -> dict:
+    """选取机械坐标 → 触点模型；独立验收数据不得传入本函数。
+
+    仿射为基线，至少九点才比较二次模型。复杂模型必须在逐点留一的
+    最大误差上更好（相同时比较 RMS），且训练 RMS、最大残差均不变差。
+    留一拟合退化时保留仿射；基线本身不可拟合时仍抛 CalibrationMathError。
+    返回原拟合契约，并附 modelSelection，便于保存选型证据。
+    """
+    tolerance = 1e-6
+
+    def summarize(residuals: list[float]) -> dict:
+        if not residuals or not all(math.isfinite(r) for r in residuals):
+            raise CalibrationMathError("calibration_invalid_samples", "校准残差必须为有限值")
+        return {"maxErrorPx": max(residuals),
+                "rmsPx": math.sqrt(sum(r * r for r in residuals) / len(residuals))}
+
+    def leave_one_out(fitter) -> dict:
+        residuals = []
+        for index, point in enumerate(samples):
+            fit = fitter(samples[:index] + samples[index + 1:])
+            x, y = float(point["robotX"]), float(point["robotY"])
+            sx = (fit["a"] * x + fit["b"] * y + fit["c"]
+                  + fit.get("qx2", 0) * x * x + fit.get("qxy", 0) * x * y
+                  + fit.get("qy2", 0) * y * y)
+            sy = (fit["d"] * x + fit["e"] * y + fit["f"]
+                  + fit.get("px2", 0) * x * x + fit.get("pxy", 0) * x * y
+                  + fit.get("py2", 0) * y * y)
+            residuals.append(math.hypot(sx - float(point["screenX"]),
+                                        sy - float(point["screenY"])))
+        return {**summarize(residuals), "residualsPx": residuals}
+
+    fit = fit_affine(samples)
+    affine_training = summarize(fit["residuals"])
+    selection = {
+        "selectedModel": "affine", "sampleCount": len(samples),
+        "basis": "training_leave_one_out_max_then_rms",
+        "reason": "insufficient_samples_for_quadratic_validation",
+        "affine": {"training": affine_training},
+    }
+    fit["modelSelection"] = selection
+    if len(samples) < 9:
+        return fit
+    try:
+        affine_validation = leave_one_out(fit_affine)
+        selection["affine"]["leaveOneOut"] = affine_validation
+    except CalibrationMathError as exc:
+        selection.update(reason="affine_leave_one_out_degenerate", errorCode=exc.code)
+        return fit
+    try:
+        quadratic = fit_quadratic(samples)
+        quadratic_training = summarize(quadratic["residuals"])
+        selection["quadratic"] = {"training": quadratic_training}
+        quadratic_validation = leave_one_out(fit_quadratic)
+        selection["quadratic"]["leaveOneOut"] = quadratic_validation
+    except CalibrationMathError as exc:
+        selection.update(reason="quadratic_validation_degenerate", errorCode=exc.code)
+        return fit
+    if any(quadratic_training[key] > affine_training[key] + tolerance
+           for key in ("maxErrorPx", "rmsPx")):
+        selection["reason"] = "quadratic_training_regression"
+        return fit
+    max_delta = quadratic_validation["maxErrorPx"] - affine_validation["maxErrorPx"]
+    improves = (max_delta < -tolerance
+                or (abs(max_delta) <= tolerance
+                    and quadratic_validation["rmsPx"]
+                    < affine_validation["rmsPx"] - tolerance))
+    if improves:
+        selection.update(selectedModel="quadratic", reason="quadratic_generalizes_better")
+        return {**quadratic, "modelSelection": selection}
+    selection["reason"] = "affine_generalizes_at_least_as_well"
+    return fit

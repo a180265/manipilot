@@ -138,10 +138,9 @@ def resolve_point(point: dict, bundle: dict) -> dict:
     # Use screen-space calibration uncertainty, not the camera UI's coarse
     # marking inset, for this explicit calibration-bound coordinate contract.
     camera = (bundle.get("camera") or {}).get("cameraToScreen") or {}
-    uncertainty = max(1.0, number(xy.get("maxResidualPx", cb.XY_RESIDUAL_MAX_PX),
-                                  "机械映射误差"))
-    uncertainty += max(0.0, number(camera.get("maxErrorPx", cb.CAMERA_REPROJECTION_MAX_PX),
-                                    "相机映射误差"))
+    uncertainty = cb.mapping_error_bound(bundle, allow_legacy_defaults=True)
+    if uncertainty is None:
+        raise ValueError("校准最大误差无效，不能确认屏幕安全边界")
     if min(sx, sy, width - sx, height - sy) < uncertainty:
         raise ValueError("屏幕点过于接近物理边缘，超出当前校准精度允许的范围")
     matrix = np.asarray(camera.get("homography"), dtype=float)

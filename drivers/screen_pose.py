@@ -96,9 +96,9 @@ def physical_point(bundle: dict, pose: dict, camera_x: float, camera_y: float,
         bundle["camera"]["cameraToScreen"]["homography"], float(cx), float(cy))
     width, height = bundle["screen"]["screenWidth"], bundle["screen"]["screenHeight"]
     xy = bundle["xy"]
-    uncertainty = max(1.0, float(xy.get("maxResidualPx", cb.XY_RESIDUAL_MAX_PX)))
-    uncertainty += max(0.0, float(
-        bundle["camera"]["cameraToScreen"].get("maxErrorPx", cb.CAMERA_REPROJECTION_MAX_PX)))
+    uncertainty = cb.mapping_error_bound(bundle, allow_legacy_defaults=True)
+    if uncertainty is None:
+        raise ValueError("校准最大误差无效，不能确认屏幕安全边界")
     # The screen-space calibration coordinates are fixed to the robot, so a small
     # physical translation can extend beyond their original 0..width domain.
     extension = float(pose["movementPx"]) * max(width, height) / max(

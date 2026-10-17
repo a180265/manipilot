@@ -944,6 +944,12 @@ class DaemonArmDriver(ArmDriver):
             known = "、".join(sorted(TARGET_DISPLAY_NAMES.keys() | DYNAMIC_TARGET_DISPLAY_NAMES.keys()))
             raise DriverError("driver_policy_rejected", f"未知业务目标：{target_id}（已知：{known}）")
         calibration = self._ensure_located()
+        try:
+            click_policy = click_points.policy_from_bundle(calibration)
+        except (ValueError, TypeError) as exc:
+            error = DriverError("driver_policy_rejected", str(exc))
+            error.motion_not_started = True
+            raise error from exc
         if calibration.get("schemaVersion") in (
                 calibration_bundle.V2_SCHEMA_VERSION,
                 calibration_bundle.BUNDLE_SCHEMA_VERSION_V3):
@@ -1013,7 +1019,7 @@ class DaemonArmDriver(ArmDriver):
                 entry["frameW"] = frame_w
                 entry["frameH"] = frame_h
             elif (dynamic_source == "camera_ocr" and trusted_ocr
-                  and target_id in click_points.RETRY_TARGETS):
+                  and (target_id in click_points.RETRY_TARGETS or click_policy is not None)):
                 from runtime.layout_geometry import mapping_error_bound
 
                 model = (calibration.get("camera") or {}).get("cameraToScreen") or {}
@@ -1030,7 +1036,8 @@ class DaemonArmDriver(ArmDriver):
                          screen.get("screenHeight") or screen.get("heightPx")], click_attempt,
                         camera_polygon=target_ref.get("cameraPolygon"),
                         require_polygon=any(target_ref.get(key) is not None for key in
-                                            ("template_ref", "adaptation_ref", "installation_region_ref")))
+                                            ("template_ref", "adaptation_ref", "installation_region_ref")),
+                        policy=click_policy)
                 except ValueError as exc:
                     error = DriverError("driver_policy_rejected", str(exc))
                     error.motion_not_started = True
@@ -1038,7 +1045,10 @@ class DaemonArmDriver(ArmDriver):
                 entry.update(nx=float(chosen[0] / frame_w), ny=float(chosen[1] / frame_h),
                              click_attempt=click_attempt, click_retry_supported=supported,
                              click_point={"screen": screen_point.tolist() if screen_point is not None else None,
-                                          "camera": chosen.tolist(), "safety": safety})
+                                          "camera": chosen.tolist(), "safety": safety,
+                                          **{key: safety[key] for key in
+                                             ("originalCenter", "aim", "selectionOffset", "policy")
+                                             if key in safety}})
         else:
             # 2026-09-04 三步收敛：业务固定目标只认校准后登记层（ui_targets），
             # 旧 bundle targets 兑底已移除——未登记/未启用一律明确拒绝，
@@ -1242,13 +1252,10 @@ class DaemonArmDriver(ArmDriver):
         screen = calibration.get("screen") or {}
         width = screen_gestures.number(screen.get("screenWidth"), "屏幕宽度")
         height = screen_gestures.number(screen.get("screenHeight"), "屏幕高度")
-        camera = (calibration.get("camera") or {}).get("cameraToScreen") or {}
-        uncertainty = max(1.0, screen_gestures.number(
-            xy.get("maxResidualPx", calibration_bundle.XY_RESIDUAL_MAX_PX),
-            "机械映射误差"))
-        uncertainty += max(0.0, screen_gestures.number(
-            camera.get("maxErrorPx", calibration_bundle.CAMERA_REPROJECTION_MAX_PX),
-            "相机映射误差"))
+        uncertainty = calibration_bundle.mapping_error_bound(
+            calibration, allow_legacy_defaults=True)
+        if uncertainty is None:
+            raise ValueError("校准最大误差无效，不能确认屏幕安全边界")
         model = xy.get("robotToScreen") or {}
         for stroke_index, stroke in enumerate(strokes):
             for point_index, point in enumerate(stroke.get("mech_points") or []):

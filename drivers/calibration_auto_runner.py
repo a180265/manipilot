@@ -41,6 +41,7 @@ from drivers.calibration_wizard_common import (
     STAGE_INVALIDATED,
     STAGE_PRECHECK,
     STAGE_READY,
+    TAP_DWELL_MAX_MS,
     WECHAT_ACCEPTANCE_CHECKS,
     AutoRunError,
     ImeError,
@@ -311,6 +312,9 @@ class AutoRunner:
                 # 残差 ≤3mm、Bootstrap 逐点预测校验；配置了 arm_workspace_mm 时仍生效。
                 plan = self._auto_plan_points(point_plan)
                 base = self.host._bundle()
+                frozen_z = {**auto_safe, "tapDwellMs":
+                            (self.host.state["z"].get("tap") or {}).get("dwellMs", 0)}
+                frozen_z["tapDwellMs"] = self._auto_tap_dwell_ms({"z": frozen_z})
                 run = {
                     "runId": f"run-{uuid.uuid4().hex[:12]}",
                     "deviceId": self.host.device,
@@ -326,7 +330,7 @@ class AutoRunner:
                     "daemonSession": status.get("session"),
                     "phoneSessionId": self.host.state.get("imeSessionId"),
                     "screen": dict(screen),
-                    "z": dict(auto_safe),
+                    "z": frozen_z,
                     "safePark": dict(park),
                     "config": dict(self.host._auto_cfg),
                     "maxIterations": int(max_iterations or self.host._auto_cfg["max_iterations"]),
@@ -522,8 +526,13 @@ class AutoRunner:
             if point.get("passed") is not True or not isinstance(error, (int, float)) \
                     or not math.isfinite(error) or not 0 <= error <= tolerance:
                 raise WizardError("独立验证成绩无效，不能恢复 E 验收")
+        # 停留时长属于本轮冻结配置，不属于 autoSafe 的高度/接触确认快照。
+        # 新旧 candidate 均按原快照核对，不能因新增冻结字段阻断合法恢复。
+        run_safe = {k: v for k, v in (run.get("z") or {}).items() if k != "tapDwellMs"}
+        live_safe = {k: v for k, v in ((self.host.state.get("z") or {}).get("autoSafe") or {}).items()
+                     if k != "tapDwellMs"}
         if not (run.get("z") or {}).get("validated") \
-                or run.get("z") != (self.host.state.get("z") or {}).get("autoSafe") \
+                or run_safe != live_safe \
                 or not (run.get("safePark") or {}).get("confirmed") \
                 or run.get("safePark") != self.host.state.get("safePark") \
                 or run.get("safePark") != base.get("safePark") \
@@ -668,7 +677,8 @@ class AutoRunner:
                 record = run["acceptance"].setdefault("debug", {}).setdefault(check, {})
                 result = self.host._execute_acceptance_debug(check, homography, fit,
                                                          None, None, record,
-                                                         z_safe=float(z_safe))
+                                                         z_safe=float(z_safe),
+                                                         tap_dwell_ms=self._auto_tap_dwell_ms(run))
                 self._auto_event(run, "acceptance_executed", {"check": check})
                 cb.save_candidate(run, self.host.data_root)
                 return result
@@ -1200,6 +1210,7 @@ class AutoRunner:
         """每个点前后的一致性守卫（补充文档 §7：任一变化立即停止学习）。"""
         if check_cancel:
             self._auto_check_cancel()
+        self._auto_tap_dwell_ms(run)
         status = self.host.daemon.status()
         if not status.get("connected") or not status.get("session"):
             raise AutoRunError("daemon_disconnected", "机械臂 daemon 未连接",
@@ -1793,6 +1804,17 @@ class AutoRunner:
         screen = run.get("screen") or {}
         return float(screen.get("screenWidth") or 0), float(screen.get("screenHeight") or 0)
 
+    @staticmethod
+    def _auto_tap_dwell_ms(run: dict) -> int:
+        """本轮接触停留；旧 candidate 未保存该字段时，保持旧采样的 0ms。"""
+        try:
+            dwell_ms = int((run.get("z") or {}).get("tapDwellMs", 0))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise WizardError(f"普通点击停留 0~{TAP_DWELL_MAX_MS}ms") from exc
+        if not 0 <= dwell_ms <= TAP_DWELL_MAX_MS:
+            raise WizardError(f"普通点击停留 0~{TAP_DWELL_MAX_MS}ms")
+        return dwell_ms
+
     def _auto_screen_safe(self, run: dict, sx: float, sy: float) -> bool:
         w, h = self._auto_screen_size(run)
         margin = float(run["config"]["safe_margin_px"])
@@ -1918,6 +1940,7 @@ class AutoRunner:
                           phase: str, *, use_camera: bool) -> dict:
         """单点闭环：布防 →（可选相机链路）预测 → zSafe 走位 → MPos 校验 → TAP → 触点。"""
         self._auto_guard(run)
+        dwell_ms = self._auto_tap_dwell_ms(run)
         w, h = self._auto_screen_size(run)
         target_screen = [u * w, v * h]
         armed = self._auto_arm_phone(run, u, v, phase.split("_")[0].lower())
@@ -2041,7 +2064,7 @@ class AutoRunner:
             feed = float(run["z"].get("tapFeed") or DEFAULT_TAP_FEED)
 
             def move() -> None:
-                self.host._daemon_tap(depth, feed, 0)
+                self.host._daemon_tap(depth, feed, dwell_ms)
 
             report = self.host._tap_with_report(
                 armed["sampleId"], move,
@@ -2451,13 +2474,11 @@ class AutoRunner:
     def _auto_update_arm_candidate(self, run: dict) -> None:
         """全量重拟合（等权）：R_eff ↔ Actual Touch；相机数据绝不进入拟合（§10/§13.3）。
 
-        样本 ≥9 时可用二次模型（每轴 6 系数，保留 3 个冗余观测），
-        仅当残差不劣于仿射才采用（嵌套模型，正常必不劣；劣化=数值病态→仿射）。
+        样本 ≥9 时用训练内逐点留一验证选择二次模型；独立验收不参与选型。
         """
         from adapters.screen_ime.geometry import (
             CalibrationMathError,
-            fit_affine,
-            fit_quadratic,
+            fit_calibration_model,
         )
 
         samples = [s for s in run["samples"]
@@ -2472,18 +2493,12 @@ class AutoRunner:
                   "screenX": s["actualTouch"][0], "screenY": s["actualTouch"][1]}
                  for s in samples]
         try:
-            fit = fit_affine(pairs)
+            fit = fit_calibration_model(pairs)
         except CalibrationMathError as exc:
             raise AutoRunError("arm_fit_failed", exc.message,
                                classification="arm_mapping_error",
                                routed_to="ARM_RECALIBRATION", park=True) from exc
-        if len(pairs) >= 9:
-            try:
-                quad = fit_quadratic(pairs)
-                if quad["residualRms"] <= fit["residualRms"] + 1e-9:
-                    fit = quad
-            except CalibrationMathError:
-                pass  # 样本退化（共线/奇异）→ 保持仿射
+        run["armFitSelection"] = fit["modelSelection"]
         rms, worst = fit["residualRms"], max(fit["residuals"])
         if rms > float(run["config"]["arm_rms_target_px"]) \
                 or worst > float(run["config"]["arm_max_error_px"]):
@@ -2511,6 +2526,7 @@ class AutoRunner:
                                    classification="arm_mapping_error", park=True)
         run["arm"] = {
             "robotToScreen": candidate_model,
+            "modelSelection": fit["modelSelection"],
             "residualRmsPx": round(rms, 3), "maxResidualPx": round(worst, 3),
             "sampleCount": len(samples), "iteration": run["iteration"],
             "fittedAt": _now(),
@@ -2853,18 +2869,17 @@ class AutoRunner:
         from copy import deepcopy
 
         z = deepcopy(run["z"])
-        # 删除键/停留参数固化：与 _execute_acceptance_debug 实际使用的来源一致
+        # 普通点击停留沿用本轮冻结参数；删除键保留独立长按配置。
         # （state delete → autoSafe → 默认）。纯自动流程没走过手动 B 阶段时，
         # 不固化这些键会让 ready 档案过不了 z_parameters 门禁。
         z_state_cfg = self.host.state.get("z") or {}
         _auto_alt = z_state_cfg.get("autoSafe") or {}
         _delete_cfg = z_state_cfg.get("delete") or {}
-        _tap_cfg = z_state_cfg.get("tap") or {}
         z.update({"zSafe": round(float(run["z"]["zSafe"]), 3),
                   "hoverZ": round(float(run["z"]["zSafe"]), 3),  # 兼容字段与 zSafe 一致
                   "tapDepth": round(float(run["z"]["tapDepth"]), 3),
                   "tapFeed": float(run["z"].get("tapFeed") or DEFAULT_TAP_FEED),
-                  "tapDwellMs": int(_tap_cfg.get("dwellMs", 0)),
+                  "tapDwellMs": self._auto_tap_dwell_ms(run),
                   "deleteHoldMs": int(_delete_cfg.get("holdMs", 2000)),
                   "deleteDepth": float(_delete_cfg.get(
                       "depth", _auto_alt.get("tapDepth", 3.0))),
@@ -2995,6 +3010,8 @@ class AutoRunner:
         except Exception as exc:
             self._auto_event(run, "ui_target_rebind_failed", {"error": str(exc)})
         with self.host._lock:
+            self.host.state["z"]["tap"] = {
+                **(self.host.state["z"].get("tap") or {}), "dwellMs": z["tapDwellMs"]}
             if deferred:
                 self.host.state["acceptance"]["debug"] = {}
                 self.host.state["acceptance"]["deferred"] = {"debug": True}

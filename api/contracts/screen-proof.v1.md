@@ -49,6 +49,8 @@ Arm Fleet 保存设备级视觉档案，提供区域 OCR、页面特征、色块
 只可用 `click_target_frame_size` 换算其像素，不能乘相机原图 `frameW/frameH`。
 这些字段用于插件比较点击前后同一目标是否稳定，不单独授予动作权限；旧档案缺字段
 时不得猜测目标范围。`binding` 是非空绑定摘要字符串，比较时须精确一致。
+本台启用 `xy.clickPointPolicy` 时，共享布局的 `binding` 额外纳入完整选点策略，
+避免把策略变化前后的两张画面混作同一点击效果证据；缺省关闭时保留原摘要格式。
 
 `camera.locate_text` 的共享来源规则：
 

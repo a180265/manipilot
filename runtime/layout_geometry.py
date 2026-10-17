@@ -7,6 +7,7 @@ import hashlib
 import cv2
 import numpy as np
 
+from drivers import calibration_bundle
 from runtime.layout_state import content_sha
 from runtime.layout_matching import sum_error_bounds
 
@@ -58,7 +59,7 @@ def matrix_and_size(bundle):
 
 
 def mapping_error_bound(bundle):
-    """Current measured maximum residuals, in screen pixels; no RMS/default."""
+    """Training and independent measured maxima, in screen pixels; no defaults."""
     if not isinstance(bundle, dict) or bundle.get("schemaVersion") != 3 \
             or bundle.get("status") not in ("ready", "motion_ready"):
         return None
@@ -69,7 +70,7 @@ def mapping_error_bound(bundle):
     model = camera.get("cameraToScreen") or {}
     if not isinstance(model, dict):
         return None
-    return sum_error_bounds(xy.get("maxResidualPx"), model.get("maxErrorPx"))
+    return calibration_bundle.mapping_error_bound(bundle)
 
 
 def _installation(value):

@@ -10,6 +10,9 @@ from __future__ import annotations
 import time
 
 
+TAP_DWELL_MAX_MS = 2000
+
+
 # ---------- 阶段（实施方案 §5） ----------
 STAGE_IDLE = "idle"
 STAGE_PRECHECK = "precheck"

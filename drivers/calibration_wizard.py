@@ -67,6 +67,7 @@ from drivers.calibration_wizard_common import (
     STAGE_XY,
     STAGE_Z_READY,
     STAGE_DISPLAY,
+    TAP_DWELL_MAX_MS,
     WECHAT_ACCEPTANCE_CHECKS,
     AutoRunError,
     ImeError,
@@ -143,7 +144,6 @@ TARGET_GEO_AREA_MAX_RATIO = 0.90         # 反算四角面积占比上限（§6.
 DEFAULT_REQUIRED_TARGETS: tuple[str, ...] = ()
 
 TOUCH_REPORT_TIMEOUT_S = 6.0
-TAP_DWELL_MAX_MS = 2000
 # 标定完成后的 XY 走位速度；点击下压速度仍使用已校准的 tap.feed。
 # 维持 5000（业主 2026-10-16 拍板：高速执行，降速方案否决）——走位瞬态
 # 与笔杆遮挡改由 clean_pen_occlusion 检测层排除（见下）与姿态门沉降复核。
@@ -3900,7 +3900,8 @@ class CalibrationWizard:
     def _execute_acceptance_debug(self, check: str, homography: dict, fit: dict,
                                   nx: float | None, ny: float | None,
                                   record: dict, z_safe: float | None = None,
-                                  phone_edge: dict | None = None) -> dict:
+                                  phone_edge: dict | None = None,
+                                  tap_dwell_ms: int | None = None) -> dict:
         """调试台验收动作执行核心（手动 E 与 v1.1 自动 E 共用，§25 复用现有验收）。
 
         homography/fit 由调用方注入：手动流程用 wizard 工作态；自动 run 用
@@ -4023,7 +4024,8 @@ class CalibrationWizard:
                 tap = z_state.get("tap") or {}
                 depth = float(tap.get("depth", auto_alt.get("tapDepth", 3.0)))
                 feed = float(tap.get("feed", auto_alt.get("tapFeed", DEFAULT_TAP_FEED)))
-                self._daemon_tap(depth, feed, int(tap.get("dwellMs", 0)))
+                dwell_ms = int(tap.get("dwellMs", 0)) if tap_dwell_ms is None else tap_dwell_ms
+                self._daemon_tap(depth, feed, dwell_ms)
                 action_note = "已点击候选栏（标记处），请确认文字已进入输入框"
         except Exception as exc:
             if check == "ime_input_tap":

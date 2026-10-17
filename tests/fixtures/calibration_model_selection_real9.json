@@ -1,0 +1,120 @@
+[
+  {
+    "source": "2026-10-17 18:12\u201318:13 PHASE1_ARM, eligible training only",
+    "samples": [
+      {
+        "robotX": 55.55,
+        "robotY": -80.637,
+        "screenX": 108.8,
+        "screenY": 242.9
+      },
+      {
+        "robotX": 27.763,
+        "robotY": -80.887,
+        "screenX": 534.1,
+        "screenY": 232.9
+      },
+      {
+        "robotX": 0.0,
+        "robotY": -81.125,
+        "screenX": 970.8,
+        "screenY": 229.8
+      },
+      {
+        "robotX": 56.325,
+        "robotY": -20.725,
+        "screenX": 106.2,
+        "screenY": 1171.8
+      },
+      {
+        "robotX": 28.562,
+        "robotY": -20.975,
+        "screenX": 536.6,
+        "screenY": 1160.8
+      },
+      {
+        "robotX": 0.775,
+        "robotY": -21.225,
+        "screenX": 972.2,
+        "screenY": 1158.8
+      },
+      {
+        "robotX": 57.112,
+        "robotY": 39.188,
+        "screenX": 111.8,
+        "screenY": 2094.6
+      },
+      {
+        "robotX": 29.337,
+        "robotY": 38.938,
+        "screenX": 542.1,
+        "screenY": 2085.5
+      },
+      {
+        "robotX": 1.562,
+        "robotY": 38.688,
+        "screenX": 973.8,
+        "screenY": 2083.2
+      }
+    ]
+  },
+  {
+    "source": "2026-10-17 19:14 diagnostic nine-point training, measured MPos",
+    "samples": [
+      {
+        "robotX": 55.562,
+        "robotY": -81.375,
+        "screenX": 116.0,
+        "screenY": 220.875
+      },
+      {
+        "robotX": 27.5,
+        "robotY": -80.912,
+        "screenX": 553.375,
+        "screenY": 221.25
+      },
+      {
+        "robotX": -0.138,
+        "robotY": -80.988,
+        "screenX": 981.875,
+        "screenY": 220.875
+      },
+      {
+        "robotX": 0.8,
+        "robotY": -21.15,
+        "screenX": 982.125,
+        "screenY": 1146.125
+      },
+      {
+        "robotX": 28.275,
+        "robotY": -21.05,
+        "screenX": 557.125,
+        "screenY": 1146.0
+      },
+      {
+        "robotX": 56.175,
+        "robotY": -21.45,
+        "screenX": 121.875,
+        "screenY": 1145.5
+      },
+      {
+        "robotX": 57.438,
+        "robotY": 38.725,
+        "screenX": 115.25,
+        "screenY": 2074.25
+      },
+      {
+        "robotX": 29.4,
+        "robotY": 39.125,
+        "screenX": 553.625,
+        "screenY": 2076.5
+      },
+      {
+        "robotX": 1.737,
+        "robotY": 39.025,
+        "screenX": 982.5,
+        "screenY": 2077.625
+      }
+    ]
+  }
+]

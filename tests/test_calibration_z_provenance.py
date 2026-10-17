@@ -75,7 +75,7 @@ def test_promotion_replaces_old_z_confirmation_evidence(env, tmp_path, deferred)
     view = promote(env, deferred=deferred)
     promoted = cb.load_bundle("arm-01", tmp_path)
     run = cb.load_candidate("arm-01", view["runId"], tmp_path)
-    assert run["z"] == confirmation
+    assert run["z"] == {**confirmation, "tapDwellMs": 0}
     for key, value in confirmation.items():
         assert promoted["z"][key] == value, key
     assert promoted["z"]["hoverZ"] == confirmation["zSafe"]

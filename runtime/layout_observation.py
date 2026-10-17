@@ -438,9 +438,18 @@ class SelectedLayout:
         ) >= PASS_MARGIN,
                  "当前页面匹配存在歧义", "anchor_ambiguous")
         score, state, check = matches[0]
+        from drivers.click_points import policy_from_bundle
+
+        click_policy = policy_from_bundle(bundle)
+        profile_binding = {"source": "shared_layout.v1",
+                           "calibration_binding": calibration_binding, **self.references}
+        # Some deployments intentionally keep legacy visual references across
+        # recalibration. Active click policy must still invalidate effect proofs;
+        # leave the absent-policy digest unchanged for those old references.
+        if click_policy is not None:
+            profile_binding["click_point_policy"] = click_policy
         profile = {"revision": self.pointer["revision"], "regions": {},
-                   "binding": content_sha({"source": "shared_layout.v1",
-                       "calibration_binding": calibration_binding, **self.references})}
+                   "binding": content_sha(profile_binding)}
         page = self.pages[state]
         definitions = {r["id"]: r for r in page["regions"]}
         for item in check["item_results"]:
@@ -455,7 +464,8 @@ class SelectedLayout:
                            {"ui_state": ui_state, "ui_state_display":
                             "微信主界面" if state == "wechat_list" else "聊天界面",
                             "confidence": round(score, 3), "profile_revision": profile["revision"]},
-                           input_ocr=selected_input.get(state), check=check, pose=pose)
+                           input_ocr=selected_input.get(state), check=check, pose=pose,
+                           click_policy=click_policy)
 
     @property
     def execution_binding(self):
@@ -472,12 +482,13 @@ class SelectedLayout:
 
 class LayoutFrame:
     def __init__(self, selected, source, image, inverse, profile, state, calibration_sha, ui,
-                 *, input_ocr=None, check=None, pose=None):
+                 *, input_ocr=None, check=None, pose=None, click_policy=None):
         self.selected, self.source, self.image = selected, source, image
         self.inverse, self.profile, self.state, self.ui = inverse, profile, state, ui
         self.calibration_sha = calibration_sha
         self.input_ocr = input_ocr
         self.check, self.pose = check, pose
+        self.click_policy = copy.deepcopy(click_policy)
 
     def ensure_current(self, bundle):
         _require(content_sha(bundle) == self.calibration_sha,
@@ -510,7 +521,8 @@ class LayoutFrame:
         _require(rect is not None, "当前点击目标缺少安全区")
         height, width = self.image.shape[:2]
         screen_point, retry_supported, safety = rectangle_point(
-            target_id, rect, width, height, click_attempt)
+            target_id, rect, width, height, click_attempt,
+            policy=self.click_policy if definition["mode"] == "tap" else None)
         retry_supported = retry_supported and definition["mode"] == "tap"
         _require(not click_attempt or retry_supported, "此目标不支持替代点击落点")
         point = self.inverse @ np.array([*screen_point, 1])
@@ -526,7 +538,9 @@ class LayoutFrame:
                 "frame_sha256": self.source.get("image_sha256"),
                 "click_attempt": click_attempt, "click_retry_supported": retry_supported,
                 "click_point": {"screen": screen_point.tolist(), "camera": [float(cx), float(cy)],
-                                "safety": safety},
+                                "safety": safety, **{key: safety[key] for key in
+                                    ("originalCenter", "aim", "selectionOffset", "policy")
+                                    if key in safety}},
                 "layout_state": self.state, **self.selected.references}
 
     def verify_target_point(self, target_id, resolved, bundle):
@@ -552,6 +566,11 @@ class LayoutFrame:
         _require(rect["x"] < x < rect["x"] + rect["width"]
                  and rect["y"] < y < rect["y"] + rect["height"],
                  "走位后的目标安全区已变化，禁止沿用旧落点", "geometry_changed")
+        if self.click_policy is not None and definition["mode"] == "tap":
+            insets = self.click_policy["preferredInsetsPx"]
+            _require(insets["left"] <= x * width <= width - insets["right"]
+                     and insets["top"] <= y * height <= height - insets["bottom"],
+                     "走位后的落点超出本台屏幕内部偏好区", "geometry_changed")
 
     def evidence_profile(self):
         height, width = self.image.shape[:2]

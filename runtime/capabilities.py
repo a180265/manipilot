@@ -124,7 +124,8 @@ BASE_CAPABILITIES: list[dict] = [
                 "target_id": {"type": "string"},
                 "click_attempt": {
                     "type": "integer", "enum": [0, 1, 2], "default": 0,
-                    "description": "0 点原中心；1/2 请求同目标安全区内的替代落点。"
+                    "description": "0 默认点原中心，本台启用避边策略时在安全区选点；"
+                    "1/2 请求同目标安全区内的替代落点。"
                     "仅会话行、返回键和输入框支持，每次调用只点击一次；"
                     "调用方必须先确认上次未生效，未知结果禁止重试。",
                 },

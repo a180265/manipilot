@@ -17,6 +17,7 @@ import math
 import os
 import tempfile
 import time
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 from drivers.daemon_protocol import check_feed
@@ -62,6 +63,69 @@ DELETE_HOLD_MAX_MS = 5000
 
 Z_PARAM_KEYS = ("hoverZ", "tapDepth", "tapFeed", "tapDwellMs",
                 "deleteHoldMs", "deleteDepth", "deleteFeed")
+
+
+def mapping_error_bound(bundle: dict, *, allow_legacy_defaults: bool = False) -> float | None:
+    """Conservative measured screen-pixel envelope, including independent taps.
+
+    Qualification remains the caller's responsibility. Old physical-edge callers
+    may retain their missing-field defaults and 1px arm floor; malformed present
+    measurements never fall back. Independent camera-to-touch gaps describe arm
+    error, so camera reprojection error is added before comparing with nominal
+    target error. Training residuals and independent summaries cannot shrink the
+    envelope recorded by individual holdout points.
+    """
+    def finite(value):
+        if type(value) not in (int, float) or value < 0 or not math.isfinite(value):
+            raise ValueError("校准误差必须为有限非负数")
+        return value
+
+    def add(a, b):
+        terms = [Decimal(str(a)), Decimal(str(b))]
+        with localcontext() as context:
+            context.prec = max(28, max(t.adjusted() for t in terms)
+                               - min(t.as_tuple().exponent for t in terms) + 3)
+            exact = sum(terms, Decimal(0))
+        value = float(exact)
+        if Decimal(str(value)) < exact:
+            value = math.nextafter(value, math.inf)
+        return finite(value)
+
+    try:
+        xy = bundle.get("xy") or {}
+        camera = bundle.get("camera") or {}
+        model = camera.get("cameraToScreen") or {}
+        arm_error = finite(xy.get("maxResidualPx", XY_RESIDUAL_MAX_PX
+                                 if allow_legacy_defaults else None))
+        camera_error = finite(model.get("maxErrorPx", CAMERA_REPROJECTION_MAX_PX
+                                       if allow_legacy_defaults else None))
+        if allow_legacy_defaults:
+            arm_error = max(1.0, arm_error)
+        nominal_errors = []
+        arm_errors = [arm_error]
+        for points in ((bundle.get("validation") or {}).get("points", []),
+                       xy.get("validation", [])):
+            if not isinstance(points, list):
+                raise ValueError("独立验证点记录无效")
+            for point in points:
+                if not isinstance(point, dict):
+                    raise ValueError("独立验证点记录无效")
+                for key, values in (("touchTargetErrorPx", nominal_errors),
+                                    ("cameraTouchGapPx", arm_errors)):
+                    if key in point:
+                        if point.get("passed") is False:
+                            raise ValueError("独立验证点未通过")
+                        values.append(finite(point[key]))
+        summary = camera.get("visualVerify") or {}
+        for key, values in (("contactVsNominalMaxPx", nominal_errors),
+                            ("contactVsCameraMaxPx", arm_errors)):
+            if key in summary:
+                if summary.get("passed") is False:
+                    raise ValueError("独立验证汇总未通过")
+                values.append(finite(summary[key]))
+        return max([add(max(arm_errors), camera_error), *nominal_errors])
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
 
 
 def default_data_root() -> Path:
@@ -357,7 +421,8 @@ def motion_calibration_fingerprint(bundle: dict) -> str:
     "geometry":{schemaVersion,deviceId,daemonSession,cameraId,cameraDeviceUniqueId,
     cameraBindingId,sourceGeometryId,frame,camera,screen,xy,z,safePark}}——
     排除 bindingRevision/updatedAt/acceptance 等诊断/历史字段，字段缺失拒绝。
-    v2 保持原 profile_hash 输入不变。
+    v2 保持原 profile_hash 输入不变。两版均完整包含 xy，因此可选的
+    xy.clickPointPolicy 新增、变更或移除都会撤销旧机械/观测证据指纹。
     """
     if int(bundle.get("schemaVersion") or 0) == 3:
         geometry_keys = ("schemaVersion", "deviceId", "daemonSession", "cameraId",
