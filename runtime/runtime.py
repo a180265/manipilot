@@ -644,7 +644,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
     def _reconcile_input_state(self, configs: list[dict]) -> None:
         """核对设置提交意图 → 装载记录 → 按撤销边界扫旧 owner（§4.8.6-4/§4.5.2）。"""
         from runtime import input_settings as _iset
-        from runtime.input_control import InputControlError
+        from runtime.input_control import InputControlError, record_id_for_effect
         for cfg in configs:
             device_id = str(cfg.get("device_id") or "")
             if not device_id:
@@ -668,6 +668,20 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                             owner["record_id"],
                             expected_revision=owner["revision"],
                             revoked_at_revision=boundary)
+                    if owner.get("owner_type") == "direct_ime":
+                        task_id = str(owner["owner_ref"])
+                        effect = self.store.input_record_get(record_id_for_effect(
+                            owner["record_id"], ["ime:" + task_id, 0, "ime_create"]))
+                        if effect and effect.get("state") in ("claimed", "unknown"):
+                            # 新进程已独占资源：原创建不会再晚到；分库窗口只核对，
+                            # 不把存在的 pending 行当作允许继续输入的完成回执。
+                            if effect["state"] == "claimed":
+                                self.input_control.finish_effect(
+                                    effect["record_id"], expected_revision=effect["revision"],
+                                    state="unknown")
+                            self.input_control.open_guard_issue(
+                                device_id, code="input_effect_unknown", owner_id=owner["record_id"],
+                                detail={"ime_task_id": task_id, "effect_kind": "ime_create"})
             except InputControlError as exc:
                 # 损坏/对账受阻：记 guard 阻断（禁止新输入认领），不重建空记录
                 try:
@@ -1017,15 +1031,30 @@ class ArmFleetRuntime(PluginCapabilityMixin):
 
     def _fleet_owner_for_ime_task(self, ime_task_id: str) -> dict | None:
         """按原任务身份查 owner（owner:task:<fleet 任务> 或 owner:ime:<ref>）。"""
-        from runtime.input_control import record_id_for_owner
+        from runtime.input_control import InputControlError, record_id_for_owner
         fleet_task_id = (ime_task_id[:-4] if ime_task_id.endswith("-ime")
                          else ime_task_id)
         owner = self.store.input_record_get(
             record_id_for_owner("fleet_task", fleet_task_id))
-        if owner is not None:
-            return owner
-        return self.store.input_record_get(
+        direct_owner = self.store.input_record_get(
             record_id_for_owner("direct_ime", ime_task_id))
+        if owner is not None and direct_owner is not None:
+            error = InputControlError("同一输入法任务存在平台与直发两种归属，拒绝借用许可")
+            error.hook_code = "input_owner_conflict"
+            raise error
+        return owner if owner is not None else direct_owner
+
+    def _device_for_ime(self, ime_device: str) -> str:
+        """直发及输入认领只能使用当前唯一的 Fleet 绑定。"""
+        from runtime.input_control import InputControlError
+        matches = [str(d["device_id"]) for d in self.devices.all()
+                   if self.devices.input_binding(d["device_id"]).get("ime_device_id")
+                   == ime_device]
+        if len(matches) != 1:
+            error = InputControlError(f"手机 {ime_device} 无唯一 Fleet 绑定（{len(matches)} 个）")
+            error.hook_code = "input_binding_not_unique"
+            raise error
+        return matches[0]
 
     def ime_control_hooks_fleet(self) -> dict:
         """注入 Fleet 挂载输入法仓储的控制钩子：每次调用按手机反查唯一设备。
@@ -1037,19 +1066,10 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         """
         from runtime.input_control import InputControlError
 
-        def resolve_device(ime_device: str) -> str:
-            for d in self.devices.all():
-                try:
-                    if self.devices.input_binding(d["device_id"]).get("ime_device_id") == ime_device:
-                        return str(d["device_id"])
-                except Exception:
-                    continue
-            raise InputControlError(f"手机 {ime_device} 无唯一 Fleet 绑定")
-
         def wrapped(name: str, needs_device: bool):
             per_device = self.ime_control_hooks  # 方法引用，按设备取闭包
             def call(ime_task_id: str, ime_device: str, **kwargs):
-                device_id = resolve_device(ime_device)
+                device_id = self._device_for_ime(ime_device)
                 hooks = per_device(device_id)
                 fn = hooks[name]
                 return fn(ime_task_id, ime_device, **kwargs) if kwargs else fn(ime_task_id, ime_device)
@@ -1086,7 +1106,29 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                 return bool(check(ime_task_id, ime_device)) if check else False
             return call
 
-        return {"typing_claim": wrapped("typing_claim", True),
+        def recover_direct(ime_task_id: str, ime_device: str, *, delivered: bool) -> None:
+            # 已完成 inserted 等历史行不进入本回调；未结束的旧直发候选在
+            # 重启后只能取消/核对，人工再次点击也不能沿用旧开始许可。
+            owner = self._fleet_owner_for_ime_task(ime_task_id)
+            if owner is None or owner.get("owner_type") != "direct_ime":
+                return
+            with self.input_control.device_lock(str(owner["device_id"])):
+                owner = self._fleet_owner_for_ime_task(ime_task_id)
+                if owner is not None and delivered:
+                    self.input_control.open_guard_issue(
+                        str(owner["device_id"]), code="editor_review_required",
+                        owner_id=owner["record_id"],
+                        detail={"ime_task_id": ime_task_id,
+                                "reason": "direct_input_interrupted",
+                                "candidate_and_editor_review_required": True})
+                if owner is not None and owner.get("revocation") == "active":
+                    self.input_control.revoke_owner(
+                        owner["record_id"], expected_revision=owner["revision"],
+                        revoked_at_revision=int(owner["settings_revision"]))
+
+        return {"direct_create": wrapped("direct_create", True),
+                "recover_direct": recover_direct,
+                "typing_claim": wrapped("typing_claim", True),
                 "deliver": wrapped("deliver", True),
                 "cancel": identity_wrapped("cancel"),
                 "ack": identity_wrapped("ack"),
@@ -2310,18 +2352,15 @@ class ArmFleetRuntime(PluginCapabilityMixin):
     # ---- P06：Fleet 挂载 IME 仓储的控制钩子（§4.8.5） ----
     def ime_control_hooks(self, device_id: str) -> dict:
         """注入 Fleet 挂载的输入法仓储：typing 单次许可/交付/取消/确认。"""
+        import contextlib
         from drivers.arm import DriverError
         from runtime import input_settings as _iset
         from runtime.input_control import (
-            InputControlError, record_id_for_guard, record_id_for_owner)
-
-        def _fleet_task_id(ime_task_id: str) -> str:
-            return (ime_task_id[:-4] if ime_task_id.endswith("-ime") else ime_task_id)
+            InputControlError, record_id_for_guard)
 
         def _owner_for_input(ime_task_id: str) -> dict:
             """输入副作用（typing/deliver）许可核对：owner + 当前撤销边界。"""
-            owner = self.store.input_record_get(
-                record_id_for_owner("fleet_task", _fleet_task_id(ime_task_id)))
+            owner = self._fleet_owner_for_ime_task(ime_task_id)
             if owner is None:
                 raise InputControlError("任务缺少输入许可记录（不补办）")
             settings = _iset.load_settings(
@@ -2339,11 +2378,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         def _owner_identity(ime_task_id: str, ime_device: str) -> dict:
             """取消/确认/补报身份核对：只核原任务与原手机，不要求当前输入许可
             仍有效（§4.8.5-6/7：撤销后仍接收安全对账，不能拒收旧 ack）。"""
-            owner = self.store.input_record_get(
-                record_id_for_owner("fleet_task", _fleet_task_id(ime_task_id)))
-            if owner is None:
-                owner = self.store.input_record_get(
-                    record_id_for_owner("direct_ime", ime_task_id))
+            owner = self._fleet_owner_for_ime_task(ime_task_id)
             if owner is None:
                 raise InputControlError("任务缺少输入许可记录（不补办）")
             if str(owner.get("ime_device_id") or "") != ime_device:
@@ -2359,7 +2394,8 @@ class ArmFleetRuntime(PluginCapabilityMixin):
             error.hook_code = code
             return error
 
-        def _assert_input_license_locked(ime_task_id: str, ime_device: str) -> dict:
+        def _assert_input_license_locked(ime_task_id: str, ime_device: str,
+                                         *, prospective_owner: dict | None = None) -> dict:
             """R3-01：最终认领（typing_claim/deliver）在设备短锁内的统一许可
             复核。与 _prepare_input_effect.claim_callback 同一判断集合
             （§4.8.4-5/R3-01-2）：owner（fleet_task 与 direct_ime 两类正式接纳
@@ -2368,20 +2404,25 @@ class ArmFleetRuntime(PluginCapabilityMixin):
             不跨网络、不持设备锁等 IO；任一不成立抛 InputControlError
             （hook_code 标明原因），不认领、不补办当下许可。
             """
-            owner = self.store.input_record_get(
-                record_id_for_owner("fleet_task", _fleet_task_id(ime_task_id)))
-            if owner is None:
-                owner = self.store.input_record_get(
-                    record_id_for_owner("direct_ime", ime_task_id))
+            owner = (prospective_owner if prospective_owner is not None
+                     else self._fleet_owner_for_ime_task(ime_task_id))
             if owner is None:
                 raise _license_reject(
                     "input_authorization_missing",
                     "任务缺少输入许可记录（不补办当下许可），最终认领拒绝")
-            if str(owner.get("ime_device_id") or "") != ime_device:
+            if (owner.get("device_id") != device_id
+                    or str(owner.get("ime_device_id") or "") != ime_device):
                 raise _license_reject(
                     "device_mismatch",
                     f"手机 {ime_device} 与原任务归属 "
                     f"{owner.get('ime_device_id')} 不一致，最终认领拒绝")
+            if self._device_for_ime(ime_device) != device_id:
+                raise _license_reject("input_binding_mismatch", "输入绑定已变化，最终认领拒绝")
+            if prospective_owner is None and owner.get("owner_type") == "direct_ime":
+                created = _effect(owner, ime_task_id, "ime_create")
+                if created is None or created.get("state") != "completed":
+                    raise _license_reject(
+                        "input_create_uncertain", "直发创建没有完成回执，须先核对，不继续输入")
             # 设置历史（known check + checkpoint 回退/替换核对）与撤销边界：
             # 与关闭写入共用 load_settings_verified，不走低层 load_settings。
             from runtime.input_settings import InputSettingsError
@@ -2392,6 +2433,10 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                 raise _license_reject(
                     "input_settings_invalid",
                     f"输入设置不可安全解释，最终认领拒绝：{exc.message}") from exc
+            if not settings.get("enabled"):
+                raise _license_reject("input_switch_disabled", "输入开关已关闭，拒绝输入")
+            if self.pre_enable_maintenance:
+                raise _license_reject("pre_enable_maintenance", "维护模式禁止输入")
             boundary = int(settings.get("revoked_through_revision") or 0)
             current = int(settings.get("revision") or 0)
             revision = int(owner.get("settings_revision") or 0)
@@ -2448,11 +2493,11 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                         "最终认领拒绝")
             if self.estop.active:
                 raise _license_reject("estop_active", "急停生效中，最终认领拒绝")
-            # device_busy 是"本动作正在执行"的固有状态：输入认领不得自否；
-            # 其余阻断（离线/校准/开关/手机/键盘/能力门）任一出现即拒绝。
+            # 平台任务的 device_busy 可来自本动作正在执行；直发不持该任务
+            # 租约，必须保留 busy 阻断，不能插入另一任务正在操作的编辑框。
             eligibility = self.devices.eligibility(device_id, require_input=True)
             blocking = [code for code in (eligibility.get("blocking_checks") or [])
-                        if code != "device_busy"]
+                        if code != "device_busy" or owner.get("owner_type") != "fleet_task"]
             if blocking:
                 raise _license_reject(
                     "runtime_eligibility_blocked",
@@ -2464,6 +2509,71 @@ class ArmFleetRuntime(PluginCapabilityMixin):
             return self.store.input_record_get(
                 record_id_for_effect(owner["record_id"],
                                      ["ime:" + ime_task_id, 0, kind]))
+
+        @contextlib.contextmanager
+        def direct_create(ime_task_id: str, ime_device: str, *, payload: dict,
+                          find_existing):
+            """正式直发接纳；持设备短锁覆盖许可认领与同步候选入库。
+
+            IME 与 Fleet 分库：先持久认领再创建候选，失败按未知保留事实，
+            同 taskId 永不换用新设置修订，也不重放已认领的创建 slot。
+            """
+            from runtime.input_settings import InputSettingsError
+            with self.input_control.device_lock(device_id):
+                original = find_existing()
+                if original is not None:
+                    yield original
+                    return
+                if self._device_for_ime(ime_device) != device_id:
+                    raise _license_reject("input_binding_mismatch", "输入绑定已变化")
+                existing = self._fleet_owner_for_ime_task(ime_task_id)
+                if existing is not None and existing.get("owner_type") != "direct_ime":
+                    raise _license_reject("input_owner_conflict", "直发编号已属于平台任务")
+                try:
+                    settings = self.input_control.load_settings_verified(
+                        device_id, data_root=self.devices.settings_data_root(device_id))
+                except InputSettingsError as exc:
+                    raise _license_reject("input_settings_invalid", exc.message) from exc
+                if not settings.get("enabled"):
+                    raise _license_reject("input_switch_disabled", "输入开关已关闭，拒绝直发")
+                proposed = self.input_control.build_owner(
+                    owner_type="direct_ime", owner_ref=ime_task_id, device_id=device_id,
+                    ime_device_id=ime_device,
+                    settings_revision=int(settings["revision"]),
+                    binding_revision=int(self.devices.binding_view(device_id)
+                                         .get("binding_revision") or 0), payload=payload)
+                if existing is not None and (
+                        existing["payload_digest"] != proposed["payload_digest"]
+                        or existing["device_id"] != device_id):
+                    raise _license_reject("task_conflict", "taskId 已存在不同的直发许可")
+                _assert_input_license_locked(
+                    ime_task_id, ime_device, prospective_owner=existing or proposed)
+                owner, _created = self.input_control.admit_owner(proposed)
+                effect, _created = self.input_control.insert_effect(
+                    self.input_control.build_effect(
+                        owner_id=owner["record_id"], device_id=device_id,
+                        slot_key=["ime:" + ime_task_id, 0, "ime_create"],
+                        payload=payload, ime_task_id=ime_task_id))
+                if effect["state"] != "prepared":
+                    raise _license_reject(
+                        "input_create_already_claimed", "该任务的创建许可已使用，不再创建候选")
+                effect = self.input_control.claim_effect(
+                    effect["record_id"], expected_revision=effect["revision"])
+                try:
+                    yield None
+                    self.input_control.finish_effect(
+                        effect["record_id"], expected_revision=effect["revision"], state="completed")
+                except BaseException as exc:
+                    with contextlib.suppress(Exception):
+                        self.input_control.finish_effect(
+                            effect["record_id"], expected_revision=effect["revision"], state="unknown")
+                    self.input_control.open_guard_issue(
+                        device_id, code="input_effect_unknown", owner_id=owner["record_id"],
+                        detail={"ime_task_id": ime_task_id, "effect_kind": "ime_create"})
+                    error = _license_reject(
+                        "input_create_uncertain", "直发创建结果需核对，原许可不得重复使用")
+                    error.hook_status = 503
+                    raise error from exc
 
         def typing_claim(ime_task_id: str, ime_device: str) -> dict:
             owner = _owner_for_input(ime_task_id)
@@ -2526,17 +2636,29 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                 self.input_control.set_cancel_state(
                     effect["record_id"], expected_revision=revision,
                     cancel_state="requested")
+            if owner.get("owner_type") == "direct_ime" and delivered:
+                # 原手机取消回执须覆盖该直发任务所有已经交付/开始的固定 slot，
+                # 才能让后续人工核对解除阻断；保持 claimed 执行事实，不伪造完成。
+                for kind in ("ime_deliver", "ime_start"):
+                    pending = _effect(owner, ime_task_id, kind)
+                    if pending is not None and pending.get("cancel_state") in (None, "none"):
+                        self.input_control.set_cancel_state(
+                            pending["record_id"], expected_revision=pending["revision"],
+                            cancel_state="requested")
 
         def cancel_pending_check(ime_task_id: str, ime_device: str) -> bool:
             """取消工作器扫描检查：pending 候选是否已有取消理由
             （owner 撤销/撤销边界以下/许可不可解释）。只读，不抛错。"""
             try:
-                owner = self.store.input_record_get(record_id_for_owner(
-                    "fleet_task", _fleet_task_id(ime_task_id)))
+                owner = self._fleet_owner_for_ime_task(ime_task_id)
                 if owner is None:
                     return True  # 无归属旧任务：不补当前授权，按旧任务取消
                 if str(owner.get("ime_device_id") or "") != ime_device:
                     return True
+                if owner.get("owner_type") == "direct_ime":
+                    created = _effect(owner, ime_task_id, "ime_create")
+                    if created is None or created.get("state") in ("unknown", "not_started"):
+                        return True  # 分库提交窗口中断：只取消/核对，不自动续输入
                 settings = _iset.load_settings(
                     device_id, self.devices.settings_data_root(device_id))
                 boundary = int(settings.get("revoked_through_revision") or 0)
@@ -2580,6 +2702,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                             "typed_character_count": typed_character_count,
                             "claimed_effects": claimed_kinds})
 
-        return {"typing_claim": typing_claim, "deliver": deliver,
+        return {"direct_create": direct_create,
+                "typing_claim": typing_claim, "deliver": deliver,
                 "cancel": cancel, "ack": ack,
                 "cancel_pending_check": cancel_pending_check}

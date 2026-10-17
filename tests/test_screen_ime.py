@@ -306,7 +306,17 @@ def test_http_protocol_compatible_with_k40_server(tmp_path):
             "/api/v1/devices/k40-01/tasks/next?waitSeconds=0", headers=_H01)
         assert empty_first.status_code == 204
         client.post("/api/v1/devices/k40-01/heartbeat", headers=_H01,
-                    json={"appVersion": "sim", "keyboardActive": True})
+                    json={"appVersion": "sim", "keyboardActive": True,
+                          "inputTaskControlVersion": 1})
+        # Fleet 直发遵守正式输入许可；仿真夹具补齐绑定/校准与输入开关。
+        _runtime.devices._devices["arm-01"].update({
+            "ime_device_id": "k40-01", "status": "ready", "calibration_status": "validated"})
+        enabled = client.put("/v1/devices/arm-01/input-settings", json={
+            "contract_version": "device-input-settings.v1", "operator_id": "测试",
+            "role": "operator", "reason": "协议兼容测试", "correlation_id": "ime-http",
+            "client_request_id": "ime-http-enable", "enabled": True,
+            "expected_revision": 0, "ime_device_id": "k40-01"})
+        assert enabled.status_code == 200, enabled.text
         created = client.post("/api/v1/tasks", json={
             "taskId": "t-1", "deviceId": "k40-01", "targetUser": "张三", "content": "你好"})
         assert created.status_code == 201 and created.json()["status"] == "pending"

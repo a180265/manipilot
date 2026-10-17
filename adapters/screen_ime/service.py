@@ -308,6 +308,17 @@ class ImeTaskRepository:
         self._control_hooks = hooks
         self._set_meta("fleet_mounted", "1" if hooks else "0")
         if hooks and self._worker is None:
+            recover = hooks.get("recover_direct")
+            if recover is not None:
+                # 装配恢复先撤销旧直发任务，再启动取消扫描；查询结束后释放
+                # IME 线程锁，回调可按设备短锁 -> Store 的顺序核对许可。
+                rows = self._query_all(
+                    "SELECT task_id, device_id, status, EXISTS(SELECT 1 FROM ime_deliveries d"
+                    " WHERE d.task_id=tasks.task_id) AS delivered FROM tasks WHERE status IN"
+                    " ('pending','displayed','typing','cancel_requested')")
+                for row in rows:
+                    recover(row["task_id"], row["device_id"],
+                            delivered=bool(row["delivered"] or row["status"] != "pending"))
             self._worker = ImeCancellationWorker(self)
             self._worker.start()
         elif not hooks and self._worker is not None:
@@ -458,7 +469,7 @@ class ImeTaskRepository:
         self._condition.notify_all()
 
     # ---- 创建（含幂等重放与设备可用性检查） ----
-    async def create(self, request: dict) -> tuple[dict, bool]:
+    async def create(self, request: dict, *, direct: bool = False) -> tuple[dict, bool]:
         self._bind_loop()
         self._require_control_ready("create")
         if not isinstance(request, dict):
@@ -473,7 +484,7 @@ class ImeTaskRepository:
         requested_speed, resolved_speed = _resolve_speed(request.get("typingSpeed"))
         source = _normalize_source(request.get("source"))
 
-        async with self._condition:
+        def find_existing():
             row = self._query_one("SELECT * FROM tasks WHERE task_id=?", (task_id,))
             if row is not None:
                 task = self._task_view(row)
@@ -486,7 +497,7 @@ class ImeTaskRepository:
                 if not identical:
                     raise ScreenImeApiError(409, "task_conflict",
                                             "taskId already exists with different data")
-                return task, False
+                return task
 
             device = self._query_one("SELECT keyboard_active, last_seen_at FROM devices WHERE device_id=?",
                                      (device_id,))
@@ -494,17 +505,51 @@ class ImeTaskRepository:
                     or parse_iso(device["last_seen_at"]) < datetime.now(timezone.utc) - ONLINE_WINDOW):
                 raise ScreenImeApiError(409, "device_unavailable",
                                         "Device is offline or its keyboard is closed")
+            return None
 
+        @contextlib.contextmanager
+        def repository_admission():
+            # 独立/内部平台路径不取得设备锁；保持仓储自身的幂等串行。
+            with self._thread_lock:
+                yield find_existing()
+
+        def create_sync():
+            # 原任务重放只读，不重新接纳许可（关闭/换绑后仍返回原状态）。
+            existing = find_existing()
+            if existing is not None:
+                return existing, False
+            admit = None
+            if direct and self._control_hooks:
+                admit = self._control_hooks.get("direct_create")
+                if admit is None:
+                    raise ScreenImeApiError(503, "input_control_not_ready",
+                                            "Fleet 直发输入许可接纳尚未就绪")
             now = now_iso()
-            self._write(
-                "INSERT INTO tasks(task_id, device_id, target_user, content, requested_speed,"
-                " resolved_speed, status, typed_character_count, failure_reason, source,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, ?, ?)",
-                (task_id, device_id, target_user, content, requested_speed, resolved_speed,
-                 source, now, now),
-            )
-            self._insert_history(task_id, "pending", 0, None, now)
-            self._notify()
+            try:
+                # 设备短锁内重读原任务，再接纳 owner/认领固定 slot/同步入库。
+                # 此处不持 IME 条件锁、不 await；完成后才通知长轮询。
+                admission = (admit(task_id, device_id, find_existing=find_existing, payload={
+                    "deviceId": device_id, "targetUser": target_user,
+                    "content": content, "typingSpeed": requested_speed})
+                    if admit is not None else repository_admission())
+                with admission as existing:
+                    if existing is not None:
+                        return existing, False
+                    with self._transaction():
+                        self._execute(
+                            "INSERT INTO tasks(task_id, device_id, target_user, content, requested_speed,"
+                            " resolved_speed, status, typed_character_count, failure_reason, source,"
+                            " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, ?, ?)",
+                            (task_id, device_id, target_user, content, requested_speed, resolved_speed,
+                             source, now, now),
+                        )
+                        self._execute(
+                            "INSERT INTO task_history(task_id, status, typed_character_count, reason, created_at)"
+                            " VALUES (?, 'pending', 0, NULL, ?)", (task_id, now))
+            except InputControlError as exc:
+                raise ScreenImeApiError(
+                    getattr(exc, "hook_status", 409),
+                    getattr(exc, "hook_code", None) or exc.reason_code, str(exc)) from exc
             task = {
                 "taskId": task_id, "deviceId": device_id, "targetUser": target_user,
                 "content": content, "typingSpeed": requested_speed,
@@ -513,6 +558,15 @@ class ImeTaskRepository:
                 "createdAt": now, "updatedAt": now,
             }
             return task, True
+
+        # 仅新直发链把等待设备锁交给线程；内部平台调用可能已认领创建 effect，
+        # 必须立即同步插入，不在其认领与插入之间另排异步任务。
+        task, created = (await asyncio.to_thread(create_sync)
+                         if direct and self._control_hooks else create_sync())
+        if created:
+            async with self._condition:
+                self._notify()
+        return task, created
 
     # ---- 手机端长轮询取任务 ----
     async def next_task(self, device_id: str, wait_seconds: int) -> dict | None:
@@ -620,7 +674,11 @@ class ImeTaskRepository:
             if (status not in ("cancel_requested", "cancelled")
                     and current["status"] in ("cancel_requested", "cancelled")
                     and "typing_claim" in self._control_hooks):
-                # §4.8.5-5/7：取消后迟到的 displayed/typing/终态/进度补报只补录
+                if status == "typing":
+                    # typing 是开始许可，Android 把任意 200 视作允许输入。
+                    raise ScreenImeApiError(409, "input_authorization_revoked",
+                                            "任务已取消，不再允许开始输入")
+                # §4.8.5-5/7：取消后迟到的 displayed/终态/进度补报只补录
                 # 观察事实，回 200+真实取消态；不改回可领取状态、不复活任务
                 #（旧端 displayed 后才启动控制监听，需要原 cancel 命令可领取）。
                 now = now_iso()

@@ -215,7 +215,7 @@ def create_screen_ime_router(service: ScreenImeService | None = None,
     async def create_task(request: Request):
         require_machine(request)  # R3-17-P4：任务创建归本机/服务管理
         body = await _json_body(request)
-        task, created = await get_service().tasks.create(body)
+        task, created = await get_service().tasks.create(body, direct=True)
         return JSONResponse(status_code=201 if created else 200, content=task)
 
     @router.get("/api/v1/tasks")
