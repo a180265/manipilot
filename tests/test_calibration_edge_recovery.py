@@ -8,15 +8,39 @@ from drivers.calibration_wizard import CalibrationWizard, WizardError
 from tests.test_calibration_wizard import auto_ready_env, wait_auto
 
 
-@pytest.mark.parametrize("u,v", [(.05, .05), (.95, .95), (.5, .5)])
+@pytest.mark.parametrize("u,v", [(.05, .05), (.95, .05), (.05, .95), (.95, .95)])
 def test_edge_target_keeps_requested_center(u, v):
     target = CalibrationWizard._target_rect(None, u, v)
     assert (target["u"], target["v"]) == (u, v)
-    assert 0 <= u - target["widthU"] / 2 <= u + target["widthU"] / 2 <= 1
-    assert 0 <= v - target["heightV"] / 2 <= v + target["heightV"] / 2 <= 1
+    assert target["widthU"] == pytest.approx(.06)
+    assert target["heightV"] == pytest.approx(.06)
+    # 靶标不能刚好贴边：物理屏幕圆角会裁掉一侧，导致检测质心偏移。
+    assert min(u - target["widthU"] / 2, 1 - u - target["widthU"] / 2) == pytest.approx(.02)
+    assert min(v - target["heightV"] / 2, 1 - v - target["heightV"] / 2) == pytest.approx(.02)
 
 
-@pytest.mark.parametrize("u,v", [(0, .5), (1, .5), (.5, float("nan"))])
+@pytest.mark.parametrize("u", [.10, .50, .90])
+@pytest.mark.parametrize("v", [.10, .50, .90])
+def test_training_targets_keep_full_size(u, v):
+    target = CalibrationWizard._target_rect(None, u, v)
+    assert (target["u"], target["v"]) == (u, v)
+    assert target["widthU"] == pytest.approx(.12)
+    assert target["heightV"] == pytest.approx(.12)
+
+
+@pytest.mark.parametrize("u,v", [(1e-8, .5), (1 - 1e-8, .5), (.5, 1e-8), (.5, 1 - 1e-8)])
+def test_small_edge_coordinates_remain_positive_and_inside_screen(u, v):
+    target = CalibrationWizard._target_rect(None, u, v)
+    assert (target["u"], target["v"]) == (u, v)
+    assert target["widthU"] > 0 and target["heightV"] > 0
+    assert 0 < u - target["widthU"] / 2 < u + target["widthU"] / 2 < 1
+    assert 0 < v - target["heightV"] / 2 < v + target["heightV"] / 2 < 1
+
+
+@pytest.mark.parametrize("u,v", [
+    (0, .5), (1, .5), (.5, float("nan")), (.5, float("inf")),
+    (True, .5), (None, .5), ("0.05", .5),
+])
 def test_target_rejects_invalid_center(u, v):
     with pytest.raises(WizardError):
         CalibrationWizard._target_rect(None, u, v)

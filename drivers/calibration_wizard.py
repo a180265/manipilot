@@ -2065,13 +2065,16 @@ class CalibrationWizard:
             return {"trial": trial}
 
     def _target_rect(self, u: float, v: float) -> dict:
-        if not (0 < u < 1 and 0 < v < 1):
+        if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                   and 0 < value < 1 for value in (u, v)):
             raise WizardError("标靶中心必须位于屏幕内部")
-        # 靠边时缩小标靶，保持目标中心与相机拟合/触点评分使用的坐标一致。
-        half_u = min(TARGET_RECT_HALF, u, 1 - u)
-        half_v = min(TARGET_RECT_HALF, v, 1 - v)
-        return {"u": round(u, 4), "v": round(v, 4),
-                "widthU": round(half_u * 2, 4), "heightV": round(half_v * 2, 4)}
+        u, v = float(u), float(v)
+        # 留出距边界 40% 的余量，避免屏幕圆角裁切绿靶后把质心拉偏。
+        # 5% 近角点宽高为 6%、距边 2%；10%~90% 训练点仍用 12% 原尺寸。
+        half_u = min(TARGET_RECT_HALF, .6 * u, .6 * (1 - u))
+        half_v = min(TARGET_RECT_HALF, .6 * v, .6 * (1 - v))
+        # 不按四位小数舍入：极小合法坐标必须保留中心和正尺寸。
+        return {"u": u, "v": v, "widthU": half_u * 2, "heightV": half_v * 2}
 
     def _detect_tip(self) -> tuple[float | None, float | None]:
         """点击后抓帧检测探头尖（配对摄像头像素，供摄像头→屏幕单应拟合）。"""
