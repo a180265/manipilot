@@ -53,6 +53,7 @@ from drivers.calibration_wizard_common import (
     _now,
 )
 from drivers.daemon_protocol import DEFAULT_TAP_FEED, split_segments
+from drivers.click_points import policy_from_bundle, validate_policy
 from drivers.screen_edge import ScreenEdgeError
 
 
@@ -312,6 +313,10 @@ class AutoRunner:
                 # 残差 ≤3mm、Bootstrap 逐点预测校验；配置了 arm_workspace_mm 时仍生效。
                 plan = self._auto_plan_points(point_plan)
                 base = self.host._bundle()
+                try:
+                    click_policy = policy_from_bundle(base)
+                except ValueError as exc:
+                    raise WizardError(str(exc)) from exc
                 frozen_z = {**auto_safe, "tapDwellMs":
                             (self.host.state["z"].get("tap") or {}).get("dwellMs", 0)}
                 frozen_z["tapDwellMs"] = self._auto_tap_dwell_ms({"z": frozen_z})
@@ -330,6 +335,7 @@ class AutoRunner:
                     "daemonSession": status.get("session"),
                     "phoneSessionId": self.host.state.get("imeSessionId"),
                     "screen": dict(screen),
+                    "clickPointPolicy": click_policy,
                     "z": frozen_z,
                     "safePark": dict(park),
                     "config": dict(self.host._auto_cfg),
@@ -1211,6 +1217,8 @@ class AutoRunner:
         if check_cancel:
             self._auto_check_cancel()
         self._auto_tap_dwell_ms(run)
+        self._auto_click_point_policy(
+            run, cb.load_bundle(self.host.device, self.host.data_root) or {})
         status = self.host.daemon.status()
         if not status.get("connected") or not status.get("session"):
             raise AutoRunError("daemon_disconnected", "机械臂 daemon 未连接",
@@ -1285,6 +1293,23 @@ class AutoRunner:
         if session.get("clientState") != "open":
             raise AutoRunError("phone_page_closed", "手机校准页未打开",
                                classification="touch_feedback_error", park=True)
+
+    @staticmethod
+    def _auto_click_point_policy(run: dict, base: dict) -> dict | None:
+        """冻结偏好跟随候选；旧无字段候选仅在当前也未启用时兼容。"""
+        try:
+            current = policy_from_bundle(base)
+            frozen = run.get("clickPointPolicy")
+            if frozen is not None:
+                screen = run.get("screen") or {}
+                frozen = validate_policy(frozen, [
+                    screen.get("screenWidth"), screen.get("screenHeight")])
+            if frozen != current:
+                raise ValueError("本轮点击选点策略未冻结或已变化，请重新开始校准")
+        except ValueError as exc:
+            raise AutoRunError("click_point_policy_changed", str(exc),
+                               state=AUTO_STATE_INVALIDATED, park=True) from exc
+        return frozen
 
     def _auto_phase_precheck(self, run: dict) -> None:
         self._auto_phase_set(run, "PRECHECK")
@@ -2819,6 +2844,7 @@ class AutoRunner:
             raise AutoRunError("promote_base_changed",
                                "活动档案的几何/绑定基础在 run 期间被修改：拒绝提升"
                                "（candidate 保留）")
+        click_policy = self._auto_click_point_policy(run, base)
         if cb.profile_hash(base) != run["baseProfileHash"]:
             self._auto_event(run, "promote_base_non_geometry_delta",
                              {"note": "run 期间有非几何字段改动（如目标标记），"
@@ -2908,6 +2934,8 @@ class AutoRunner:
             "validation": [dict(p) for p in run["validationPoints"]],
             "validated": True,
         }
+        if click_policy is not None:
+            promoted["xy"]["clickPointPolicy"] = click_policy
         promoted["camera"] = {
             "cameraToScreen": {"homography": run["h"]["homography"],
                                "reprojectionRmsPx": run["h"]["rms"],

@@ -200,6 +200,7 @@
     <div class="row"><span id="wzPhoneBadge" class="badge warn"><span class="dot"></span>手机页：未开始</span>
       <span class="hint" id="wzPhoneInfo"></span></div>
     <div class="hint" id="wzFacts"></div>
+    <div class="hint" id="wzClickPolicy"></div>
     <div class="hint" id="wzPrecheckInfo" style="display:none;white-space:pre-line"></div>
   </div>
 
@@ -3105,6 +3106,14 @@ function renderWizard() {
     `会话：${WZ.imeSessionId ? WZ.imeSessionId.slice(0, 12) + "…" : "无"} · ` +
     `屏幕基线：${scr ? `${scr.screenWidth}x${scr.screenHeight} ${scr.orientation}` : "未回报"} · ` +
     `档案：${(WZ.bundle && WZ.bundle.status) || "无"}`;
+  const clickPolicy = WZ.bundle?.xy?.clickPointPolicy;
+  const insets = clickPolicy?.preferredInsetsPx;
+  $("#wzClickPolicy").textContent = clickPolicy == null
+    ? "区域内避边：未配置"
+    : clickPolicy.mode === "screen_interior" && insets
+      ? `区域内避边：已配置（上 ${insets.top}、右 ${insets.right}、下 ${insets.bottom}、左 ${insets.left} px）。` +
+        "点击仅在目标安全范围内选点；当前校准通过后才能执行。"
+      : "区域内避边：配置异常，动作前校验会拒绝执行";
   // 手机页实时状态徽章（来自 IME 服务会话的 clientState）
   const phone = WZ.phone;
   const pb = $("#wzPhoneBadge");
