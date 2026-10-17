@@ -172,7 +172,7 @@ def test_default_auto_run_defers_input_acceptance_and_promotes_motion_ready(tmp_
     assert env.wizard.state["acceptance"]["deferred"] == {"debug": True}
     assert env.wizard.state["stage"] == cw.STAGE_DEBUG_ACCEPTANCE
     assert env.ime.tasks_created == []
-    assert len(run["pointPlan"]) == 16
+    assert len(run["pointPlan"]) == 9
     assert len(run["validation"]["points"]) == 5
     assert run["validation"]["passed"] is True
     phases = {event["phase"] for event in run["events"]}

@@ -898,8 +898,14 @@ class CalibrationWizard:
         xy = self.state["xy"]
         if xy.get("fit"):
             fit = xy["fit"]
+            model = {k: fit[k] for k in ("a", "b", "c", "d", "e", "f")}
+            # 重绑后的草稿保存也必须保留自动校准的二次补偿；只复制仿射项
+            # 会改变实际落点，却继续沿用完整模型的低残差记录。
+            for key in ("qx2", "qxy", "qy2", "px2", "pxy", "py2"):
+                if key in fit:
+                    model[key] = fit[key]
             update = {
-                "robotToScreen": {k: fit[k] for k in ("a", "b", "c", "d", "e", "f")},
+                "robotToScreen": model,
                 "samples": xy["accepted"],
                 "validation": xy["validation"],
                 "validated": bool(xy.get("validationPassed")),
@@ -1752,8 +1758,10 @@ class CalibrationWizard:
         auto_run = run_context if phone_reference is None else None
         auto_edge = auto_run.get("edge") if auto_run is not None else None
         auto_corners = deepcopy(auto_edge.get("corners")) if isinstance(auto_edge, dict) else None
+        moved_after_touch = False
 
         def check_phone_context(*, post_report: bool = False):
+            nonlocal moved_after_touch
             if (self.state.get("imeSessionId") != sid
                     or self._auto_runner._auto["run"] is not run_context):
                 raise WizardError("校准运行或手机会话已变化：本次点击不计入")
@@ -1775,11 +1783,23 @@ class CalibrationWizard:
                 pose_quad = self._auto_runner._auto_require_stable_phone(
                     auto_run, after_travel=True)
                 if pose_quad is None and post_report:
-                    # 采样姿态复核超限已按 H01 提示+留痕（pose_gate_skipped）；
-                    # 但回报后仍无法核实=本样本的物理位置语境不可核实——
-                    # 样本不得计入学习（门的原始语义：不混合不同物理位置的
-                    # 手机触点样本）。回报前（post_report=False）不硬拒：
-                    # 按 2026-10-03 测试更正，采样有效性由触点回报门兜底。
+                    # 笔杆/阴影可能遮住轮廓。先收回已确认的停车位，以同一
+                    # 原始基准重新核实；不改写四角、不额外点击、不重采触点。
+                    self._auto_runner._auto_guard(auto_run)
+                    self._auto_runner._auto_safe_park(auto_run)
+                    moved_after_touch = True
+                    _, parked_frame_seq = self._camera_fetch()
+                    if type(parked_frame_seq) is not int or parked_frame_seq < 0:
+                        raise AutoRunError(
+                            "camera_measurement_error", "停车后缺少有效画面帧序号：本样本不计入学习",
+                            classification="camera_measurement_error", park=True)
+                    pose_quad = self._auto_runner._auto_require_stable_phone(
+                        auto_run, after_frame_seq=parked_frame_seq)
+                    self._auto_runner._auto_event(auto_run, "pose_rechecked_from_park", {
+                        "verified": pose_quad is not None,
+                        "sampleId": sample_id,
+                    })
+                if pose_quad is None and post_report:
                     raise AutoRunError(
                         "camera_measurement_error",
                         "采样期间手机姿态无法核实：本样本不计入学习",
@@ -1850,7 +1870,8 @@ class CalibrationWizard:
                 return {"screenX": sample["screenX"], "screenY": sample["screenY"],
                         "screenWidth": sample["screenWidth"],
                         "screenHeight": sample["screenHeight"],
-                        "orientation": sample.get("orientation", "portrait")}
+                        "orientation": sample.get("orientation", "portrait"),
+                        "movedAfterTouch": moved_after_touch}
             if session.get("clientState") != "open":
                 try:
                     self.ime.disarm(sid, sample_id, seq)
@@ -2044,11 +2065,13 @@ class CalibrationWizard:
             return {"trial": trial}
 
     def _target_rect(self, u: float, v: float) -> dict:
-        half = TARGET_RECT_HALF
-        uu = min(max(u, half), 1 - half)
-        vv = min(max(v, half), 1 - half)
-        return {"u": round(uu, 4), "v": round(vv, 4),
-                "widthU": round(half * 2, 4), "heightV": round(half * 2, 4)}
+        if not (0 < u < 1 and 0 < v < 1):
+            raise WizardError("标靶中心必须位于屏幕内部")
+        # 靠边时缩小标靶，保持目标中心与相机拟合/触点评分使用的坐标一致。
+        half_u = min(TARGET_RECT_HALF, u, 1 - u)
+        half_v = min(TARGET_RECT_HALF, v, 1 - v)
+        return {"u": round(u, 4), "v": round(v, 4),
+                "widthU": round(half_u * 2, 4), "heightV": round(half_v * 2, 4)}
 
     def _detect_tip(self) -> tuple[float | None, float | None]:
         """点击后抓帧检测探头尖（配对摄像头像素，供摄像头→屏幕单应拟合）。"""

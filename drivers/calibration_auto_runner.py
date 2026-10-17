@@ -56,26 +56,21 @@ from drivers.screen_edge import ScreenEdgeError
 
 
 # ---------- v1.1 纯代码自动视觉闭环校准（规格书 §5/§Appendix A + 补充文档） ----------
-# 9 点标定网格按《v1.1 补充》§2：15%/50%/85%（行主序：先 X 后 Y）。
-# 注：一度以为 v=0.85 被校准页裁剪而收回 0.78，后经 HSV 取样证伪——真实原因是
-# 绿色检测阈值骑在目标颜色边缘（见 screen_edge._TARGET_GREEN_HSV 注释），
-# 阈值修正后 0.85 全深度实测满面积检出，已恢复 85%。
-# 5 个独立验证点沿用规格书 Appendix A，与标定网格不重合、不参与拟合。
-# 2026-09-04 方案 A（用户拍板）：3x3 → 4x4 加密网格 + 仿射 → 二次模型。
-# 手机屏倾斜带来的触点滑移是平滑低阶非线性，仿射在网格间隙中央泄漏最大
-# （实测 v2 点 8~15px）；格子尺寸 35%→23% 使泄漏缩至 ~1/4，二次项吃掉剩余。
-AUTO_PLAN_GRID_V: tuple[float, ...] = (0.15, 0.38, 0.62, 0.85)
-AUTO_PLAN_GRID_U: tuple[float, ...] = (0.15, 0.38, 0.62, 0.85)
+# 2026-10-17：默认 3x3 九点覆盖 10%~90%，保留二次补偿与同点视觉复验。
+# 四个 5%/95% 近角点及一个内部点独立验收，不参与拟合；边角外推是否
+# 可用由真实触点误差判定。旧 4x4 自定义计划按自身网格尺寸运行。
+AUTO_PLAN_GRID_V: tuple[float, ...] = (0.10, 0.50, 0.90)
+AUTO_PLAN_GRID_U: tuple[float, ...] = (0.10, 0.50, 0.90)
 AUTO_PLAN_POINTS: list[tuple[str, float, float]] = [
     (f"calibration-{row * len(AUTO_PLAN_GRID_U) + col + 1}", u, v)
     for row, v in enumerate(AUTO_PLAN_GRID_V)
     for col, u in enumerate(AUTO_PLAN_GRID_U)
 ]
 AUTO_VALIDATION_POINTS: list[tuple[str, float, float]] = [
-    ("validation-1", 0.30, 0.30),
-    ("validation-2", 0.70, 0.30),
-    ("validation-3", 0.30, 0.70),
-    ("validation-4", 0.70, 0.70),
+    ("validation-1", 0.05, 0.05),
+    ("validation-2", 0.95, 0.05),
+    ("validation-3", 0.05, 0.95),
+    ("validation-4", 0.95, 0.95),
     ("validation-5", 0.50, 0.65),
 ]
 AUTO_FIRST_CLICK_POINT = ("first-click-center", 0.50, 0.50)
@@ -466,6 +461,7 @@ class AutoRunner:
                     raise WizardError("H/Arm 未双锁定：没有可验证的模型")
                 run["previousStateForValidate"] = run.get("state")
                 run["state"] = AUTO_STATE_RUNNING
+                run["phase2"] = {}
                 run["validation"] = {"points": [], "passed": False}
                 self._auto_event(run, "explicit_validate")
                 cb.save_candidate(run, self.host.data_root)
@@ -762,22 +758,35 @@ class AutoRunner:
 
     @staticmethod
     def _auto_plan_points(point_plan: list[dict] | None) -> list[dict]:
-        """标定计划：默认固定 4x4=16 点网格（2026-09-04 方案 A）；自定义计划必须
-        恰好 16 点行主序网格（fit_camera_to_screen_strict 按 4x4 行主序做单调性检查）。"""
+        """默认九点；兼容九点及旧十六点行主序规则网格。"""
         if not point_plan:
-            return [{"id": name, "u": u, "v": v} for name, u, v in AUTO_PLAN_POINTS]
-        plan = []
-        for item in point_plan:
-            u, v = float(item.get("u")), float(item.get("v"))
-            if not (0.05 <= u <= 0.95 and 0.05 <= v <= 0.95):
-                raise WizardError(f"标定点 ({u},{v}) 超出安全区域 0.05~0.95")
-            plan.append({"id": str(item.get("id") or f"point-{len(plan) + 1}"),
-                         "u": u, "v": v})
-        if len(plan) != len(AUTO_PLAN_POINTS):
-            raise WizardError(f"标定点计划必须恰好 {len(AUTO_PLAN_POINTS)} 点"
-                              f"（当前 {len(plan)}）：自动 Phase 0 按 4x4 行主序"
-                              "网格做全点质量检查")
+            plan = [{"id": name, "u": u, "v": v} for name, u, v in AUTO_PLAN_POINTS]
+        else:
+            plan = []
+            for item in point_plan:
+                u, v = float(item.get("u")), float(item.get("v"))
+                if not (0.05 <= u <= 0.95 and 0.05 <= v <= 0.95):
+                    raise WizardError(f"标定点 ({u},{v}) 超出安全区域 0.05~0.95")
+                plan.append({"id": str(item.get("id") or f"point-{len(plan) + 1}"),
+                             "u": u, "v": v})
+        AutoRunner._auto_plan_shape(plan)
         return plan
+
+    @staticmethod
+    def _auto_plan_shape(plan: list[dict]) -> tuple[int, int]:
+        """从冻结的运行计划取网格尺寸，避免新版默认值改变旧 candidate。"""
+        if len(plan) not in (9, 16):
+            raise WizardError(f"标定点计划必须为 9 点或 16 点规则网格（当前 {len(plan)}）")
+        if len({p["id"] for p in plan}) != len(plan):
+            raise WizardError("标定点编号不得重复")
+        us = sorted({float(p["u"]) for p in plan})
+        vs = sorted({float(p["v"]) for p in plan})
+        size = 3 if len(plan) == 9 else 4
+        expected = [(u, v) for v in vs for u in us]
+        actual = [(float(p["u"]), float(p["v"])) for p in plan]
+        if len(us) != size or len(vs) != size or actual != expected:
+            raise WizardError(f"标定点必须按 {size}x{size} 规则网格行主序排列（先 X 后 Y）")
+        return size, size
 
     @staticmethod
     def _auto_seed_h_usable(base: dict) -> bool:
@@ -1429,22 +1438,9 @@ class AutoRunner:
                     break
                 except (ScreenEdgeError, WizardError, ValueError, KeyError, TypeError) as exc:
                     pose_error = exc
-            if pose_error is not None and not run.get("pose_reference_anchored") \
-                    and on_out_of_range != "reject":
-                # 首次走位锚定（2026-10-16 现场）：基准采集于臂停驻态（笔杆未入画），
-                # 首次走位后笔杆贴屏入画改变屏幕边缘检测语境（实测多角 9.9-11.6px、
-                # 随采样点变化）——非手机位移。刷新基准为走位后语境并锚定一次
-                # （事件留痕），此后同语境比对恢复正常。reject 域（点击门）不锚定。
-                edge["corners"] = [[float(pt[0]), float(pt[1])] for pt in quad["corners"]]
-                edge["frameSeq"] = seq
-                run["pose_reference_anchored"] = True
-                self._auto_event(run, "pose_reference_anchored", {
-                    "category": "pose_reference_anchored",
-                    "categoryDisplay": "姿态基准走位锚定",
-                    "reason": "首次走位后笔杆入画改变检测语境；基准已刷新为走位后状态（非手机位移）",
-                })
-                pose_error = None
             if pose_error is not None:
+                # 无法区分真实挪机和遮挡噪声时保留原基准；告警返回 None，
+                # 不把未核实的新四角改写成「稳定」证据。
                 raise pose_error
             edge["frameSeq"] = seq
             return quad
@@ -1533,9 +1529,26 @@ class AutoRunner:
             mpos = self.host._read_position()
             if park_xy_usable:
                 record: dict = {}
+
+                def before_park_motion() -> None:
+                    if not best_effort:
+                        self._auto_guard(run)
+                    else:
+                        # 收尾不要求手机页仍打开，但坐标会话与急停必须仍有效。
+                        current_status = self.host.daemon.status()
+                        expected_session = park.get("daemonSession") or run.get("daemonSession")
+                        if (not current_status.get("connected")
+                                or not expected_session
+                                or current_status.get("session") != expected_session
+                                or current_status.get("estop_locked")):
+                            raise WizardError("停车前机械臂会话不可用或已变化，禁止按旧坐标走位")
+                    self.host._require_park_session_current(park, action="自动校准停车")
+
                 self.host.daemon.ensure_debug_lease()
+                before_park_motion()
                 self.host._goto_robot(float(park["parkX"]), float(park["parkY"]),
-                                 z_safe=z_safe, record=record)
+                                      z_safe=z_safe, record=record,
+                                      before_motion=before_park_motion)
                 run["lastPark"] = record
             else:
                 dz = z_safe - float(mpos["z"])
@@ -1871,13 +1884,13 @@ class AutoRunner:
     @staticmethod
     def _auto_classify_error(run: dict, sample: dict) -> str:
         flags = sample.get("eligibleFlags") or {}
-        projection = sample.get("cameraProjectionErrorPx")
         motion = sample.get("armMotionErrorMm")
         tolerance = float(run["config"]["target_tolerance_px"])
         if not flags.get("camera_detection_stable", False):
             return "camera_measurement_error"
-        if projection is not None and float(projection) > tolerance \
-                and run["locks"]["cameraToScreen"].get("state") == cb.MODEL_LOCK_LOCKED:
+        projection = sample.get("cameraProjectionErrorPx")
+        if (sample.get("aimSource") == "camera_projection"
+                and projection is not None and float(projection) > tolerance):
             return "camera_transform_error"
         if motion is not None and float(motion) > float(run["config"]["position_tolerance_mm"]):
             return "arm_motion_error"
@@ -1917,6 +1930,7 @@ class AutoRunner:
             "actualTouch": None, "preMoveMPos": None,
             "cameraProjectionErrorPx": None, "touchTargetErrorPx": None,
             "cameraTouchGapPx": None, "armMotionErrorMm": None,
+            "tapCameraPixel": None, "cameraTapErrorPx": None, "movedAfterTouch": False,
             "motion": None, "errorLevel": None, "classification": None,
             "eligible": False, "eligibleFlags": {}, "rejectedReason": None,
             "modelVersion": run["modelVersion"],
@@ -1934,19 +1948,10 @@ class AutoRunner:
              "touch_coordinate_valid", "session_unchanged", "camera_frame_size_unchanged",
              "model_version_matches", "no_emergency_stop"), True)
         try:
-            expected = None
-            if use_camera:
-                if run.get("h"):
-                    expected = self._auto_expected_camera(run, *target_screen)
-                else:
-                    # Phase0 引导期：用已提升档案的 cameraToScreen 把标靶
-                    # 屏幕位置投影到相机像素（手机未移动时精确 ±10px），
-                    # 页面绿色状态文字/背景杂物按「离期望最近」淘汰。
-                    bundle_h = (((self.host._bundle() or {}).get("camera") or {})
-                                .get("cameraToScreen") or {}).get("homography")
-                    if bundle_h:
-                        expected = self._project_screen_to_camera(
-                            target_screen, bundle_h)
+            # 已锁定 H 后，名义位置只用于检测一致性检查；实际瞄准必须使用
+            # 检出的像素。遮挡导致质心漂移时退回停靠位重拍，不能改用名义点
+            # 绕过相机链而把错误映射验收为通过。
+            expected = self._auto_expected_camera(run, *target_screen) if use_camera and run.get("h") else None
             # 仅当布防目标换成了新位置才用上一位置识别滞后帧；重采同一点时
             # 检测位置本就应与上次相同，不能误判为"画面未更新"
             target_key = [u, v]
@@ -1989,10 +1994,10 @@ class AutoRunner:
             sample["cameraPredictedScreen"] = [round(px, 1), round(py, 1)]
             sample["cameraProjectionErrorPx"] = round(
                 ((px - target_screen[0]) ** 2 + (py - target_screen[1]) ** 2) ** 0.5, 2)
-            # 瞄准一律用名义屏幕点（模型反解）：摄像头检测只做在场/稳定见证与
-            # 门禁（期望位置±20px、面积一致、jitter）。检测质心的偏移记录在
-            # cameraProjectionErrorPx 里，不再有资格挪动点击位置。
-            rx, ry = self._auto_predict_arm(run, *target_screen)
+            # 机械学习阶段用名义点收集真实触点；视觉验收阶段走与生产相同的
+            # camera→screen→robot 链。手机回报只在动作完成后评分，不参与瞄准。
+            sample["aimSource"] = "camera_projection" if use_camera else "nominal_screen"
+            rx, ry = self._auto_predict_arm(run, px, py)
             sample["predictedArm"] = [round(rx, 3), round(ry, 3)]
             flags["predicted_arm_valid"] = True
             flags["arm_within_workspace"] = self._auto_workspace_ok(run, rx, ry)
@@ -2043,6 +2048,7 @@ class AutoRunner:
                 pre_armed={"sequence": armed["sequence"], "armedAt": armed["armedAt"]})
             touch = [float(report["screenX"]), float(report["screenY"])]
             sample["actualTouch"] = [round(touch[0], 1), round(touch[1], 1)]
+            sample["movedAfterTouch"] = bool(report.get("movedAfterTouch"))
             flags["actual_touch_received"] = True
             flags["exactly_one_matching_touch"] = True  # 协议层已拒绝重复/错配
             flags["touch_coordinate_valid"] = (
@@ -2052,6 +2058,19 @@ class AutoRunner:
                  + (touch[1] - target_screen[1]) ** 2) ** 0.5, 2)
             sample["cameraTouchGapPx"] = round(
                 ((touch[0] - px) ** 2 + (touch[1] - py) ** 2) ** 0.5, 2)
+            # 悬停笔尖只作视差诊断。触点回报后若为姿态复核退回停车位，
+            # 此时拍到的笔尖已经不是点击位置，不得记录成触点相机坐标。
+            tip_x = tip_y = None
+            if not sample["movedAfterTouch"]:
+                try:
+                    tip_x, tip_y = self.host._detect_tip()
+                except Exception:
+                    pass
+            if tip_x is not None and tip_y is not None:
+                sample["tapCameraPixel"] = [round(float(tip_x), 1), round(float(tip_y), 1)]
+                sample["cameraTapErrorPx"] = round(
+                    ((float(tip_x) - detect["center"][0]) ** 2
+                     + (float(tip_y) - detect["center"][1]) ** 2) ** 0.5, 2)
         except AutoRunError as exc:
             sample.setdefault("eligibleFlags", {}).update(flags)
             sample["eligibleFlags"] = flags
@@ -2190,12 +2209,13 @@ class AutoRunner:
                 raise AutoRunError("phase0_target_failed",
                                    f"标定点 {point['id']} 检测重试用尽：{last_error}",
                                    classification="camera_measurement_error", park=False)
+        grid_rows, grid_cols = self._auto_plan_shape(run["pointPlan"])
         quality = fit_camera_to_screen_strict(
             [{"cameraX": c["cameraX"], "cameraY": c["cameraY"],
               "screenX": c["screenX"], "screenY": c["screenY"]} for c in correspondences],
             rms_max_px=float(run["config"]["camera_rms_target_px"]),
             max_error_px=float(run["config"]["camera_max_error_px"]),
-            grid_rows=len(AUTO_PLAN_GRID_V), grid_cols=len(AUTO_PLAN_GRID_U),
+            grid_rows=grid_rows, grid_cols=grid_cols,
             screen_width=run["screen"].get("screenWidth"),
             screen_height=run["screen"].get("screenHeight"),
             boundary_margin_px=float(run["config"]["safe_margin_px"]))
@@ -2431,7 +2451,7 @@ class AutoRunner:
     def _auto_update_arm_candidate(self, run: dict) -> None:
         """全量重拟合（等权）：R_eff ↔ Actual Touch；相机数据绝不进入拟合（§10/§13.3）。
 
-        2026-09-04 方案 A：样本 ≥12 时升级二次模型（倾斜触点滑移补偿），
+        样本 ≥9 时可用二次模型（每轴 6 系数，保留 3 个冗余观测），
         仅当残差不劣于仿射才采用（嵌套模型，正常必不劣；劣化=数值病态→仿射）。
         """
         from adapters.screen_ime.geometry import (
@@ -2457,7 +2477,7 @@ class AutoRunner:
             raise AutoRunError("arm_fit_failed", exc.message,
                                classification="arm_mapping_error",
                                routed_to="ARM_RECALIBRATION", park=True) from exc
-        if len(pairs) >= 12:
+        if len(pairs) >= 9:
             try:
                 quad = fit_quadratic(pairs)
                 if quad["residualRms"] <= fit["residualRms"] + 1e-9:
@@ -2526,6 +2546,10 @@ class AutoRunner:
         run["arm"]["version"] = run["locks"]["armAffine"]["version"]
         run["arm"]["lockedAt"] = _now()
         run["modelVersion"] += 1
+        # 新模型必须重新取得全点复验成绩；旧模型的 PASS 不能为它背书。
+        run["phase2"] = {}
+        run["validationPoints"] = []
+        run["validation"] = {"points": [], "passed": False}
         self._auto_phase_set(run, "ARM_LOCKED")
         self._auto_event(run, "arm_locked", {"version": run["arm"]["version"],
                                              "rms": run["arm"]["residualRmsPx"]})
@@ -2572,10 +2596,11 @@ class AutoRunner:
                     break
                 if level in ("HARD_FAIL", "HARD_ABORT"):
                     classification = sample.get("classification") or "ambiguous"
+                    _criterion_px = sample.get("touchTargetErrorPx")
                     raise AutoRunError(
                         "hard_fail",
                         f"Phase 2 点 {point['id']} 误差 "
-                        f"{sample.get('touchTargetErrorPx')}px 触发安全停止边界",
+                        f"{_criterion_px}px 触发安全停止边界",
                         classification=classification, state=AUTO_STATE_ABORTED,
                         routed_to=self._auto_route_for(classification), park=True)
                 attempts += 1

@@ -286,8 +286,8 @@
     <span class="badge warn" id="wzAutoBadge"><span class="dot"></span>未运行</span></summary>
     <div class="hint">分阶段：Phase 0 摄像头单应（9 点标靶，<b>只显示不点击</b>，外点全拒绝）→
       Bootstrap 无点击安全检查 → First Click（<b>仅中心点</b>一次链路验证，超差自动平移自校正）→
-      Phase 1 机械映射（只用 postMoveMPos ↔ 实际触点，相机误差不进入拟合）→
-      Phase 2 闭环验证（只验证不学习）→ 5 点独立验证 → 保存 READY。
+      Phase 1 九点机械映射（控制器位置 ↔ 实际触点，保留二次补偿）→
+      Phase 2 九点视觉点击复验（只验证不学习）→ 五点独立验证（含四个近角点）→ 保存机械校准。
       任何失败只写 candidate（data/devices/…/calibration_candidates/），旧 READY 永不被覆盖。</div>
     <div class="row" id="wzAutoSummary" style="margin-top:6px"></div>
     <div class="split" style="margin-top:6px">
@@ -712,7 +712,7 @@
         右上角变「设备已插入·待连接」→ 点 <b>「🔌 连接设备」</b>（连接会使控制器复位、MPos 归零）。<br>
         1. 打开 <b>CameraHelper</b>，为当前设备对应的 cam 通道选择物理摄像头并启动（右上「摄像头」变绿）。<br>
         2. 在 AUTO 区块确认 <b>zSafe</b> 与 <b>SAFE PARK（停止位）</b> 后点「🚀 启动自动校准」<br>
-        （视觉闭环 16 点网格 + 二次模型，约 2~3 分钟；手动校准已隐藏——精度低于自动流程）。<br>
+        （九点采样 + 九点视觉复验 + 五点独立验证，含四个近角点；保留二次补偿）。<br>
         3. 五点独立验证通过并安全停车后自动保存 READY；设备任务开关此时可开启。<br>
         4. 之后到「固定目标登记」面板登记业务目标（返回键/删除键/发送/候选栏）。<br>
         5. <b>断开/重连、拔线、重启守护进程</b>都会更换会话锚点：档案需重新自动校准。
@@ -3326,7 +3326,7 @@ $("#btnWzAutoStart").addEventListener("click", async () => {
     wzAutoOpen("wzAUTO");
     return;
   }
-  if (!confirm("启动自动校准？\n流程：Phase 0（不点击）→ Bootstrap → 仅中心点首次点击 → 16 点采样/验证 → 5 点独立验证 → 安全停车并保存 READY。\n机械臂将自动移动并点击手机屏幕（首次点击即中心点）。")) return;
+  if (!confirm("启动自动校准？\n流程：相机九点标定（不点击）→ 中心检查 → 九点采样 → 九点视觉点击复验 → 五点独立验证（含四个近角点）→ 安全停车并保存机械校准。\n基础流程共点击 24 次，重试另计。")) return;
   setBusy(1);
   try {
     const r = await wz("auto-start", {});

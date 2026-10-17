@@ -1840,12 +1840,11 @@ def test_auto_full_convergence_promotes_ready(tmp_path):
     assert promoted["z"]["zSafe"] == 5.0 and promoted["z"]["hoverZ"] == 5.0
     assert promoted["safePark"]["confirmed"] is True
     assert promoted["camera"]["visualVerify"]["passed"] is True
-    # 4x4=16 点计划固定为 15/38/62/85%（2026-09-04 方案 A 加密）；
-    # 独立验证 5 点不与标定点重合
+    # 九点覆盖 10%~90%；五个独立点不参与拟合，并检查近边角。
     candidate = cb.load_candidate("arm-01", run_id, tmp_path)
     plan = [p["u"] for p in candidate["pointPlan"]]
-    assert sorted(set(plan)) == [0.15, 0.38, 0.62, 0.85]
-    assert len(candidate["pointPlan"]) == 16
+    assert sorted(set(plan)) == [0.10, 0.50, 0.90]
+    assert len(candidate["pointPlan"]) == 9
     val_coords = {(p["u"], p["v"]) for p in candidate["validationPlan"]}
     plan_coords = {(p["u"], p["v"]) for p in candidate["pointPlan"]}
     assert val_coords.isdisjoint(plan_coords)
@@ -2061,7 +2060,9 @@ def test_auto_phase0_outlier_rejected_and_bundle_untouched(tmp_path):
     """9 点网格出现外点：Phase 0 整体拒绝（4/5 式静默剔除不允许）。"""
     env = auto_ready_env(tmp_path)
 
-    bottom_left = cw.AUTO_PLAN_POINTS[9]  # 4x4 行主序第 10 点（v=0.38 行首，左缘）
+    bottom_left = next(p for p in cw.AUTO_PLAN_POINTS
+                       if p[1] == min(cw.AUTO_PLAN_GRID_U)
+                       and p[2] == max(cw.AUTO_PLAN_GRID_V))
 
     def hook():
         for s in env.ime.sessions.values():
@@ -2070,7 +2071,7 @@ def test_auto_phase0_outlier_rejected_and_bundle_untouched(tmp_path):
                 x, y = cam(t["u"] * SCREEN_W, t["v"] * SCREEN_H)
                 if abs(t["u"] - bottom_left[1]) < 1e-6 \
                         and abs(t["v"] - bottom_left[2]) < 1e-6:
-                    x += 120  # 检测外点（120px：4x4 网格相邻点距~220px，不触发 min-step 误判）
+                    x += 120  # 外点仍远离相邻格点，不触发 min-step 误判
                 return {"items": [{"x": x, "y": y, "area": 900.0}],
                         "frameW": CAM_W, "frameH": CAM_H}
         return {"items": [], "frameW": CAM_W, "frameH": CAM_H}
@@ -2350,16 +2351,17 @@ def test_auto_phase2_soft_fail_auto_iterates_to_convergence(tmp_path):
     """Phase 2 单点 SOFT_FAIL：不再暂停等操作员——自动重采该点+全量重拟合+复验，
     在迭代预算内收敛提升（用户拍板 2026-09-03：校准应自动计算而非报错/暂停）。
 
-    注入：第一次 Phase 2 走到 calibration-8 的 3 次尝试（第 26-28 次点击）触点
-    恒偏 +20px；迭代轮重采与复验时窗口已关闭 → 收敛。
-    点击序号：1=zSafe 验证点击，2=中心点，3-18=Phase 1 十六点，
-    19-25=Phase 2 前七点，26-28=calibration-8 三次尝试。
+    注入：第一轮 Phase 2 的 calibration-8 三次触点恒偏 +20px；
+    第二轮重采后恢复，并对新模型重新验收所有点。
     """
     env = auto_ready_env(tmp_path)
     env.noise_active = True
+    noisy_point = next(p for p in cw.AUTO_PLAN_POINTS if p[0] == "calibration-8")
 
     def windowed_noise(x, y):
-        if 26 <= env.daemon.tap_count <= 28:
+        run = env.wizard._auto_runner._auto.get("run") or {}
+        if (run.get("phase") == "PHASE2_VALIDATE" and run.get("iteration") == 1
+                and run.get("lastCameraTarget") == list(noisy_point[1:])):
             return (20.0, 0.0)  # 6 < 20 ≤ 30 → SOFT_FAIL
         return (0.0, 0.0)
 
@@ -2377,8 +2379,13 @@ def test_auto_phase2_soft_fail_auto_iterates_to_convergence(tmp_path):
     assert events and events[0]["detail"]["points"] == ["calibration-8"]
     assert len(candidate.get("history") or []) >= 2
     assert "calibration-8" in (candidate.get("phase2SoftFails") or {})
-    # 复验通过：phase2 十六点全部记录且 promoted ready
-    assert len(candidate.get("phase2") or {}) == 16
+    assert len(candidate.get("phase2") or {}) == 9
+    final_checks = [s for s in candidate["samples"]
+                    if s["phase"] == "PHASE2_VALIDATE"
+                    and s["modelVersion"] == candidate["modelVersion"]]
+    assert {s["targetId"] for s in final_checks} == {
+        point["id"] for point in candidate["pointPlan"]
+    }, "重拟合后不能沿用旧模型的通过记录"
     assert cb.load_bundle("arm-01", tmp_path)["status"] == "ready"
 
 
@@ -2550,9 +2557,9 @@ def test_auto_stale_arming_disarmed_on_detection_failure(tmp_path):
     wait_auto(env, lambda v: v["state"] in ("STOPPED", "FAILED", "ABORT"), desc="停止")
 
 
-def test_auto_start_rejects_non_sixteen_point_plan(tmp_path):
+def test_auto_start_rejects_non_grid_point_count(tmp_path):
     env = auto_ready_env(tmp_path)
-    with pytest.raises(WizardError, match="16 点"):
+    with pytest.raises(WizardError, match="9 点或 16 点"):
         env.wizard.auto_start(defer_input_acceptance=False, point_plan=[{"id": f"p{i}", "u": 0.1 + 0.08 * i,
                                            "v": 0.2 + 0.07 * i} for i in range(6)])
 
@@ -2752,7 +2759,9 @@ def test_auto_phase2_rejects_shifted_detection_and_recovers_from_park(tmp_path):
 
     # c3 的检测在"机械臂仍停在 c2 附近"时被阴影/反光稳定偏移 +34px（面积减半）；
     # 回停靠位（画面外）后恢复正常 —— 与现场物理一致
-    # 前一点（4x4 网格 calibration-3 @0.62,0.15）机械坐标 ≈ (56.96, 18.5)
+    target = cw.AUTO_PLAN_POINTS[2]
+    previous = cw.AUTO_PLAN_POINTS[1]
+    previous_robot = truth_inverse(previous[1] * SCREEN_W, previous[2] * SCREEN_H)
     def shadow_hook():
         payload = real()
         items = payload.get("items") or []
@@ -2760,8 +2769,9 @@ def test_auto_phase2_rejects_shifted_detection_and_recovers_from_park(tmp_path):
             for s in env.ime.sessions.values():
                 if s["armed"] and s["armed"].get("target"):
                     t = s["armed"]["target"]
-                    if abs(t["u"] - 0.85) < 1e-9 and abs(t["v"] - 0.15) < 1e-9:
-                        near_c2 = abs(env.daemon.x - 56.96) < 8 and abs(env.daemon.y - 18.5) < 8
+                    if abs(t["u"] - target[1]) < 1e-9 and abs(t["v"] - target[2]) < 1e-9:
+                        near_c2 = (abs(env.daemon.x - previous_robot[0]) < 8
+                                   and abs(env.daemon.y - previous_robot[1]) < 8)
                         if near_c2:
                             items = [dict(items[0], x=items[0]["x"] + 28,
                                           y=items[0]["y"] + 19, area=4000.0)]
@@ -2777,7 +2787,7 @@ def test_auto_phase2_rejects_shifted_detection_and_recovers_from_park(tmp_path):
     assert view["state"] == "PROMOTED"
     candidate = cb.load_candidate("arm-01", run_id, tmp_path)
     retries = [e for e in candidate["events"] if e["event"] == "detect_retry_from_park"]
-    assert retries and retries[0]["detail"]["targetId"] == "calibration-4"
+    assert retries and retries[0]["detail"]["targetId"] == target[0]
     assert ("偏离期望位置" in retries[0]["detail"]["reason"]
             or "偏差" in retries[0]["detail"]["reason"]
             or "并入" in retries[0]["detail"]["reason"])  # 面积上限门同样触发停靠重检  # 期望位置门/面积门任一命中
@@ -2853,8 +2863,9 @@ def test_acceptance_ocr_truncated_prefix_match(tmp_path):
     assert target["matchedChars"] == 3    # 统一校 = min(3, 期望字数)
 
 
-def test_auto_arm_fit_upgrades_to_quadratic(env):
-    """方案 A：16 点样本带二次畸变（倾斜触点滑移）时，Arm 拟合自动升二次模型，
+@pytest.mark.parametrize("axis", [(0.10, 0.50, 0.90), (0.15, 0.38, 0.62, 0.85)])
+def test_auto_arm_fit_upgrades_to_quadratic(env, axis):
+    """九点和旧十六点样本带二次畸变时，Arm 拟合都保留二次补偿，
     网格间隙点残差被吃掉（仿射泄漏 ~5px → 二次 <0.5px）。"""
     # 真值 = 仿射 + 二次畸变（模拟倾斜滑移场）
     def truth_q(rx, ry):
@@ -2862,23 +2873,23 @@ def test_auto_arm_fit_upgrades_to_quadratic(env):
                 0.3 * rx + 8.0 * ry + 50.0 + 0.015 * ry * ry)
 
     samples = []
-    for row, v in enumerate((0.15, 0.38, 0.62, 0.85)):
-        for col, u in enumerate((0.15, 0.38, 0.62, 0.85)):
+    for row, v in enumerate(axis):
+        for col, u in enumerate(axis):
             rx, ry = u * 60.0, v * 40.0
             sx, sy = truth_q(rx, ry)
             samples.append({
-                "sampleId": row * 4 + col + 1, "phase": "PHASE1_ARM",
-                "eligible": True, "targetId": f"calibration-{row * 4 + col + 1}",
+                "sampleId": row * len(axis) + col + 1, "phase": "PHASE1_ARM",
+                "eligible": True, "targetId": f"calibration-{row * len(axis) + col + 1}",
                 "effectiveRobotXY": [rx, ry], "actualTouch": [sx, sy],
             })
     run = {"config": dict(cw.AUTO_CONFIG_DEFAULTS), "samples": samples,
            "pointPlan": [{"id": f"calibration-{i + 1}", "u": 0.5, "v": 0.5}
-                         for i in range(16)],
+                         for i in range(len(samples))],
            "arm": None, "iteration": 1, "armHistory": [],
            "locks": {"armAffine": {}, "cameraToScreen": {}}}
     env.wizard._auto_runner._auto_update_arm_candidate(run)
     model = run["arm"]["robotToScreen"]
-    assert "qx2" in model and "py2" in model, "16 点带二次畸变必须升级二次模型"
+    assert "qx2" in model and "py2" in model, "九点及十六点都必须能保留二次补偿"
     assert run["arm"]["residualRmsPx"] < 0.5
     # 网格间隙点（旧泄漏热点 0.7,0.3）经反解应精准落回
     sx, sy = truth_q(0.7 * 60.0, 0.3 * 40.0)

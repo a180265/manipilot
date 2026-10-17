@@ -254,7 +254,7 @@ def test_auto_runner_position_contention_preserves_calibration(
                 assert view["lastFailure"] is None
                 assert view["validation"]["passed"]
                 assert len([s for s in env.wizard._auto_runner._auto["run"]["samples"]
-                            if s["phase"] == "PHASE2_VALIDATE"]) == 16
+                            if s["phase"] == "PHASE2_VALIDATE"]) == 9
             elif mode == "busy":
                 view = wait_auto(env, lambda view: view["state"] == "FAILED", timeout=2)
                 assert view["lastFailure"]["code"] == "status_read_busy"
