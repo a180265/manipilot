@@ -1,0 +1,120 @@
+[
+  {
+    "runId": "run-44b254ec8887",
+    "samples": [
+      {
+        "robotX": 60.725,
+        "robotY": -78.562,
+        "screenX": 119.4,
+        "screenY": 217.4
+      },
+      {
+        "robotX": 32.662,
+        "robotY": -77.787,
+        "screenX": 560.5,
+        "screenY": 226.2
+      },
+      {
+        "robotX": 4.825,
+        "robotY": -77.488,
+        "screenX": 985.4,
+        "screenY": 239.1
+      },
+      {
+        "robotX": 61.662,
+        "robotY": -18.325,
+        "screenX": 105.8,
+        "screenY": 1144.2
+      },
+      {
+        "robotX": 33.525,
+        "robotY": -17.663,
+        "screenX": 537.0,
+        "screenY": 1157.1
+      },
+      {
+        "robotX": 5.613,
+        "robotY": -17.525,
+        "screenX": 973.2,
+        "screenY": 1169.6
+      },
+      {
+        "robotX": 62.612,
+        "robotY": 41.9,
+        "screenX": 91.4,
+        "screenY": 2074.1
+      },
+      {
+        "robotX": 34.4,
+        "robotY": 42.4,
+        "screenX": 518.4,
+        "screenY": 2083.6
+      },
+      {
+        "robotX": 6.412,
+        "robotY": 42.412,
+        "screenX": 956.8,
+        "screenY": 2094.4
+      }
+    ]
+  },
+  {
+    "runId": "run-e84953e5c984",
+    "samples": [
+      {
+        "robotX": 60.5,
+        "robotY": -78.3,
+        "screenX": 116.8,
+        "screenY": 220.4
+      },
+      {
+        "robotX": 32.425,
+        "robotY": -77.525,
+        "screenX": 562.4,
+        "screenY": 229.4
+      },
+      {
+        "robotX": 4.6,
+        "robotY": -77.225,
+        "screenX": 990.1,
+        "screenY": 244.1
+      },
+      {
+        "robotX": 61.438,
+        "robotY": -18.062,
+        "screenX": 107.1,
+        "screenY": 1148.5
+      },
+      {
+        "robotX": 33.287,
+        "robotY": -17.4,
+        "screenX": 542.4,
+        "screenY": 1161.8
+      },
+      {
+        "robotX": 5.4,
+        "robotY": -17.275,
+        "screenX": 974.8,
+        "screenY": 1174.8
+      },
+      {
+        "robotX": 62.375,
+        "robotY": 42.162,
+        "screenX": 90.6,
+        "screenY": 2078.2
+      },
+      {
+        "robotX": 34.162,
+        "robotY": 42.662,
+        "screenX": 520.1,
+        "screenY": 2087.5
+      },
+      {
+        "robotX": 6.188,
+        "robotY": 42.675,
+        "screenX": 959.8,
+        "screenY": 2101.2
+      }
+    ]
+  }
+]

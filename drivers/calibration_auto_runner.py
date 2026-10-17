@@ -59,8 +59,8 @@ from drivers.screen_edge import ScreenEdgeError
 
 # ---------- v1.1 纯代码自动视觉闭环校准（规格书 §5/§Appendix A + 补充文档） ----------
 # 2026-10-17：默认 3x3 九点覆盖 10%~90%，保留二次补偿与同点视觉复验。
-# 四个 5%/95% 近角点及一个内部点独立验收，不参与拟合；边角外推是否
-# 可用由真实触点误差判定。旧 4x4 自定义计划按自身网格尺寸运行。
+# 四个普通屏幕区域点及一个内部点独立验收，不参与拟合；真实触点须在
+# 对应安全目标范围内。旧候选保留冻结验证计划；旧 4x4 训练按自身网格运行。
 AUTO_PLAN_GRID_V: tuple[float, ...] = (0.10, 0.50, 0.90)
 AUTO_PLAN_GRID_U: tuple[float, ...] = (0.10, 0.50, 0.90)
 AUTO_PLAN_POINTS: list[tuple[str, float, float]] = [
@@ -69,10 +69,10 @@ AUTO_PLAN_POINTS: list[tuple[str, float, float]] = [
     for col, u in enumerate(AUTO_PLAN_GRID_U)
 ]
 AUTO_VALIDATION_POINTS: list[tuple[str, float, float]] = [
-    ("validation-1", 0.05, 0.05),
-    ("validation-2", 0.95, 0.05),
-    ("validation-3", 0.05, 0.95),
-    ("validation-4", 0.95, 0.95),
+    ("validation-1", 0.20, 0.10),
+    ("validation-2", 0.80, 0.10),
+    ("validation-3", 0.20, 0.90),
+    ("validation-4", 0.80, 0.90),
     ("validation-5", 0.50, 0.65),
 ]
 AUTO_FIRST_CLICK_POINT = ("first-click-center", 0.50, 0.50)
@@ -335,6 +335,7 @@ class AutoRunner:
                     "daemonSession": status.get("session"),
                     "phoneSessionId": self.host.state.get("imeSessionId"),
                     "screen": dict(screen),
+                    "validationCriterion": cb.REGION_VALIDATION_CRITERION,
                     "clickPointPolicy": click_policy,
                     "z": frozen_z,
                     "safePark": dict(park),
@@ -521,16 +522,21 @@ class AutoRunner:
         points = validation.get("points") or []
         expected = {point[0] for point in AUTO_VALIDATION_POINTS}
         tolerance = float((run.get("config") or {}).get("target_tolerance_px", 0))
+        region_mode = self._auto_region_validation(run)
         if validation.get("passed") is not True or len(points) != len(expected) \
                 or validation.get("passedCount") != len(expected) \
                 or {p.get("targetId") for p in points} != expected \
                 or points != run.get("validationPoints") \
-                or not math.isfinite(tolerance) or tolerance <= 0:
+                or (not region_mode and (not math.isfinite(tolerance) or tolerance <= 0)):
             raise WizardError("5 点独立验证未完整通过，不能恢复 E 验收")
+        if region_mode and (not self._auto_region_validation_complete(run)
+                            or not self._auto_check_convergence(run)):
+            raise WizardError("区域复验或独立验证证据无效，不能恢复 E 验收")
         for point in points:
             error = point.get("touchTargetErrorPx")
-            if point.get("passed") is not True or not isinstance(error, (int, float)) \
-                    or not math.isfinite(error) or not 0 <= error <= tolerance:
+            if not region_mode and (point.get("passed") is not True
+                    or not isinstance(error, (int, float))
+                    or not math.isfinite(error) or not 0 <= error <= tolerance):
                 raise WizardError("独立验证成绩无效，不能恢复 E 验收")
         # 停留时长属于本轮冻结配置，不属于 autoSafe 的高度/接触确认快照。
         # 新旧 candidate 均按原快照核对，不能因新增冻结字段阻断合法恢复。
@@ -877,6 +883,7 @@ class AutoRunner:
             "runId": run.get("runId"),
             "state": run.get("state"),
             "phase": run.get("phase"),
+            "validationCriterion": run.get("validationCriterion"),
             "phaseDisplay": AUTO_PHASE_DISPLAY.get(run.get("phase") or "", run.get("phase")),
             "iteration": run.get("iteration"),
             "modelVersion": run.get("modelVersion"),
@@ -1216,6 +1223,7 @@ class AutoRunner:
         """每个点前后的一致性守卫（补充文档 §7：任一变化立即停止学习）。"""
         if check_cancel:
             self._auto_check_cancel()
+        self._auto_region_validation(run)
         self._auto_tap_dwell_ms(run)
         self._auto_click_point_policy(
             run, cb.load_bundle(self.host.device, self.host.data_root) or {})
@@ -1328,38 +1336,15 @@ class AutoRunner:
             try:
                 quad = self.host._edge_quad(
                     expected_corners=self.host._bundle_edge_corners())
-            except Exception as first_exc:
-                # 暗屏唤醒重试（业主 2026-10-16 设计）：屏幕强制自动变暗后
-                # 定位必然失败；探头在手机上方（tapAnchor 与当前会话一致）
-                # 时，连发两击点亮屏幕后重试一次定位。仍失败才判失败。
-                anchor = ((self.host.state.get("z") or {}).get("tapAnchor") or {})
-                if not (anchor.get("daemonSession")
-                        and anchor.get("daemonSession") == self.host.state.get("daemonSession")):
-                    raise AutoRunError(
-                        "camera_measurement_error",
-                        f"本轮校准无法定位手机屏幕：{first_exc}",
-                        classification="camera_measurement_error",
-                        routed_to="CAMERA_RECALIBRATION", park=False) from first_exc
-                try:
-                    # 不调 ensure_debug_lease：运行期租约为 runner 自持，
-                    # debug 租约互斥会把唤醒击挤掉（2026-10-16 现场实测）。
-                    auto_safe = (self.host.state.get("z") or {}).get("autoSafe") or {}
-                    w_depth = float(auto_safe.get("tapDepth") or 8.0)
-                    w_feed = float(auto_safe.get("tapFeed") or 2000)
-                    self.host._daemon_tap(w_depth, w_feed, 0)
-                    time.sleep(0.25)
-                    self.host._daemon_tap(w_depth, w_feed, 0)
-                    time.sleep(0.8)
-                except Exception:
-                    pass  # 唤醒击失败不改变判定：下面的重试定位自行给出结论
-                try:
-                    quad = self.host._edge_quad(
-                        expected_corners=self.host._bundle_edge_corners())
-                except Exception as exc:
-                    raise AutoRunError(
-                        "camera_measurement_error", f"本轮校准无法定位手机屏幕：{exc}",
-                        classification="camera_measurement_error",
-                        routed_to="CAMERA_RECALIBRATION", park=False) from exc
+            except Exception as exc:
+                # 预检只取图，不在当前位置触屏；历史触点锚不证明当前 XY
+                # 仍在屏内（此时可能已在 SAFE PARK）。唤醒须显式执行。
+                raise AutoRunError(
+                    "camera_measurement_error",
+                    f"本轮校准无法定位手机屏幕：{exc}；"
+                    "若手机暗屏，请先点亮并保持校准页显示后重试",
+                    classification="camera_measurement_error",
+                    routed_to="CAMERA_RECALIBRATION", park=False) from exc
             if type(quad.get("frameSeq")) is not int or quad["frameSeq"] < 0:
                 raise ValueError("手机定位缺少持续推流的帧序号")
             run["edge"] = {"corners": quad["corners"],
@@ -1504,31 +1489,16 @@ class AutoRunner:
                 # 姿态定位不可得（PoseUnlocatable 家族）保持原类型传播：
                 # z_confirm_safe 按用户拍板 2026-09-29 只对这一族缺席留痕。
                 #
-                # 锚点点击唤醒豁免（业主 2026-10-16 设计）：tapAnchor 与当前
-                # daemon 会话一致 = 点击位置是操作员已核实的安全位置，不依赖
-                # 相机可见性——暗屏/遮挡时定位必然失败，此时点击本身就是唤醒
-                # 手段，放行并留痕。
+                # 保留已有同会话锚点的姿态缺席裁决，但检查本身只读。
+                # 此检查会在布防前、正式点击前和收到样本后多次调用；
+                # 内部唤醒会消耗布防并追加接触。点击仅由调用方显式执行。
                 anchor = ((self.host.state.get("z") or {}).get("tapAnchor") or {})
                 if (anchor.get("daemonSession")
                         and anchor.get("daemonSession") == self.host.state.get("daemonSession")):
                     _pose_gate_skip(
-                        "锚点点击唤醒：定位不可得但锚点与当前会话一致，放行点击",
+                        "姿态未核实但锚点与当前会话一致；检查不执行点击或唤醒",
                         stage="post_travel" if after_travel else "sampling",
                         measured_px=measured, threshold_px=4.0)
-                    # 暗屏单击点亮 / 锁屏双击唤醒（业主 2026-10-16 设计，与
-                    # WX 双击唤醒一致）：连发两击（间隔 ~250ms）——暗屏时第一击
-                    # 点亮、第二击产生触点；锁屏时两击构成双击唤醒，唤醒后的
-                    # 正式点击（调用方随后的 z/tap 流程）产生触点回报。
-                    try:
-                        self.host.daemon.ensure_debug_lease()
-                        auto_safe = (self.host.state.get("z") or {}).get("autoSafe") or {}
-                        w_depth = float(auto_safe.get("tapDepth") or 8.0)
-                        w_feed = float(auto_safe.get("tapFeed") or 2000)
-                        self.host._daemon_tap(w_depth, w_feed, 0)
-                        time.sleep(0.25)
-                        self.host._daemon_tap(w_depth, w_feed, 0)
-                    except Exception:
-                        pass  # 唤醒击失败不阻塞：后续正式点击按原流程执行
                     return None
                 if isinstance(exc, PoseUnlocatable):
                     raise exc
@@ -1770,9 +1740,10 @@ class AutoRunner:
             seq = int(self.host.state.get("imeSequence", 0)) + 1
             self.host.state["imeSequence"] = seq
             sample_id = f"{prefix}-{uuid.uuid4().hex[:8]}"
-            self.host.ime.arm(sid, sample_id, seq, self.host._target_rect(u, v))
+            target_rect = deepcopy(self.host._target_rect(u, v))
+            self.host.ime.arm(sid, sample_id, seq, target_rect)
             return {"sampleId": sample_id, "sequence": seq, "armedAt": time.time(),
-                    "sessionId": sid}
+                    "sessionId": sid, "targetRect": target_rect}
 
     def _auto_disarm(self, armed: dict) -> None:
         try:
@@ -1929,6 +1900,21 @@ class AutoRunner:
         return "HARD_ABORT"
 
     @staticmethod
+    def _auto_region_validation(run: dict) -> bool:
+        criterion = run.get("validationCriterion")
+        if "validationCriterion" not in run:
+            return False  # 历史候选保留原固定像素验收，不补写新资格。
+        if criterion != cb.REGION_VALIDATION_CRITERION:
+            raise AutoRunError("validation_criterion_invalid", "校准验收标准无效，请重新校准")
+        return True
+
+    def _auto_sample_passed(self, run: dict, sample: dict) -> bool:
+        if not sample.get("eligible") or sample.get("errorLevel") != "PASS":
+            return False
+        return (not self._auto_region_validation(run)
+                or cb.calibration_region_point_passed(sample, run.get("screen") or {}))
+
+    @staticmethod
     def _auto_classify_error(run: dict, sample: dict) -> str:
         flags = sample.get("eligibleFlags") or {}
         motion = sample.get("armMotionErrorMm")
@@ -1936,7 +1922,8 @@ class AutoRunner:
         if not flags.get("camera_detection_stable", False):
             return "camera_measurement_error"
         projection = sample.get("cameraProjectionErrorPx")
-        if (sample.get("aimSource") == "camera_projection"
+        region_mode = run.get("validationCriterion") == cb.REGION_VALIDATION_CRITERION
+        if (not region_mode and sample.get("aimSource") == "camera_projection"
                 and projection is not None and float(projection) > tolerance):
             return "camera_transform_error"
         if motion is not None and float(motion) > float(run["config"]["position_tolerance_mm"]):
@@ -1945,6 +1932,9 @@ class AutoRunner:
                 or not flags.get("touch_coordinate_valid"):
             return "touch_feedback_error"
         touch_error = sample.get("touchTargetErrorPx")
+        if region_mode:
+            return "ok" if (sample.get("regionEvidence") or {}).get("passed") is True \
+                else "arm_mapping_error"
         if touch_error is not None and float(touch_error) > tolerance:
             # 相机投影合格、MPos 合格、触点可重复超差 → 机械映射误差（不更新 H）
             return "arm_mapping_error"
@@ -1972,6 +1962,7 @@ class AutoRunner:
         sample = {
             "sampleId": armed["sampleId"], "runId": run["runId"], "phase": phase,
             "targetId": target_id, "targetScreen": [round(c, 1) for c in target_screen],
+            "u": u, "v": v, "targetRect": deepcopy(armed.get("targetRect")),
             "cameraPixel": None, "cameraQuality": None,
             "cameraPredictedScreen": None, "predictedArm": None,
             "commandedArm": None, "postMoveMPos": None, "effectiveRobotXY": None,
@@ -2106,6 +2097,17 @@ class AutoRunner:
                  + (touch[1] - target_screen[1]) ** 2) ** 0.5, 2)
             sample["cameraTouchGapPx"] = round(
                 ((touch[0] - px) ** 2 + (touch[1] - py) ** 2) ** 0.5, 2)
+            if self._auto_region_validation(run):
+                try:
+                    region = cb.calibration_region_evidence(
+                        sample["targetRect"], run["screen"], touch, [px, py])
+                except (TypeError, ValueError) as exc:
+                    raise AutoRunError("target_region_invalid", f"本次标靶区域证据无效：{exc}",
+                                       classification="camera_measurement_error", park=True) from exc
+                sample["regionEvidence"] = region
+                # 原始像素保存在证据内；外层指标与重算一致，不用显示舍入值评分。
+                sample["touchTargetErrorPx"] = region["touchTargetErrorPx"]
+                sample["cameraTouchGapPx"] = region["cameraTouchGapPx"]
             # 悬停笔尖只作视差诊断。触点回报后若为姿态复核退回停车位，
             # 此时拍到的笔尖已经不是点击位置，不得记录成触点相机坐标。
             tip_x = tip_y = None
@@ -2143,6 +2145,12 @@ class AutoRunner:
         sample["eligibleFlags"] = flags
         sample["classification"] = self._auto_classify_error(run, sample)
         sample["errorLevel"] = self._auto_error_level(run, sample["touchTargetErrorPx"])
+        if self._auto_region_validation(run):
+            if sample["touchTargetErrorPx"] > float(run["config"]["hard_fail_px"]):
+                sample["errorLevel"] = "HARD_ABORT"
+            else:
+                sample["errorLevel"] = ("PASS" if sample["regionEvidence"]["passed"]
+                                        else "SOFT_FAIL")
         # 资格=安全/一致性条件全集（补充 §4）；精度不进资格——学习阶段超差样本
         # 正是要采的数据，最终精度由 Phase 2/独立验证把关（用户拍板 2026-09-03）
         sample["eligible"] = all(flags.values())
@@ -2525,8 +2533,13 @@ class AutoRunner:
                                routed_to="ARM_RECALIBRATION", park=True) from exc
         run["armFitSelection"] = fit["modelSelection"]
         rms, worst = fit["residualRms"], max(fit["residuals"])
-        if rms > float(run["config"]["arm_rms_target_px"]) \
-                or worst > float(run["config"]["arm_max_error_px"]):
+        training_passed = (rms <= float(run["config"]["arm_rms_target_px"])
+                           and worst <= float(run["config"]["arm_max_error_px"]))
+        fit_gate = None
+        if self._auto_region_validation(run):
+            fit_gate = self._auto_region_fit_gate(run, samples, fit, training_passed)
+            run["armFitGate"] = fit_gate
+        elif not training_passed:
             raise AutoRunError("arm_quality_below_target",
                                f"Arm 拟合 RMS {rms:.2f}px / 最大 {worst:.2f}px 未达标",
                                classification="arm_mapping_error",
@@ -2559,11 +2572,63 @@ class AutoRunner:
                                   "residualPx": round(r, 2)}
                                  for s, r in zip(samples, fit["residuals"])],
         }
+        if fit_gate is not None:
+            run["arm"]["fitGate"] = fit_gate
+            self._auto_event(run, "arm_region_candidate", deepcopy(fit_gate))
         run["locks"]["armAffine"]["state"] = cb.MODEL_LOCK_CANDIDATE
         run["armHistory"].append({"iteration": run["iteration"],
                                   "residualRmsPx": round(rms, 3), "at": _now()})
         self._auto_event(run, "arm_refit", {"rms": round(rms, 3),
                                             "samples": len(samples)})
+
+    @staticmethod
+    def _auto_region_fit_gate(run: dict, samples: list, fit: dict,
+                              training_passed: bool) -> dict:
+        """留一误差圆必须容纳于每个训练靶的安全内区；这只产生待复验候选。"""
+        try:
+            selection = fit["modelSelection"]
+            selected = selection["selectedModel"]
+            if (selected not in {"affine", "quadratic"} or len(samples) < 9
+                    or selection["sampleCount"] != len(samples)):
+                raise ValueError("模型选型样本数不完整")
+            loo = selection[selected]["leaveOneOut"]
+            residuals = loo["residualsPx"]
+            values = [fit["residualRms"], *fit["residuals"],
+                      loo["maxErrorPx"], loo["rmsPx"], *residuals]
+            if (len(residuals) != len(samples) or len(fit["residuals"]) != len(samples)
+                    or not residuals
+                    or any(type(value) not in (int, float) or not math.isfinite(value)
+                           or value < 0 for value in values)):
+                raise ValueError("训练/留一残差缺失或非有限值")
+            if (not math.isclose(max(residuals), loo["maxErrorPx"], abs_tol=1e-6)
+                    or not math.isclose(math.sqrt(sum(r * r for r in residuals) / len(residuals)),
+                                        loo["rmsPx"], abs_tol=1e-6)):
+                raise ValueError("留一汇总与逐点残差不一致")
+            margins = []
+            screen = run["screen"]
+            for sample, residual in zip(samples, residuals):
+                rect = sample["targetRect"]
+                center = [rect["u"] * screen["screenWidth"],
+                          rect["v"] * screen["screenHeight"]]
+                evidence = cb.calibration_region_evidence(rect, screen, center)
+                safe = evidence["safeBoundsPx"]
+                radius = min(center[0] - safe["left"], safe["right"] - center[0],
+                             center[1] - safe["top"], safe["bottom"] - center[1])
+                if residual > radius:
+                    raise ValueError(f"训练靶 {sample['targetId']} 留一误差 {residual:.2f}px "
+                                     f"超出本靶安全半径 {radius:.2f}px")
+                margins.append(radius)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise AutoRunError("arm_quality_below_target", f"Arm 区域候选证据未通过：{exc}",
+                               classification="arm_mapping_error",
+                               routed_to="ARM_RECALIBRATION", park=True) from exc
+        return {"criterion": cb.REGION_VALIDATION_CRITERION,
+                "trainingTargetsPassed": training_passed,
+                "trainingRmsPx": fit["residualRms"], "trainingMaxErrorPx": max(fit["residuals"]),
+                "leaveOneOutMaxErrorPx": loo["maxErrorPx"],
+                "minimumSafeRadiusPx": min(margins), "sampleCount": len(samples),
+                "basis": "each_leave_one_out_error_inside_training_target",
+                "requiresIndependentValidation": True}
 
     def _auto_model_shift_mm(self, old_model: dict, new_model: dict, run: dict) -> float:
         w, h = self._auto_screen_size(run)
@@ -2604,7 +2669,11 @@ class AutoRunner:
             if (resume or {}).get("phase") == "PHASE2_VALIDATE" else None
         soft_failing: list[str] = []
         for point in run["pointPlan"]:
-            if point["id"] in run.get("phase2", {}) and point["id"] != resume_target:
+            previous = run.get("phase2", {}).get(point["id"])
+            if previous and point["id"] != resume_target and (
+                    not self._auto_region_validation(run)
+                    or (previous.get("passed") is True
+                        and cb.calibration_region_point_passed(previous, run["screen"]))):
                 continue  # 已通过的点不重复
             attempts = 0
             timeouts = 0
@@ -2627,13 +2696,17 @@ class AutoRunner:
                                        f"Phase 2 点 {point['id']} 触点超时重试用尽",
                                        classification="touch_feedback_error", park=True)
                 level = sample.get("errorLevel")
-                if level == "PASS" and sample.get("eligible"):
+                if self._auto_sample_passed(run, sample):
                     run["phase2"][point["id"]] = {
+                        "targetId": point["id"], "u": point["u"], "v": point["v"],
+                        "passed": True,
                         "touchTargetErrorPx": sample["touchTargetErrorPx"],
                         "cameraProjectionErrorPx": sample["cameraProjectionErrorPx"],
                         "cameraTouchGapPx": sample["cameraTouchGapPx"],
                         "classification": sample["classification"], "at": _now(),
                     }
+                    if self._auto_region_validation(run):
+                        run["phase2"][point["id"]]["regionEvidence"] = deepcopy(sample["regionEvidence"])
                     break
                 if level in ("HARD_FAIL", "HARD_ABORT"):
                     classification = sample.get("classification") or "ambiguous"
@@ -2676,7 +2749,15 @@ class AutoRunner:
         entries = run.get("phase2") or {}
         if len(entries) < len(run["pointPlan"]):
             return False
+        region_mode = self._auto_region_validation(run)
+        if region_mode and set(entries) != {p["id"] for p in run["pointPlan"]}:
+            return False
         for entry in entries.values():
+            if region_mode:
+                if entry.get("passed") is not True \
+                        or not cb.calibration_region_point_passed(entry, run["screen"]):
+                    return False
+                continue
             error = entry.get("touchTargetErrorPx")
             if error is None or float(error) > tolerance:
                 return False
@@ -2714,7 +2795,7 @@ class AutoRunner:
                         f"独立验证点 {point['id']} 触点超时",
                         classification="touch_feedback_error",
                         routed_to="HARDWARE_INVESTIGATION", park=True)
-                if sample.get("errorLevel") != "PASS" or not sample.get("eligible"):
+                if not self._auto_sample_passed(run, sample):
                     classification = sample.get("classification") or "ambiguous"
                     # 失败也先落盘该点成绩（诊断要看全部 5 点的分布）
                     points.append({
@@ -2724,13 +2805,16 @@ class AutoRunner:
                         "cameraTouchGapPx": sample.get("cameraTouchGapPx"),
                         "passed": False, "at": _now(),
                     })
+                    if self._auto_region_validation(run):
+                        points[-1]["regionEvidence"] = deepcopy(sample.get("regionEvidence"))
                     run["validationPoints"] = points
                     cb.save_candidate(run, self.host.data_root)
                     raise AutoRunError(
                         "independent_validation_failed",
                         f"独立验证点 {point['id']} 误差 "
-                        f"{sample.get('touchTargetErrorPx')}px 超过 "
-                        f"{run['config']['target_tolerance_px']}px（独立验证不参与拟合，"
+                        f"{sample.get('touchTargetErrorPx')}px 未通过本轮验收标准 "
+                        f"{run.get('validationCriterion') or str(run['config']['target_tolerance_px']) + 'px'}"
+                        f"（独立验证不参与拟合，"
                         f"不允许重采样证明）",
                         classification=classification,
                         routed_to=self._auto_route_for(classification), park=True)
@@ -2741,6 +2825,8 @@ class AutoRunner:
                     "cameraTouchGapPx": sample["cameraTouchGapPx"],
                     "passed": True, "at": _now(),
                 })
+                if self._auto_region_validation(run):
+                    points[-1]["regionEvidence"] = deepcopy(sample["regionEvidence"])
                 break
         run["validationPoints"] = points
         run["validation"] = {
@@ -2749,7 +2835,31 @@ class AutoRunner:
             "contactVsCameraMaxPx": max(p["cameraTouchGapPx"] for p in points),
             "passedCount": len(points), "passed": True, "checkedAt": _now(),
         }
+        if self._auto_region_validation(run):
+            run["validation"]["criterion"] = cb.REGION_VALIDATION_CRITERION
         self._auto_event(run, "independent_validation_passed")
+
+    def _auto_region_validation_complete(self, run: dict) -> bool:
+        validation = run.get("validation") or {}
+        points = validation.get("points") or []
+        plan = run.get("validationPlan") or []
+        if len(plan) != len(AUTO_VALIDATION_POINTS) or not all(isinstance(p, dict) for p in plan):
+            return False
+        frozen = {p.get("id"): p for p in plan}
+        if set(frozen) != {p[0] for p in AUTO_VALIDATION_POINTS}:
+            return False
+        return (validation.get("criterion") == cb.REGION_VALIDATION_CRITERION
+                and validation.get("passed") is True
+                and validation.get("passedCount") == len(AUTO_VALIDATION_POINTS)
+                and len(points) == len(AUTO_VALIDATION_POINTS)
+                and points == run.get("validationPoints")
+                and all(isinstance(p, dict) for p in points)
+                and {p.get("targetId") for p in points} == {p[0] for p in AUTO_VALIDATION_POINTS}
+                and all(p.get("passed") is True
+                        and p.get("u") == frozen[p["targetId"]].get("u")
+                        and p.get("v") == frozen[p["targetId"]].get("v")
+                        and cb.calibration_region_point_passed(p, run.get("screen") or {})
+                        for p in points))
 
     # ----- E 验收（复用现有 debug/wechat 验收，§3.3/§43） -----
 
@@ -2823,6 +2933,10 @@ class AutoRunner:
             raise AutoRunError("promote_locks_invalid", "H/Arm 未双锁定：拒绝提升")
         if not (run.get("validation") or {}).get("passed"):
             raise AutoRunError("promote_validation_missing", "独立验证未通过：拒绝提升")
+        if self._auto_region_validation(run) and (
+                not self._auto_region_validation_complete(run)
+                or not self._auto_check_convergence(run)):
+            raise AutoRunError("promote_validation_missing", "区域复验或独立验证证据不完整：拒绝提升")
         deferred = run.get("deferInputAcceptance") is True
         if deferred:
             self._auto_guard(run)
@@ -2923,6 +3037,9 @@ class AutoRunner:
         xy_samples = [{"targetId": s["targetId"],
                        "effectiveRobotXY": s["effectiveRobotXY"],
                        "actualTouch": s["actualTouch"],
+                       **({"targetRect": deepcopy(s.get("targetRect")),
+                           "u": s.get("u"), "v": s.get("v")}
+                          if self._auto_region_validation(run) else {}),
                        "sampleId": s["sampleId"], "phase": s["phase"]}
                       for s in run["samples"] if s.get("phase") == "PHASE1_ARM"
                       and s.get("eligible")]
@@ -2934,6 +3051,10 @@ class AutoRunner:
             "validation": [dict(p) for p in run["validationPoints"]],
             "validated": True,
         }
+        if run["arm"].get("modelSelection") is not None:
+            promoted["xy"]["modelSelection"] = deepcopy(run["arm"]["modelSelection"])
+        if run["arm"].get("fitGate") is not None:
+            promoted["xy"]["fitGate"] = deepcopy(run["arm"]["fitGate"])
         if click_policy is not None:
             promoted["xy"]["clickPointPolicy"] = click_policy
         promoted["camera"] = {
@@ -2970,6 +3091,9 @@ class AutoRunner:
             "runId": run["runId"],
             "tolerancePx": run["config"]["target_tolerance_px"],
         }
+        if self._auto_region_validation(run):
+            promoted["validation"]["criterion"] = cb.REGION_VALIDATION_CRITERION
+            promoted["validation"].pop("tolerancePx", None)
         # 验收标志以 RUN 的 ✓ 记录为准（手动流程的 state 记录兜底取或）。
         # 应用四项仅作历史兼容记录，不参与 ready 或机械臂运行门禁。
         run_acceptance = run.get("acceptance") or {}

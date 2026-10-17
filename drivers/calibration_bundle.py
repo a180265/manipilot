@@ -38,6 +38,7 @@ MOTION_READY_STATUS = "motion_ready"
 # 运行前运动门禁（validate_calibration_bundle）对该状态一律判 bundle_not_ready
 # ——纯观测档案永远不能驱动动作。
 OBSERVATION_READY_STATUS = "observation_ready"
+REGION_VALIDATION_CRITERION = "target_region_v1"
 
 # 模型锁状态（v1.1 自动校准 §22；手动流程不写这些字段，门禁跳过）
 MODEL_LOCK_UNINITIALIZED = "UNINITIALIZED"
@@ -63,6 +64,170 @@ DELETE_HOLD_MAX_MS = 5000
 
 Z_PARAM_KEYS = ("hoverZ", "tapDepth", "tapFeed", "tapDwellMs",
                 "deleteHoldMs", "deleteDepth", "deleteFeed")
+
+
+def _region_number(value: object) -> float:
+    try:
+        valid = type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError("区域验收坐标和尺寸必须为有限数值")
+    return float(value)
+
+
+def _region_point(value: object) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError("区域验收坐标必须为屏幕像素 [x,y]")
+    return [_region_number(item) for item in value]
+
+
+def calibration_region_evidence(target_rect: dict, screen: dict, actual_touch,
+                                camera_point=None) -> dict:
+    """冻结靶几何并重算区域命中；5%短边内缩同时约束触点和相机瞄准点。"""
+    if not isinstance(target_rect, dict) or not isinstance(screen, dict):
+        raise ValueError("区域验收缺少标靶或屏幕尺寸")
+    width = _region_number(screen.get("screenWidth"))
+    height = _region_number(screen.get("screenHeight"))
+    rect = {key: _region_number(target_rect.get(key))
+            for key in ("u", "v", "widthU", "heightV")}
+    u, v, wu, hv = (rect[key] for key in ("u", "v", "widthU", "heightV"))
+    if (width <= 0 or height <= 0 or not 0 < u < 1 or not 0 < v < 1
+            or wu <= 0 or hv <= 0
+            or wu > 2 * min(.06, .6 * u, .6 * (1 - u)) + 1e-12
+            or hv > 2 * min(.06, .6 * v, .6 * (1 - v)) + 1e-12
+            or u - wu / 2 < 0 or u + wu / 2 > 1
+            or v - hv / 2 < 0 or v + hv / 2 > 1):
+        raise ValueError("区域验收标靶尺寸无效、越出屏幕或大于固定标靶规则")
+    touch = _region_point(actual_touch)
+    camera = _region_point(camera_point) if camera_point is not None else None
+    bounds = {"left": (u - wu / 2) * width, "top": (v - hv / 2) * height,
+              "right": (u + wu / 2) * width, "bottom": (v + hv / 2) * height}
+    inset = min(wu * width, hv * height) * .05
+    safe = {"left": bounds["left"] + inset, "top": bounds["top"] + inset,
+            "right": bounds["right"] - inset, "bottom": bounds["bottom"] - inset}
+    if (not all(math.isfinite(value) for value in (*bounds.values(), *safe.values(), inset))
+            or inset <= 0 or safe["left"] >= safe["right"] or safe["top"] >= safe["bottom"]):
+        raise ValueError("区域验收标靶像素尺寸不可表示或安全内缩后为空")
+
+    def margin(point):
+        return min(point[0] - bounds["left"], bounds["right"] - point[0],
+                   point[1] - bounds["top"], bounds["bottom"] - point[1])
+
+    def inside(point):
+        return (safe["left"] <= point[0] <= safe["right"]
+                and safe["top"] <= point[1] <= safe["bottom"])
+
+    touch_error = _region_number(math.hypot(touch[0] - u * width, touch[1] - v * height))
+    camera_gap = _region_number(math.dist(touch, camera)) if camera else None
+    return {"criterion": REGION_VALIDATION_CRITERION, "targetRect": rect,
+            "actualTouch": touch, "cameraPredictedScreen": camera,
+            "boundsPx": bounds, "safeBoundsPx": safe, "safetyInsetPx": inset,
+            "marginPx": margin(touch), "cameraMarginPx": margin(camera) if camera else None,
+            "touchTargetErrorPx": touch_error, "cameraTouchGapPx": camera_gap,
+            "passed": inside(touch) and (camera is None or inside(camera))}
+
+
+def _calibration_region_point_evidence(point: dict, screen: dict) -> dict:
+    if not isinstance(point, dict) or not isinstance(point.get("regionEvidence"), dict):
+        raise ValueError("独立验证点缺少区域命中证据")
+    evidence = point["regionEvidence"]
+    if evidence.get("criterion") != REGION_VALIDATION_CRITERION:
+        raise ValueError("区域验收判据未知")
+    if evidence.get("cameraPredictedScreen") is None:
+        raise ValueError("正式区域验收缺少相机瞄准点")
+    rebuilt = calibration_region_evidence(
+        evidence.get("targetRect"), screen, evidence.get("actualTouch"),
+        evidence.get("cameraPredictedScreen"))
+    for key in ("u", "v"):
+        if not math.isclose(_region_number(point.get(key)), rebuilt["targetRect"][key],
+                            rel_tol=0, abs_tol=1e-12):
+            raise ValueError("区域证据与验证点标靶中心不一致")
+    for key in ("touchTargetErrorPx", "cameraTouchGapPx"):
+        if not math.isclose(_region_number(point.get(key)), rebuilt[key],
+                            rel_tol=0, abs_tol=.00051):
+            raise ValueError("验证点距离摘要与实际触点不一致")
+    return rebuilt
+
+
+def calibration_region_point_passed(point: dict, screen: dict) -> bool:
+    """只根据冻结目标、真实触点与瞄准点判定，不信任保存的 passed/裕量。"""
+    try:
+        return _calibration_region_point_evidence(point, screen)["passed"]
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _region_training_error(bundle: dict) -> float:
+    """逐样本核对留一误差与冻结标靶裕量，返回实际最大留一误差。"""
+    xy = bundle["xy"]
+    selection = xy["modelSelection"]
+    selected = selection["selectedModel"]
+    if selected not in ("affine", "quadratic"):
+        raise ValueError("区域校准缺少已选定的机械模型")
+    samples = xy["samples"]
+    count = selection["sampleCount"]
+    if (not isinstance(samples, list) or len(samples) < 9 or type(count) is not int
+            or count != len(samples)):
+        raise ValueError("区域校准训练样本数量与留一证据不一致")
+    model = selection[selected]
+    loo = model["leaveOneOut"]
+    errors = loo["residualsPx"]
+    if not isinstance(errors, list) or len(errors) != count:
+        raise ValueError("区域校准缺少完整逐点留一误差")
+    errors = [_region_number(value) for value in errors]
+    if any(value < 0 for value in errors):
+        raise ValueError("区域校准留一误差不得为负")
+    rms = math.hypot(*errors) / math.sqrt(count)
+    worst = max(errors)
+    for key, measured in (("rmsPx", rms), ("maxErrorPx", worst)):
+        if not math.isclose(_region_number(loo.get(key)), measured, rel_tol=1e-9, abs_tol=1e-9):
+            raise ValueError("区域校准留一误差摘要与逐点证据不一致")
+    for saved, key in (("residualRmsPx", "rmsPx"), ("maxResidualPx", "maxErrorPx")):
+        value = _region_number(xy.get(saved))
+        training = _region_number(model["training"].get(key))
+        if value < 0 or training < 0 or not math.isclose(value, training, rel_tol=0, abs_tol=.00051):
+            raise ValueError("区域校准训练残差无效或摘要不一致")
+    screen = bundle["screen"]
+    for sample, error in zip(samples, errors):
+        rect = sample["targetRect"]
+        u, v = _region_number(sample.get("u")), _region_number(sample.get("v"))
+        if any(not math.isclose(value, _region_number(rect.get(key)), rel_tol=0, abs_tol=1e-12)
+               for key, value in (("u", u), ("v", v))):
+            raise ValueError("训练样本与冻结标靶中心不一致")
+        _region_point(sample["actualTouch"])
+        _region_point(sample["effectiveRobotXY"])
+        center = [u * _region_number(screen.get("screenWidth")),
+                  v * _region_number(screen.get("screenHeight"))]
+        evidence = calibration_region_evidence(rect, screen, center)
+        if error > evidence["marginPx"] - evidence["safetyInsetPx"]:
+            raise ValueError("训练留一误差超出对应标靶安全裕量")
+    return worst
+
+
+def _validation_points_verified(bundle: dict) -> bool:
+    """区分新区域判据和未标记的历史像素判据，未知判据不可退回历史规则。"""
+    validation = bundle.get("validation") or {}
+    points = validation.get("points") or []
+    if (not isinstance(points, list) or len(points) != 5
+            or not all(isinstance(point, dict) for point in points)
+            or {point.get("targetId") for point in points}
+                != {f"validation-{index}" for index in range(1, 6)}
+            or any(point.get("passed") is not True for point in points)):
+        return False
+    if "criterion" in validation:
+        if validation["criterion"] != REGION_VALIDATION_CRITERION:
+            return False
+        try:
+            _region_training_error(bundle)
+        except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        return all(calibration_region_point_passed(point, bundle.get("screen")) for point in points)
+    tolerance = validation.get("tolerancePx")
+    finite = lambda value: type(value) in (int, float) and math.isfinite(value)
+    return (finite(tolerance) and tolerance > 0
+            and all(finite(point.get("touchTargetErrorPx"))
+                    and 0 <= point["touchTargetErrorPx"] <= tolerance for point in points))
 
 
 def mapping_error_bound(bundle: dict, *, allow_legacy_defaults: bool = False) -> float | None:
@@ -103,6 +268,12 @@ def mapping_error_bound(bundle: dict, *, allow_legacy_defaults: bool = False) ->
             arm_error = max(1.0, arm_error)
         nominal_errors = []
         arm_errors = [arm_error]
+        validation = bundle.get("validation") or {}
+        region_criterion = validation.get("criterion") == REGION_VALIDATION_CRITERION
+        if "criterion" in validation:
+            if not region_criterion or not _validation_points_verified(bundle):
+                raise ValueError("区域校准独立证据无效或验收判据未知")
+            arm_errors.append(_region_training_error(bundle))
         for points in ((bundle.get("validation") or {}).get("points", []),
                        xy.get("validation", [])):
             if not isinstance(points, list):
@@ -110,6 +281,12 @@ def mapping_error_bound(bundle: dict, *, allow_legacy_defaults: bool = False) ->
             for point in points:
                 if not isinstance(point, dict):
                     raise ValueError("独立验证点记录无效")
+                if region_criterion or "regionEvidence" in point:
+                    rebuilt = _calibration_region_point_evidence(point, bundle.get("screen"))
+                    if point.get("passed") is not True or not rebuilt["passed"]:
+                        raise ValueError("区域验证点未通过")
+                    nominal_errors.append(finite(rebuilt["touchTargetErrorPx"]))
+                    arm_errors.append(finite(rebuilt["cameraTouchGapPx"]))
                 for key, values in (("touchTargetErrorPx", nominal_errors),
                                     ("cameraTouchGapPx", arm_errors)):
                     if key in point:
@@ -691,21 +868,12 @@ def automatic_calibration_verified(bundle: dict | None) -> bool:
     park = bundle.get("safePark") or {}
     z = bundle.get("z") or {}
     finite = lambda value: type(value) in (int, float) and math.isfinite(value)
-    points = validation.get("points") or []
-    tolerance = validation.get("tolerancePx")
     return (
         auto.get("state") == "PROMOTED"
         and bool(auto.get("runId"))
         and auto["runId"] == validation.get("runId")
         and validation.get("passed") is True
-        and finite(tolerance) and tolerance > 0
-        and len(points) == 5
-        and all(isinstance(point, dict) for point in points)
-        and {point.get("targetId") for point in points}
-            == {f"validation-{index}" for index in range(1, 6)}
-        and all(point.get("passed") is True
-                and finite(point.get("touchTargetErrorPx"))
-                and 0 <= point["touchTargetErrorPx"] <= tolerance for point in points)
+        and _validation_points_verified(bundle)
         and all((locks.get(key) or {}).get("state") == MODEL_LOCK_LOCKED
                 and type((locks.get(key) or {}).get("version")) is int
                 and locks[key]["version"] > 0
@@ -855,6 +1023,11 @@ def validate_calibration_bundle(
     # 全部退出校验——不再决定输入、发送或机械 ready；机械证据要求不变。
     motion_only = bundle.get("status") == MOTION_READY_STATUS
     auto_verified = automatic_calibration_verified(bundle)
+    validation = bundle.get("validation") or {}
+    region_criterion = validation.get("criterion") == REGION_VALIDATION_CRITERION
+    if "criterion" in validation and not region_criterion:
+        _fail(checks, "calibration_validation_criterion_unknown",
+              "校准验收判据未知：必须重新校准，不得退回历史精度门禁")
 
     # 2. 历史机械资格保持原有约束；自动 READY 以同轮独立验证为准。
     if bundle.get("status") not in {"ready", MOTION_READY_STATUS}:
@@ -869,7 +1042,8 @@ def validate_calibration_bundle(
         z = bundle.get("z") or {}
         finite = lambda value: type(value) in (int, float) and math.isfinite(value)
         complete = (
-            z.get("validated") is True
+            "criterion" not in validation
+            and z.get("validated") is True
             and (bundle.get("xy") or {}).get("validated") is True
             and (bundle.get("camera") or {}).get("validated") is True
             and all((locks.get(key) or {}).get("state") == MODEL_LOCK_LOCKED
@@ -893,7 +1067,8 @@ def validate_calibration_bundle(
         if not complete:
             _fail(checks, "motion_qualification_incomplete",
                   "机械独立资格缺少完整模型锁、独立验证、Z 或停车位证据")
-    elif bundle.get("status") == "ready" and (bundle.get("autoCalibration") or {}).get("state") == "PROMOTED" and not auto_verified:
+    elif bundle.get("status") == "ready" and not auto_verified and (
+            region_criterion or (bundle.get("autoCalibration") or {}).get("state") == "PROMOTED"):
         _fail(checks, "motion_qualification_incomplete",
               "自动校准缺少完整的模型锁、独立验证或安全停车位")
 
@@ -967,10 +1142,16 @@ def validate_calibration_bundle(
             _fail(checks, "xy_mapping_invalid", "机械↔屏幕映射不可逆（样本退化）")
         rms = xy.get("residualRmsPx")
         worst = xy.get("maxResidualPx")
-        if rms is None or float(rms) > XY_RESIDUAL_RMS_MAX_PX:
+        if region_criterion:
+            try:
+                _region_training_error(bundle)
+            except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+                _fail(checks, "xy_region_quality_invalid",
+                      "区域校准缺少完整训练残差、逐点留一误差或冻结标靶安全裕量证据")
+        elif rms is None or float(rms) > XY_RESIDUAL_RMS_MAX_PX:
             _fail(checks, "xy_residual_exceeded",
                   f"XY 拟合残差 RMS {rms}px 超过阈值 {XY_RESIDUAL_RMS_MAX_PX}px")
-        if worst is not None and float(worst) > XY_RESIDUAL_MAX_PX:
+        if not region_criterion and worst is not None and float(worst) > XY_RESIDUAL_MAX_PX:
             _fail(checks, "xy_residual_exceeded",
                   f"单点最大残差 {worst}px 超过建议值 {XY_RESIDUAL_MAX_PX}px")
         if not xy.get("validated"):

@@ -13,7 +13,7 @@ def grid_plan(axis):
             for row, v in enumerate(axis) for col, u in enumerate(axis)]
 
 
-def test_default_plan_has_nine_training_and_five_independent_edge_points(tmp_path):
+def test_default_plan_has_nine_training_and_five_independent_screen_region_points(tmp_path):
     env = auto_ready_env(tmp_path)
     plan = env.wizard.state_view()["autoPlan"]
 
@@ -21,8 +21,10 @@ def test_default_plan_has_nine_training_and_five_independent_edge_points(tmp_pat
     assert {(p["u"], p["v"]) for p in plan["points"]} == {
         (u, v) for v in (0.10, 0.50, 0.90) for u in (0.10, 0.50, 0.90)
     }
+    assert {(p["u"], p["v"]) for p in plan["validation"]}.isdisjoint(
+        {(p["u"], p["v"]) for p in plan["points"]})
     assert {(p["u"], p["v"]) for p in plan["validation"]} == {
-        (0.05, 0.05), (0.95, 0.05), (0.05, 0.95), (0.95, 0.95), (0.50, 0.65),
+        (0.20, 0.10), (0.80, 0.10), (0.20, 0.90), (0.80, 0.90), (0.50, 0.65),
     }
 
 

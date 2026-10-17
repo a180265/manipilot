@@ -673,6 +673,75 @@ class DaemonArmDriver(ArmDriver):
                                     trusted_ocr=trusted_ocr)
         return (*resolved, layout, dynamic_snapshot)
 
+    def _region_contact_guard(self, entry, calibration, previous_guard, pose):
+        """Keep measured MPos inside the same region before the contact send.
+
+        The existing layout/pose/context guards run first. This guard performs
+        no IO on the daemon and never consumes an IME nonce; transport invokes
+        the original IME gate only after these position checks have passed.
+        """
+        if (calibration.get("validation") or {}).get("criterion") != "target_region_v1":
+            return previous_guard
+        from runtime.layout_state import content_sha
+
+        pinned_sha = content_sha(calibration)
+        safety = copy.deepcopy((entry.get("click_point") or {}).get("safety") or {})
+        source = entry.get("target_source")
+        frozen_pose = copy.deepcopy(pose)
+
+        def check(position=None):
+            if previous_guard is not None:
+                previous_guard(position)
+            try:
+                current = target_archive.load_runtime_calibration(self.device_id, self.data_root)
+                if content_sha(current) != pinned_sha:
+                    raise ValueError("接触前校准已变化，原目标安全范围失效")
+                if position is None:
+                    return
+                if source == "shared_layout":
+                    # Its live pose-aware guard already reprojects MPos into
+                    # the latest safe_rect. Do not replace that coordinate map.
+                    if previous_guard is None:
+                        raise ValueError("共享目标缺少接触前安全范围复核")
+                    return
+                sx, sy = calibration_bundle.screen_from_robot(
+                    current["xy"]["robotToScreen"],
+                    _finite(position.get("x"), "接触前 MPos X"),
+                    _finite(position.get("y"), "接触前 MPos Y"))
+                point = np.asarray([sx, sy], dtype=float)
+                if not np.isfinite(point).all():
+                    raise ValueError("接触前 MPos 无法映回目标安全范围")
+                if (source == "camera_ocr" and frozen_pose is not None
+                        and entry.get("coordinate_version") == "calibrated_camera.v1"):
+                    # The saved OCR polygon is in the rectified calibration
+                    # frame; undo the same live pose used by _compensate_point.
+                    matrix = np.asarray(current["camera"]["cameraToScreen"]["homography"],
+                                        dtype=float).reshape(3, 3)
+                    inverse_pose = np.linalg.inv(np.asarray(frozen_pose["matrix"], dtype=float))
+                    point = click_points.project(matrix @ inverse_pose @ np.linalg.inv(matrix),
+                                                 [point])[0]
+                if source == "live_ime_geometry":
+                    rect = safety["safe_rect"]
+                    x, y = sx / entry["frameW"], sy / entry["frameH"]
+                    if not (rect["x"] < x < rect["x"] + rect["width"]
+                            and rect["y"] < y < rect["y"] + rect["height"]):
+                        raise ValueError("接触前实际机械落点已超出输入法目标安全范围")
+                polygon = np.asarray(safety.get("feasible_polygon"), dtype=float)
+                if (polygon.ndim != 2 or polygon.shape[1] != 2 or len(polygon) < 3
+                        or not np.isfinite(polygon).all()):
+                    raise ValueError("接触前目标缺少有效安全范围")
+                edges = np.roll(polygon, -1, axis=0) - polygon
+                offsets = point - polygon
+                turns = edges[:, 0] * offsets[:, 1] - edges[:, 1] * offsets[:, 0]
+                if not (np.all(turns >= -1e-7) or np.all(turns <= 1e-7)):
+                    raise ValueError("接触前实际机械落点已超出本次目标安全范围")
+            except (ValueError, TypeError, KeyError, OverflowError, np.linalg.LinAlgError) as exc:
+                error = DriverError("driver_uncalibrated", str(exc))
+                error.motion_not_started = True
+                raise error from exc
+
+        return check
+
     def _pin_dynamic_visual_context(self, target, ref, frame, expected) -> dict:
         """S3：为动态视觉目标固定任务快照（上下文+定位来源身份）。
 
@@ -944,8 +1013,15 @@ class DaemonArmDriver(ArmDriver):
             known = "、".join(sorted(TARGET_DISPLAY_NAMES.keys() | DYNAMIC_TARGET_DISPLAY_NAMES.keys()))
             raise DriverError("driver_policy_rejected", f"未知业务目标：{target_id}（已知：{known}）")
         calibration = self._ensure_located()
+        region_qualified = ((calibration.get("validation") or {}).get("criterion")
+                            == "target_region_v1")
         try:
             click_policy = click_points.policy_from_bundle(calibration)
+            if region_qualified and click_policy is None:
+                # Region qualification requires a bounded first click too. A
+                # zero screen inset keeps the target centre where it is safe.
+                click_policy = {"mode": "screen_interior", "preferredInsetsPx":
+                                dict(left=0, top=0, right=0, bottom=0)}
         except (ValueError, TypeError) as exc:
             error = DriverError("driver_policy_rejected", str(exc))
             error.motion_not_started = True
@@ -1018,6 +1094,37 @@ class DaemonArmDriver(ArmDriver):
                 # 不再读相机帧尺寸（此前 KeyError/域混算的根因）。
                 entry["frameW"] = frame_w
                 entry["frameH"] = frame_h
+                if region_qualified:
+                    try:
+                        bounds = target_ref.get("bounds")
+                        if not isinstance(bounds, dict):
+                            raise ValueError("输入法目标缺少真实可点击范围")
+                        left, top, right, bottom = [
+                            _finite(bounds.get(key), "输入法目标边界")
+                            for key in ("left", "top", "right", "bottom")]
+                        error_bound = calibration_bundle.mapping_error_bound(calibration)
+                        if (error_bound is None or not 0 <= left < right <= frame_w
+                                or not 0 <= top < bottom <= frame_h):
+                            raise ValueError("输入法目标范围或校准误差无效")
+                        inset = error_bound + 2.0
+                        if min(right - left, bottom - top) <= 2 * inset:
+                            raise ValueError("输入法目标范围不足以容纳实测校准误差")
+                        safe_rect = {"x": (left + inset) / frame_w,
+                                     "y": (top + inset) / frame_h,
+                                     "width": (right - left - 2 * inset) / frame_w,
+                                     "height": (bottom - top - 2 * inset) / frame_h}
+                        chosen, _, safety = click_points.rectangle_point(
+                            target_id, safe_rect, frame_w, frame_h, policy=click_policy)
+                        safety.update(source="live_ime_geometry", inset_px=inset,
+                                      target_bounds=dict(bounds))
+                        entry.update(nx=float(chosen[0] / frame_w), ny=float(chosen[1] / frame_h),
+                                     click_attempt=0, click_retry_supported=False,
+                                     click_point={"screen": chosen.tolist(), "camera": None,
+                                                  "safety": safety})
+                    except (ValueError, TypeError, KeyError) as exc:
+                        error = DriverError("driver_policy_rejected", str(exc))
+                        error.motion_not_started = True
+                        raise error from exc
             elif (dynamic_source == "camera_ocr" and trusted_ocr
                   and (target_id in click_points.RETRY_TARGETS or click_policy is not None)):
                 from runtime.layout_geometry import mapping_error_bound
@@ -1073,6 +1180,19 @@ class DaemonArmDriver(ArmDriver):
                 raise DriverError("driver_policy_rejected", "目标坐标超出摄像头画面")
         if entry.get("targetMode") not in ("tap", "hover_only"):
             raise DriverError("driver_policy_rejected", "目标动作模式无效")
+        if region_qualified and entry.get("targetMode") == "tap":
+            safety = (entry.get("click_point") or {}).get("safety") or {}
+            bounded = (
+                (entry.get("target_source") == "shared_layout" and safety.get("safe_rect"))
+                or (entry.get("target_source") == "camera_ocr" and trusted_ocr
+                    and safety.get("screen_polygon") and safety.get("feasible_polygon"))
+                or (entry.get("target_source") == "live_ime_geometry"
+                    and safety.get("safe_rect") and safety.get("target_bounds")))
+            if not bounded:
+                error = DriverError("driver_policy_rejected",
+                                    "按目标范围校准的档案需要真实可点击范围；仅有中心坐标不能确认安全区")
+                error.motion_not_started = True
+                raise error
         if "click_attempt" not in entry:
             if click_attempt:
                 error = DriverError("driver_policy_rejected", "目标缺少可信安全区，不支持替代点击落点")
@@ -1816,6 +1936,7 @@ class DaemonArmDriver(ArmDriver):
         contact_guard, command_guard = self._layout_motion_guards(
             layout, target_id, resolved, _calib, pose, wechat_send=target_id == "send_button",
             dynamic_snapshot=dynamic_snapshot)
+        command_guard = self._region_contact_guard(entry, _calib, command_guard, pose)
         mpos, phases = await self._with_motion_lease(
             resolved, with_tap=with_tap, input_claim=input_claim,
             generation=generation,

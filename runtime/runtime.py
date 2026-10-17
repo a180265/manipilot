@@ -941,6 +941,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                         "source": "live_ime_geometry",
                         "cameraX": (bounds["left"] + bounds["right"]) / 2.0,
                         "cameraY": (bounds["top"] + bounds["bottom"]) / 2.0,
+                        "bounds": deepcopy(bounds),
                         "frameW": display["width_px"],
                         "frameH": display["height_px"],
                         "runtimeSessionId": snap.get("runtime_session_id"),
@@ -958,6 +959,8 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                             target_id=target_id, nonce=nonce,
                             expected_task=candidate_task,
                             expected_session=snap.get("runtime_session_id"),
+                            expected_bounds=deepcopy(bounds),
+                            target_ref=ref,
                             expected_display={"width_px": display["width_px"],
                                               "height_px": display["height_px"]})
                     return ref
@@ -978,7 +981,9 @@ class ArmFleetRuntime(PluginCapabilityMixin):
     def _ime_geometry_final_gate(self, *, device_id: str, ime_device: str,
                                  target_id: str, nonce: str,
                                  expected_task: str | None,
-                                 expected_session, expected_display: dict):
+                                 expected_session, expected_display: dict,
+                                 expected_bounds: dict | None = None,
+                                 target_ref: dict | None = None):
         """R3-02：TAP 下发边界（传输锁取得后、sendall 前）的最终几何门。
 
         返回闭包供驱动在输入认领回调**之前**调用：凭据/当前唯一绑定复核 +
@@ -989,8 +994,12 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         闭包只做本地读，不持输入短锁、不等网络。
         """
         from runtime.ime_geometry import ImeGeometryError
+        planned_ref = deepcopy(target_ref)
 
         def gate() -> None:
+            if target_ref != planned_ref:
+                raise _DriverError("ime_geometry_unavailable",
+                                   "最终接触核验：目标范围或落点参数被修改，禁止 TAP")
             def _credential_and_binding_guard() -> None:
                 # R3-17：配对凭据（生产）或登记凭据（测试/内部装配）任一
                 # 有效即通过；撤销后立即失效。
@@ -1015,12 +1024,18 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                         f"最终接触核验：设备当前绑定手机 {bound or '空'} 与"
                         f"规划手机 {ime_device} 不一致，禁止 TAP")
             try:
-                self.ime_geometry.consume_for_click(
+                snapshot = self.ime_geometry.consume_for_click(
                     ime_device, nonce, target_id=target_id,
                     expected_task=expected_task,
                     expected_session=expected_session,
                     expected_display=expected_display,
                     guard=_credential_and_binding_guard)
+                if expected_bounds is not None:
+                    current_target = next((item for item in snapshot.get("targets", [])
+                                           if item.get("id") == target_id), {})
+                    if current_target.get("bounds") != expected_bounds:
+                        raise _DriverError("ime_geometry_unavailable",
+                                           "最终接触核验：目标可点击范围已变化，禁止按旧范围点击")
             except ImeGeometryError as exc:
                 raise _DriverError(
                     "ime_geometry_unavailable",

@@ -2458,22 +2458,13 @@ class CalibrationWizard:
                                 "source": f"search_region_{label}"}
                     except Exception as exc:
                         region_exc = exc
-                # 暗屏唤醒击（业主 2026-10-16 设计）：探头正悬停在手机上方，
-                # 连发两击点亮屏幕（暗屏单击点亮/锁屏双击唤醒），下一轮定位
-                # 在亮屏上进行。唤醒击失败不阻塞：下一轮定位自行给出结论。
-                try:
-                    auto_safe = (self.host.state.get("z") or {}).get("autoSafe") or {}
-                    w_depth = float(auto_safe.get("tapDepth") or 8.0)
-                    w_feed = float(auto_safe.get("tapFeed") or 2000)
-                    self.host._daemon_tap(w_depth, w_feed, 0)
-                    time.sleep(0.25)
-                    self.host._daemon_tap(w_depth, w_feed, 0)
-                except Exception:
-                    pass
+                # 定位失败可能来自亮屏轮廓/遮挡，不能据此推断暗屏。
+                # 取图重试必须只读，不追加唤醒或消耗当前触点布防。
                 time.sleep(0.5)
             raise WizardError(
                 f"粗框内无法定位手机屏幕：{region_exc}；"
-                "请改善轮廓可见度或重新核验搜索范围") from region_exc
+                "若手机暗屏，请先点亮并保持校准页显示；"
+                "否则请改善轮廓可见度或重新核验搜索范围") from region_exc
         jpg, seq = self._camera_fetch()
         ensure_current()
         try:

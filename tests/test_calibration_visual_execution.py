@@ -2,12 +2,20 @@
 import pytest
 
 from drivers import calibration_bundle as cb
-from tests.test_calibration_wizard import CAM_W, SCREEN_W, auto_ready_env, wait_auto
+from tests.test_calibration_wizard import (
+    CAM_W, SCREEN_W, auto_ready_env, wait_auto, legacy_auto_calibration,  # noqa: F401
+)
 
 
-@pytest.mark.parametrize("screen_shift,expected_state", [(6.0, "PROMOTED"), (16.0, "FAILED")])
-def test_independent_validation_executes_camera_projection(tmp_path, screen_shift, expected_state):
+@pytest.mark.parametrize("region_mode,screen_shift,expected_state", [
+    (False, 6.0, "PROMOTED"), (False, 16.0, "FAILED"),
+    (True, 6.0, "PROMOTED"), (True, 16.0, "PROMOTED"),
+], ids=("legacy-small", "legacy-over-limit", "region-small", "region-inside-target"))
+def test_independent_validation_executes_camera_projection(
+        tmp_path, legacy_auto_calibration, region_mode, screen_shift, expected_state):
     env = auto_ready_env(tmp_path)
+    if not region_mode:
+        legacy_auto_calibration(env)
     runner = env.wizard._auto_runner
 
     def candidates():
@@ -28,6 +36,12 @@ def test_independent_validation_executes_camera_projection(tmp_path, screen_shif
         sample = next(s for s in run["samples"] if s["phase"] == "INDEPENDENT_VALIDATE")
         assert sample["actualTouch"][0] - sample["targetScreen"][0] == pytest.approx(screen_shift, abs=.1)
         assert sample["cameraTouchGapPx"] < .1
+        if region_mode:
+            assert run["validationCriterion"] == cb.REGION_VALIDATION_CRITERION
+            assert all(cb.calibration_region_point_passed(p, run["screen"])
+                       for p in run["validationPoints"])
+        else:
+            assert "validationCriterion" not in run
         if expected_state == "FAILED":
             assert view["lastFailure"]["code"] == "independent_validation_failed"
             assert run["validationPoints"][0]["passed"] is False

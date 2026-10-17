@@ -176,6 +176,7 @@
     <span class="badge warn" id="wzBundleBadge" style="display:none"><span class="dot"></span>档案</span>
   </h2>
   <div class="hint" id="wzInvalid" style="display:none;color:#ff9c9c"></div>
+  <div class="hint" id="wzActionInfo" role="status" aria-live="polite"></div>
 
   <!-- A · 设备与现场状态 -->
   <div class="sub" style="border-top:none;margin-top:4px;padding-top:0">
@@ -288,9 +289,10 @@
     <div class="hint">分阶段：Phase 0 摄像头单应（9 点标靶，<b>只显示不点击</b>，外点全拒绝）→
       Bootstrap 无点击安全检查 → First Click（<b>仅中心点</b>一次链路验证，超差自动平移自校正）→
       Phase 1 九点机械映射（控制器位置 ↔ 实际触点，保留二次补偿）→
-      Phase 2 九点视觉点击复验（只验证不学习）→ 五点独立验证（含四个近角点）→ 保存机械校准。
+      Phase 2 九点视觉点击复验（只验证不学习）→ 五点常用区域独立验证→ 保存机械校准。
       任何失败只写 candidate（data/devices/…/calibration_candidates/），旧 READY 永不被覆盖。</div>
     <div class="row" id="wzAutoSummary" style="margin-top:6px"></div>
+    <div class="hint" id="wzAutoCriterion" style="white-space:pre-line" role="status"></div>
     <div class="split" style="margin-top:6px">
       <div><b>① 操作员现场确认（自动校准前置）</b>
         <div class="row" style="margin-top:4px">
@@ -302,6 +304,7 @@
         </div>
         <div class="row"><button class="small" id="btnWzAutoPark" title="把机械臂停到屏幕外/安全停靠位后确认（Z 自动取 zSafe）。注意：停靠位必须在摄像头画面外或至少不遮挡手机屏幕——自动校准 Phase 0 需要完整看到全部 9 个绿框标靶">确认 SAFE PARK（当前 XY）</button>
           <span class="hint" id="wzAutoConfirmInfo"></span></div>
+        <div class="hint" id="wzAutoNextStep" role="status"></div>
       </div>
       <div><b>② 自动校准控制</b>
         <div class="row" style="margin-top:4px">
@@ -346,7 +349,7 @@
     <div class="hint" id="wzAutoSampleInfo" style="white-space:pre-line;margin-top:4px"></div>
     <table id="tblWzAutoSamples"><thead><tr>
       <th>阶段</th><th>点</th><th>相机 px</th><th>预测屏幕</th><th>预测/指令机械</th>
-      <th>postMove MPos</th><th>实际触点</th><th>投影/目标/间隙 px</th><th>MPos 残差</th><th>等级</th><th>分类</th>
+      <th>postMove MPos</th><th>实际触点</th><th>投影/中心/间隙 px（诊断）</th><th>MPos 残差</th><th>验收结果</th><th>分类</th>
     </tr></thead><tbody id="wzAutoSampleRows"></tbody></table>
     <div class="hint" id="wzAutoThresholds" style="color:var(--dim)"></div>
   </details>
@@ -713,7 +716,7 @@
         右上角变「设备已插入·待连接」→ 点 <b>「🔌 连接设备」</b>（连接会使控制器复位、MPos 归零）。<br>
         1. 打开 <b>CameraHelper</b>，为当前设备对应的 cam 通道选择物理摄像头并启动（右上「摄像头」变绿）。<br>
         2. 在 AUTO 区块确认 <b>zSafe</b> 与 <b>SAFE PARK（停止位）</b> 后点「🚀 启动自动校准」<br>
-        （九点采样 + 九点视觉复验 + 五点独立验证，含四个近角点；保留二次补偿）。<br>
+        （九点采样 + 九点视觉复验 + 五点独立验证，覆盖常用区域；保留二次补偿）。<br>
         3. 五点独立验证通过并安全停车后自动保存 READY；设备任务开关此时可开启。<br>
         4. 之后到「固定目标登记」面板登记业务目标（返回键/删除键/发送/候选栏）。<br>
         5. <b>断开/重连、拔线、重启守护进程</b>都会更换会话锚点：档案需重新自动校准。
@@ -1172,6 +1175,7 @@ async function saveInputSwitch() {
 $("#btnInpSwitchSave").addEventListener("click", e => { e.preventDefault(); saveInputSwitch(); });
 // ---------- 校准直驱上下滑（2026-10-03 规格 §7.1）----------
 async function runCalibratedScroll(action) {
+  if (S.busy > 0) return;
   const msg = $("#scrollMsg");
   const btn = $(action === "swipe_up" ? "#btnScrollUp" : "#btnScrollDown");
   btn.disabled = true; msg.textContent = "提交中…";
@@ -1344,11 +1348,16 @@ async function _api(path, opts) {
 
 function setBusy(delta) {
   S.busy = Math.max(0, S.busy + delta);
-  $$(".jog,#btnTap,#btnHover").forEach(b => b.disabled = S.busy > 0);
+  $$(".jog,#btnTap,#btnHover,#btnPark,#btnOcrMove,#btnOcrTap,#btnScrollUp,#btnScrollDown,#btnResume")
+    .forEach(b => b.disabled = S.busy > 0);
   renderBasic();
 }
 
 async function motion(path, body, okMsg, label) {
+  if (S.busy > 0) {
+    toast("当前操作尚未结束，请等待本次结果", "err");
+    return;
+  }
   if (typeof REGION !== "undefined" && REGION.framing) {
     // FIX-12：框选期间禁用移动/触屏类动作，防止边框选边动机械
     toast("框选进行中：请先完成或取消粗框，再执行机械动作", "err");
@@ -2482,7 +2491,7 @@ function renderGesture() {
     entry ? `${entry.state_display} · 版本 ${entry.version} · ${entry.usable ? "手势档案可解析" : "暂不可调用"}` +
       (entry.blocking_reasons?.length ? "\n" + entry.blocking_reasons.join("；") : "") +
       "\n生产界面识别与业务运行资格：未验收" : "尚未登记";
-  const testable = entry && !GESTURE.dirty && !GESTURE.busy && !entry.test_blocked &&
+  const testable = entry && !GESTURE.dirty && !GESTURE.busy && !S.busy && !entry.test_blocked &&
     ["draft", "tested"].includes(entry.state);
   $("#gestureSearchTest").disabled = !testable;
   $("#gestureTopTest").disabled = !testable || !entry?.config.return_to_top ||
@@ -2805,6 +2814,7 @@ $("#btnEstopReset").addEventListener("click", async () => {
   refreshStatus();
 });
 $("#btnResume").addEventListener("click", async () => {
+  if (S.busy > 0) return;
   try { await api("/api/resume", {method: "POST"}); toast("已发送 ~ 恢复进给", "ok"); }
   catch (e) { toast(e.message, "err"); }
   refreshStatus();
@@ -2900,6 +2910,8 @@ function renderUITargets() {
   }
   const bind = (attr, fn) => tbody.querySelectorAll(`[${attr}]`).forEach(b =>
     b.addEventListener("click", () => fn(b.getAttribute(attr))));
+  tbody.querySelectorAll("[data-uitest],[data-uideletepreview]")
+    .forEach(button => { button.disabled = S.busy > 0; });
   bind("data-uitest", uiTargetTest);
   bind("data-uideletepreview", uiTargetDeletePreview);
   bind("data-uipass", id => uiTargetConfirm(id, true));
@@ -2910,6 +2922,8 @@ function renderUITargets() {
 }
 
 async function uiTargetPost(action, payload) {
+  if (["test", "delete-test"].includes(action) && S.busy > 0)
+    throw new Error("当前操作尚未结束，请等待本次结果");
   const resp = await api(`/api/ui-targets/${action}`, {method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({device: DEV_RAW(), contextId: S.contextId || "", ...payload})});
@@ -3060,6 +3074,15 @@ $("#btnLogRefresh").addEventListener("click", refreshLog);
 // ---------- 统一校准向导 ----------
 
 let WZ = null;
+let WZ_ACTION_BUSY = "";
+
+function renderWizardBusy() {
+  const busy = Boolean(WZ_ACTION_BUSY) || S.busy > 0;
+  $$("#btnWzAutoZSafe,#btnWzAutoPark,#btnWzAutoStart,#btnWzTapTest,#btnWzTapSave,#btnWzDelTest,#btnWzDelSave,[data-xytest],[data-vtest]")
+    .forEach(button => { button.disabled = busy; });
+  if (busy) $$("[data-uitest],[data-uideletepreview],#gestureSearchTest,#gestureTopTest,#autoGTestBtn,#autoGesturePanel .row[role] button")
+    .forEach(button => { button.disabled = true; });
+}
 
 async function wz(action, body = {}) {
   const resp = await fetch("/api/wizard", {method: "POST",
@@ -3077,11 +3100,38 @@ async function wz(action, body = {}) {
   return data;
 }
 
-function wzAction(action, body, okMsg) {
-  return wz(action, body)
-    .then(r => { if (okMsg) toast(typeof okMsg === "function" ? okMsg(r) : okMsg, "ok");
-                 refreshWizard(); return r; })
-    .catch(e => toast(e.message, "err"));
+async function wzAction(action, body, okMsg) {
+  // A pending contact must never be queued again by a double click or another
+  // wizard control. Keep stop available through its separate handler.
+  if (WZ_ACTION_BUSY || S.busy > 0) {
+    toast("当前操作尚未结束，请等待本次结果", "err");
+    return;
+  }
+  WZ_ACTION_BUSY = action;
+  setBusy(1);
+  renderWizardBusy();
+  const status = $("#wzActionInfo");
+  status.textContent = ["z-confirm-safe", "z-test", "xy-test", "xy-validate"].includes(action)
+    ? "正在执行本次测试，等待手机触点回报；请勿重复点击。"
+    : "正在处理本次校准操作，请等待结果…";
+  try {
+    const r = await wz(action, body);
+    const message = typeof okMsg === "function" ? okMsg(r) : okMsg;
+    status.textContent = message || "操作完成";
+    if (message) toast(message, "ok");
+    await refreshWizard();
+    return r;
+  } catch (e) {
+    status.textContent = "本次操作未通过：" + e.message;
+    toast(e.message, "err");
+  } finally {
+    WZ_ACTION_BUSY = "";
+    setBusy(-1);
+    renderWizardBusy();
+    renderGesture();
+    renderAutoGestures();
+    renderUITargets();
+  }
 }
 
 function renderWizard() {
@@ -3223,6 +3273,7 @@ function renderWizard() {
     screen_geometry_calibrating: "wzD", target_calibrating: "wzD"};
   if (stageOpen[stage]) wzAutoOpen(stageOpen[stage]);
   renderAuto();
+  renderWizardBusy();
 }
 
 // ---------- AUTO · v1.1 自动校准（只显示服务端状态，前端不做数学/判定） ----------
@@ -3239,11 +3290,21 @@ function renderAuto() {
   const A = WZ && WZ.auto;
   if (!A) return;
   const state = A.state || "IDLE";
+  const regionCriterion = A.validationCriterion === "target_region_v1";
+  const criterionLabel = value => value === "target_region_v1"
+    ? "按目标范围验收" : value ? "未知验收模式（请核对档案）" : "中心精度验收（旧模式）";
+  $("#wzAutoCriterion").textContent =
+    "新一轮默认按目标范围验收：在真实标靶范围内保留短边 5% 的安全余量；独立点验证常用区域，极限边角另测。\n" +
+    (A.runId ? `本轮记录：${criterionLabel(A.validationCriterion)}` : "本轮记录：尚未启动") +
+    (WZ.bundle ? ` · 当前档案：${criterionLabel(WZ.bundle.validation?.criterion)}` : " · 当前档案：无") +
+    "。旧记录不会自动转换为区域验收通过。";
+  const active = Boolean(A.activeRunId);
+  const historicalFailure = !active && Boolean(A.lastFailure);
   const badge = $("#wzAutoBadge");
   badge.className = "badge " + (state === "PROMOTED" ? "ok"
     : ["FAILED", "ABORT", "INVALIDATED", "BOOTSTRAP_REQUIRED"].includes(state) ? "bad"
     : state === "IDLE" ? "warn" : "warn");
-  badge.innerHTML = `<span class="dot"></span>${AUTO_STATE_TEXT[state] || state}`
+  badge.innerHTML = `<span class="dot"></span>${historicalFailure ? "上次 · " : ""}${AUTO_STATE_TEXT[state] || state}`
     + (A.phaseDisplay ? ` · ${A.phaseDisplay}` : "");
   const locks = A.locks || {};
   const lock = k => `${AUTO_LOCK_TEXT[(locks[k] || {}).state] || "?"} v${(locks[k] || {}).version ?? 0}`;
@@ -3259,10 +3320,18 @@ function renderAuto() {
     (zs ? `zSafe=<b>${zs.zSafe}mm</b>（深${zs.tapDepth} F${zs.tapFeed}${zs.validated ? " ✓已验证" : ` <span style="color:#ffce8a">未通过触点回报验证</span>`}）` : `<span style="color:#ffce8a">zSafe 未确认</span>`)
     + " · " + (pk.confirmed ? `SAFE PARK=(${pk.parkX},${pk.parkY},Z${pk.parkZ})` : `<span style="color:#ffce8a">SAFE PARK 未确认</span>`)
     ;
+  $("#wzAutoNextStep").textContent = active
+    ? "自动校准正在运行，请等待本轮结果；需要中断时点击「停止」。"
+    : zs?.validated && pk.confirmed
+      ? "准备已完成：点击参数已验证，SAFE PARK 已确认。下一步点击「启动自动校准」。"
+      : zs?.validated
+        ? "点击参数已验证。将机械臂移到安全停靠位并确认 SAFE PARK，再点击「启动自动校准」。"
+        : "请先在屏幕上方确认 zSafe 和点击参数，收到触点回报后再确认 SAFE PARK。";
   const fail = $("#wzAutoFailure");
   if (A.lastFailure) {
     fail.style.display = "block";
-    fail.textContent = `⛔ ${A.lastFailure.code || ""}：${A.lastFailure.message || ""}`
+    fail.textContent = (historicalFailure ? `上次自动校准（${A.runId || "无编号"}）未通过；当前准备状态见上方。\n` : "")
+      + `⛔ ${A.lastFailure.code || ""}：${A.lastFailure.message || ""}`
       + (A.lastFailure.classification ? `（分类 ${A.lastFailure.classification}）` : "");
   } else fail.style.display = "none";
   // H01（2026-10-05 确认）：采样姿态超限仅提示——过程（轮询）与终局（结束摘要）
@@ -3280,7 +3349,6 @@ function renderAuto() {
     // （用户手动折叠过的区块仍尊重其选择，不反复强制展开）。
     wzAutoOpen("wzAUTO");
   } else warnBox.style.display = "none";
-  const active = Boolean(A.activeRunId);
   $("#btnWzAutoStop").style.display = active ? "" : "none";
   $("#btnWzAutoRetry").style.display = state === "PAUSED_RETRY" ? "" : "none";
   $("#btnWzAutoValidate").style.display = active ? "" : "none";
@@ -3297,6 +3365,13 @@ function renderAuto() {
   for (const s of (A.recentSamples || []).slice().reverse()) {
     const tr = document.createElement("tr");
     const px = v => v == null ? "-" : v.map(x => Math.round(x)).join(", ");
+    const region = s.regionEvidence;
+    const margin = Number.isFinite(region?.marginPx) ? `（边界余量 ${region.marginPx.toFixed(2)}px）` : "";
+    const verdict = regionCriterion
+      ? region?.criterion !== "target_region_v1" || typeof region.passed !== "boolean"
+        ? "尚无区域验收证据"
+        : region.passed ? `✅ 区域命中${margin}` : `✘ 超出安全区域${margin}`
+      : s.errorLevel == null ? "-" : s.errorLevel === "PASS" ? "✅" : s.errorLevel;
     tr.innerHTML = `<td>${(s.phase || "").replace(/_VALIDATE$|_ARM$|_GATE$/, "")}</td>
       <td>${s.targetId || "-"}</td>
       <td class="mono">${px(s.cameraPixel)}</td>
@@ -3306,42 +3381,41 @@ function renderAuto() {
       <td class="mono">${px(s.actualTouch)}</td>
       <td class="mono">${s.cameraProjectionErrorPx ?? "-"} / ${s.touchTargetErrorPx ?? "-"} / ${s.cameraTouchGapPx ?? "-"}</td>
       <td class="mono">${s.armMotionErrorMm ?? "-"}mm</td>
-      <td>${s.errorLevel == null ? "-" : s.errorLevel === "PASS" ? "✅" : s.errorLevel}</td>
+      <td>${verdict}</td>
       <td>${s.classification || "-"}${s.eligible ? "" : "（不入模）"}</td>`;
     rows.appendChild(tr);
   }
   const th = A.thresholds || {};
-  $("#wzAutoThresholds").textContent =
-    `阈值（服务端配置）：PASS≤${th.target_tolerance_px}px · SOFT≤${th.soft_fail_px}px · HARD>${th.soft_fail_px}px`
-    + `（安全边界 ${th.hard_fail_px}px）· MPos 残差≤${th.position_tolerance_mm}mm · H RMS≤${th.camera_rms_target_px}px`
-    + ` · Arm RMS≤${th.arm_rms_target_px}px · 单点重采样≤${th.max_resample} 次 · 迭代≤${th.max_iterations} 轮`;
+  $("#wzAutoThresholds").textContent = regionCriterion || !A.runId
+    ? "验收：实际触点位于真实标靶向内收缩短边 5% 后的安全范围；九点视觉复验和五点独立验证均需通过。" +
+      "模型 RMS、距中心偏差和触点间隙仅作诊断，不以固定 3、10 或 30 px 统一决定目标命中；机械及相机安全检查仍执行。"
+    : `旧模式阈值（本轮历史记录）：PASS≤${th.target_tolerance_px}px · SOFT≤${th.soft_fail_px}px · HARD>${th.soft_fail_px}px`
+      + `（安全边界 ${th.hard_fail_px}px）· MPos 残差≤${th.position_tolerance_mm}mm · H RMS≤${th.camera_rms_target_px}px`
+      + ` · Arm RMS≤${th.arm_rms_target_px}px · 单点重采样≤${th.max_resample} 次 · 迭代≤${th.max_iterations} 轮`;
 }
 
 $("#btnWzAutoZSafe").addEventListener("click", () => {
+  if (WZ_ACTION_BUSY || S.busy > 0) return;
   if (!confirm(`确认当前 Z 为 zSafe 并保存点击参数？\n将在当前位置真实点击一次并等待手机触点回报（请确认探头在手机屏幕上方、手机亮屏停留在校准页）。`)) return;
   wzAction("z-confirm-safe", {
     tapDepth: parseFloat($("#wzAutoTapDepth").value) || 3,
     tapFeed: parseFloat($("#wzAutoTapFeed").value) || 1500,
-  }, r => `参数已验证 ✓ zSafe=${r.zSafe}mm（深${r.tapDepth} F${r.tapFeed}，触点回报 (${Math.round(r.report.screenX)},${Math.round(r.report.screenY)})）`);
+  }, r => `点击参数已验证 ✓ zSafe=${r.zSafe}mm（深${r.tapDepth} F${r.tapFeed}，触点回报 (${Math.round(r.report.screenX)},${Math.round(r.report.screenY)})）。确认 SAFE PARK 后点击「启动自动校准」。`);
 });
 $("#btnWzAutoPark").addEventListener("click", () => {
   if (!confirm("确认把当前机械臂位置作为 SAFE PARK（XY=当前，Z=zSafe）？\n停靠位必须在屏幕外/安全区，且不能遮挡摄像头看手机屏幕（自动校准需要完整看到 9 个绿框）。")) return;
   wzAction("park-confirm", {}, r => `SAFE PARK 已确认：(${r.parkX}, ${r.parkY}, Z${r.parkZ})`);
 });
 $("#btnWzAutoStart").addEventListener("click", async () => {
+  if (S.busy > 0) return;
   const conf = (WZ && WZ.auto && WZ.auto.confirmations) || {};
-  if (!conf.zSafe || !conf.safePark || !conf.safePark.confirmed) {
-    toast("先完成左侧两项操作员确认（zSafe 与 SAFE PARK）", "err");
+  if (!conf.zSafe?.validated || !conf.safePark?.confirmed) {
+    toast("先让 zSafe 点击测试收到触点回报并通过，再确认 SAFE PARK", "err");
     wzAutoOpen("wzAUTO");
     return;
   }
-  if (!confirm("启动自动校准？\n流程：相机九点标定（不点击）→ 中心检查 → 九点采样 → 九点视觉点击复验 → 五点独立验证（含四个近角点）→ 安全停车并保存机械校准。\n基础流程共点击 24 次，重试另计。")) return;
-  setBusy(1);
-  try {
-    const r = await wz("auto-start", {});
-    toast(`自动校准已启动：run ${r.runId}`, "ok");
-  } catch (e) { toast(e.message, "err"); }
-  finally { setBusy(-1); refreshWizard(); }
+  if (!confirm("启动自动校准？\n流程：相机九点标定（不点击）→ 中心检查 → 九点采样 → 九点视觉点击复验 → 五点常用区域独立验证→ 安全停车并保存机械校准。\n基础流程共点击 24 次，重试另计。\n本轮按目标范围验收：真实标靶向内留出短边 5% 安全余量，中心偏差与 RMS 仅作诊断。")) return;
+  await wzAction("auto-start", {}, r => `自动校准已启动：run ${r.runId}`);
 });
 $("#btnWzAutoStop").addEventListener("click", async () => {
   if (!confirm("停止自动校准 runner？会请求安全停止（抬 Z + 尽力回停靠位）。")) return;
@@ -4256,11 +4330,11 @@ function renderAutoGestures() {
   // 开关已删除（2026-09-30 拍板）：可用性由后端校准门禁决定，页面只展示资格。
   $("#autoGSettingGate").textContent = settings && settings.calibrationReady !== true
     ? "自动校准未完成或当前绑定已失效；校准完成后手势/导航自动可用。" : "";
-  $("#autoGTestBtn").disabled = !AUTO_G.gestures || AUTO_G.busy;
+  $("#autoGTestBtn").disabled = !AUTO_G.gestures || AUTO_G.busy || S.busy > 0;
   const blocked = [];
   for (const [action, id] of AUTO_G_ACTIONS) {
     const button = $("#" + id), state = autoGActionState(action);
-    button.disabled = !state.usable || AUTO_G.busy;
+    button.disabled = !state.usable || AUTO_G.busy || S.busy > 0;
     if (!state.usable && state.reasons.length)
       blocked.push(`${button.textContent}：${autoGReasonText(state.reasons)}`);
   }
@@ -4350,6 +4424,7 @@ async function autoGPollTask(taskId, ctx) {
   $("#autoGResult").textContent = "查询超时，结果未核实；请稍后用「查询原结果」，本页不自动重试";
 }
 async function runAutoAction(action) {
+  if (S.busy > 0) return;
   if (action === "double_tap")  // §22.17：调试台双击走旧 screen_gesture 请求，不新增同义调用
     return runBasicGesture("double_tap_center");
   if (AUTO_G.busy) return;
@@ -4406,7 +4481,7 @@ async function runAutoAction(action) {
 for (const [action, id] of AUTO_G_ACTIONS)
   $("#" + id).addEventListener("click", () => runAutoAction(action));
 $("#autoGTestBtn").addEventListener("click", async () => {
-  if (!AUTO_G.gestures || AUTO_G.busy) return;
+  if (!AUTO_G.gestures || AUTO_G.busy || S.busy > 0) return;
   AUTO_G.busy = true; renderAutoGestures();
   try {
     const task = await api("/api/auto-gestures/validate", {method: "POST",

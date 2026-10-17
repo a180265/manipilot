@@ -6,6 +6,7 @@ import subprocess
 import urllib.request
 
 import cv2
+import numpy as np
 import pytest
 import serial
 
@@ -85,6 +86,64 @@ def test_bound_manual_z_accepts_one_stable_contact(bound_env, kind):
         assert env.wizard.state["z"]["autoSafe"]["report"]["screenWidth"] == SCREEN_W
     else:
         assert result["trial"]["ok"] is True
+
+
+@pytest.mark.parametrize("fault", ("unlocatable", "bright_contour_anomaly"))
+@pytest.mark.parametrize("after_contact", (False, True), ids=("before-contact", "after-report"))
+def test_confirm_with_anchor_never_adds_hidden_wake_contacts(
+        bound_env, monkeypatch, fault, after_contact):
+    """The confirmation's repeated pose checks must not consume its touch arming."""
+    env = bound_env
+    env.wizard.state["z"]["tapAnchor"] = {"daemonSession": env.daemon.session}
+    locate = env.wizard._edge_quad
+
+    def observed_quad(**kwargs):
+        if after_contact and env.daemon.tap_count == 0:
+            return locate(**kwargs)
+        if fault == "unlocatable":
+            raise cw.PoseUnlocatable("screen_edge_not_detected：轮廓不可见")
+        quad = deepcopy(locate(**kwargs))
+        quad["corners"][1][0] += 40  # Bright frame, non-rigid contour error, not darkness.
+        return quad
+
+    monkeypatch.setattr(env.wizard, "_edge_quad", observed_quad)
+    result = env.wizard.z_confirm_safe(tap_depth=3, tap_feed=1500)
+    assert env.daemon.tap_count == 1
+    assert result["validated"] is True
+    session = env.ime.get_session(env.wizard.state["imeSessionId"])
+    assert len(session["samples"]) == 1
+    assert session["samples"][0]["sampleId"] == result["report"]["sampleId"]
+    assert session["armed"] is None
+
+
+def test_readonly_pose_check_with_anchor_never_wakes_on_bright_contour_error(bound_env):
+    env = bound_env
+    env.wizard.state["z"]["tapAnchor"] = {"daemonSession": env.daemon.session}
+    env.quad["corners"][1][0] += 40
+    env.wizard._manual_z_phone_pose()
+    assert env.daemon.tap_count == 0
+    assert env.daemon.cmds == []
+
+
+@pytest.mark.parametrize("brightness", (0, 255), ids=("dark", "bright"))
+def test_region_localization_failure_has_no_hidden_contact(bound_env, monkeypatch, brightness):
+    env = bound_env
+    width, height = env.quad["frameW"], env.quad["frameH"]
+    _, jpg = cv2.imencode(".jpg", np.full((height, width, 3), brightness, dtype=np.uint8))
+    monkeypatch.setattr(env.wizard, "_camera_fetch", lambda: (jpg.tobytes(), next(env.frame_seq)))
+    monkeypatch.setattr(env.wizard, "_search_region_provider", lambda: {
+        "source_size": {"width": width, "height": height}})
+
+    def no_contour(*_args, **_kwargs):
+        raise cw.ScreenEdgeError("轮廓异常")
+
+    monkeypatch.setattr(env.wizard, "_gradient_edge_quad", no_contour)
+    monkeypatch.setattr("drivers.screen_edge.locate_screen_quad", no_contour)
+    monkeypatch.setattr("runtime.phone_region_context.locate_quad_in_region", no_contour)
+    with pytest.raises(cw.WizardError, match="若手机暗屏，请先点亮"):
+        env.wizard._edge_quad()
+    assert env.daemon.tap_count == 0
+    assert env.daemon.cmds == []
 
 
 @pytest.mark.parametrize("kind", ("tap", "delete", "confirm"))
@@ -267,6 +326,28 @@ def test_automatic_precheck_accepts_bound_fresh_formal_phone_pose(bound_env):
     env.wizard._auto_runner._auto_phase_precheck(run)
     assert run["edge"]["frameSeq"] > 0
     assert run["edge"]["corners"] == env.quad["corners"]
+    assert env.daemon.cmds == []
+
+
+@pytest.mark.parametrize("anchor_matches", (False, True))
+def test_auto_precheck_never_wakes_at_current_position_when_localization_fails(
+        bound_env, monkeypatch, anchor_matches):
+    env = bound_env
+    run = automatic_run(env)
+    env.daemon.x, env.daemon.y = -100, -100  # A historic touch anchor is not current XY.
+    env.wizard.state["z"]["tapAnchor"] = {
+        "daemonSession": env.daemon.session if anchor_matches else "old-session",
+        "robotX": 0, "robotY": 0,
+    }
+
+    def unavailable(**_kwargs):
+        raise cw.PoseUnlocatable("screen_edge_not_detected：轮廓不可见")
+
+    monkeypatch.setattr(env.wizard, "_edge_quad", unavailable)
+    with pytest.raises(cw.AutoRunError) as error:
+        env.wizard._auto_runner._auto_phase_precheck(run)
+    assert error.value.park is False
+    assert env.daemon.tap_count == 0
     assert env.daemon.cmds == []
 
 

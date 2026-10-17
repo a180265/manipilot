@@ -1747,6 +1747,31 @@ def auto_ready_env(tmp_path, *, register_delete_target=True, **kwargs) -> AutoEn
     return env
 
 
+@pytest.fixture
+def legacy_auto_calibration(monkeypatch):
+    """历史持久候选无 criterion 字段；仅测试夹具在启动线程前恢复旧格式。"""
+    def configure(env):
+        runner = env.wizard._auto_runner
+        spawn = runner._auto_spawn
+
+        def spawn_legacy(run, *args, **kwargs):
+            run.pop("validationCriterion", None)
+            run["validationPlan"] = [
+                {"id": name, "u": u, "v": v} for name, u, v in [
+                    ("validation-1", .05, .05), ("validation-2", .95, .05),
+                    ("validation-3", .05, .95), ("validation-4", .95, .95),
+                    ("validation-5", .50, .65),
+                ]
+            ]
+            cb.save_candidate(run, env.wizard.data_root)
+            return spawn(run, *args, **kwargs)
+
+        monkeypatch.setattr(runner, "_auto_spawn", spawn_legacy)
+        return env
+
+    return configure
+
+
 def wait_auto(env, predicate, timeout=40.0, desc=""):
     deadline = _time.time() + timeout
     view = None
@@ -2347,14 +2372,19 @@ def test_auto_service_restart_invalidates_run(tmp_path):
     assert wizard2.auto_view()["activeRunId"] is None
 
 
-def test_auto_phase2_soft_fail_auto_iterates_to_convergence(tmp_path):
+@pytest.mark.parametrize("region_mode", (False, True), ids=("legacy-pixels", "target-region"))
+def test_auto_phase2_soft_fail_auto_iterates_to_convergence(
+        tmp_path, legacy_auto_calibration, region_mode):
     """Phase 2 单点 SOFT_FAIL：不再暂停等操作员——自动重采该点+全量重拟合+复验，
     在迭代预算内收敛提升（用户拍板 2026-09-03：校准应自动计算而非报错/暂停）。
 
     注入：第一轮 Phase 2 的 calibration-8 三次触点恒偏 +20px；
-    第二轮重采后恢复，并对新模型重新验收所有点。
+    旧像素候选第二轮重采后恢复，并对新模型重新验收所有点；
+    新区域候选的同一 +20px 仍在靶内，首轮通过，不应重复接触。
     """
     env = auto_ready_env(tmp_path)
+    if not region_mode:
+        legacy_auto_calibration(env)
     env.noise_active = True
     noisy_point = next(p for p in cw.AUTO_PLAN_POINTS if p[0] == "calibration-8")
 
@@ -2362,7 +2392,7 @@ def test_auto_phase2_soft_fail_auto_iterates_to_convergence(tmp_path):
         run = env.wizard._auto_runner._auto.get("run") or {}
         if (run.get("phase") == "PHASE2_VALIDATE" and run.get("iteration") == 1
                 and run.get("lastCameraTarget") == list(noisy_point[1:])):
-            return (20.0, 0.0)  # 6 < 20 ≤ 30 → SOFT_FAIL
+            return (20.0, 0.0)  # 旧固定像素标准为 SOFT_FAIL；新目标范围标准为 PASS。
         return (0.0, 0.0)
 
     env.noise_fn = windowed_noise
@@ -2374,11 +2404,21 @@ def test_auto_phase2_soft_fail_auto_iterates_to_convergence(tmp_path):
     view = wait_auto(env, lambda v: v["state"] in ("PROMOTED", "FAILED"), desc="终态")
     assert view["state"] == "PROMOTED"
     candidate = cb.load_candidate("arm-01", run_id, tmp_path)
-    # 自动迭代发生：iteration_resample 事件针对 calibration-8，历史 ≥2 轮
     events = [e for e in candidate["events"] if e["event"] == "iteration_resample"]
-    assert events and events[0]["detail"]["points"] == ["calibration-8"]
-    assert len(candidate.get("history") or []) >= 2
-    assert "calibration-8" in (candidate.get("phase2SoftFails") or {})
+    if region_mode:
+        assert candidate["validationCriterion"] == cb.REGION_VALIDATION_CRITERION
+        assert events == []
+        assert len(candidate.get("history") or []) == 1
+        assert not candidate.get("phase2SoftFails")
+        point = candidate["phase2"]["calibration-8"]
+        assert point["touchTargetErrorPx"] == pytest.approx(20, abs=.1)
+        assert cb.calibration_region_point_passed(point, candidate["screen"])
+    else:
+        assert "validationCriterion" not in candidate
+        # 旧候选必须保留自动迭代与全点重新验收，不能为迁移删去这些断言。
+        assert events and events[0]["detail"]["points"] == ["calibration-8"]
+        assert len(candidate.get("history") or []) >= 2
+        assert "calibration-8" in (candidate.get("phase2SoftFails") or {})
     assert len(candidate.get("phase2") or {}) == 9
     final_checks = [s for s in candidate["samples"]
                     if s["phase"] == "PHASE2_VALIDATE"

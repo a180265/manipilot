@@ -34,7 +34,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -127,6 +127,7 @@ _ERROR_HTTP_STATUS = {
     "device_context_required": 409,
     "device_context_mismatch": 409,
     "device_maintenance_busy": 409,  # FIX-05（§4.1）：安装占用中，立即拒绝不排队
+    "debug_operation_busy": 409,
     "device_context_expired": 410,
     "input_acceptance_removed": 410,
     "camera_binding_mismatch": 409,
@@ -203,15 +204,39 @@ _INSTALLATION_LOCKED_POST_PATHS = frozenset({
 _INSTALLATION_LOCKED_GET_PATHS = frozenset({
     "/api/calibrated-scroll",     # Fleet 任务执行入口（提交校准直驱滑动任务）
 })
-# 自动校准入口：向导中会驱动机械/进入采集-动作闭环的 action（状态/保存/确认/
-# 停止类不取锁——auto-state、cancel、auto-stop 等必须随时可用）。
+# 自动校准入口：向导中会驱动机械/进入采集-动作闭环的 action。
+# z-confirm-safe 含真实测试点击；auto-state、cancel、auto-stop 不取安装锁。
 _WIZARD_INSTALLATION_LOCKED_ACTIONS = frozenset({
-    "start", "capture-hover", "z-test", "xy-test", "xy-fit", "xy-validate",
+    "start", "capture-hover", "z-test", "z-confirm-safe", "xy-test", "xy-fit", "xy-validate",
     "xy-finish", "edge-capture", "camera-fit", "visual-verify", "visual-verify-all",
     "target-test", "acceptance-execute", "finish", "auto-start", "auto-retry",
     "auto-validate", "auto-acceptance-resume", "auto-motion-resume",
     "auto-acceptance-execute",
 })
+
+# 同一进程内的共享安装锁允许并发，daemon 锁只覆盖单条命令；均不能保护
+# 「布防→接触→等回报→保存锚点」这一整次操作。按设备立即拒绝交错请求，
+# 禁止排队后补动作；急停、停止和只读查询保持原入口。
+_DEVICE_OPERATION_LOCKS: dict[str, threading.Lock] = {}
+_DEVICE_OPERATION_LOCKS_GUARD = threading.Lock()
+_OPERATION_STATE_POST_PATHS = frozenset({
+    "/api/connect", "/api/serial-bind", "/api/estop_reset",
+})
+_WIZARD_CONCURRENT_ACTIONS = frozenset({"auto-state", "auto-stop", "cancel"})
+
+
+@contextmanager
+def _device_operation_guard(device: str):
+    with _DEVICE_OPERATION_LOCKS_GUARD:
+        lock = _DEVICE_OPERATION_LOCKS.setdefault(device, threading.Lock())
+    if not lock.acquire(blocking=False):
+        error = RuntimeError("当前设备正在执行调试或校准操作，请等待本次结果；本请求未执行，也不会排队补做。")
+        error.code = "debug_operation_busy"
+        raise error
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def _shared_installation_lock(device: str):
@@ -221,14 +246,28 @@ def _shared_installation_lock(device: str):
                                        exclusive=False)
 
 
-def _enter_installation_guard(device: str, *, path: str):
-    """动作端点在认领前进入共享安装锁；不取锁的路径返回 None（try/finally 释放）。"""
-    if path not in _INSTALLATION_LOCKED_POST_PATHS \
-            and path not in _INSTALLATION_LOCKED_GET_PATHS:
+def _enter_installation_guard(device: str, *, path: str, wizard_action: str | None = None):
+    """请求认领前取得设备操作互斥及安装锁；调用方 finally 释放整次操作。"""
+    installation_required = (
+        path in _INSTALLATION_LOCKED_POST_PATHS
+        or path in _INSTALLATION_LOCKED_GET_PATHS
+        or (path == "/api/wizard" and wizard_action in _WIZARD_INSTALLATION_LOCKED_ACTIONS)
+    )
+    operation_required = (
+        installation_required or path in _OPERATION_STATE_POST_PATHS
+        or (path == "/api/wizard" and wizard_action not in _WIZARD_CONCURRENT_ACTIONS)
+    )
+    if not operation_required:
         return None
-    lock = _shared_installation_lock(device)
-    lock.__enter__()
-    return lock
+    guards = ExitStack()
+    try:
+        guards.enter_context(_device_operation_guard(device))
+        if installation_required:
+            guards.enter_context(_shared_installation_lock(device))
+        return guards
+    except Exception:
+        guards.close()
+        raise
 
 
 # ---------- 自动手势/自动导航代理（§13：调试台与正式走同一后端 8788） ----------
@@ -4073,11 +4112,11 @@ class Handler(BaseHTTPRequestHandler):
         device = normal_device(body.get("deviceId") or body.get("device"))
         _REQUEST_CONTEXT.device = device
         daemon = daemon_for(device)
-        # FIX-05（§4.1）：动作端点在认领前取得本设备共享安装文件锁（非阻塞，
-        # 忙则立即 409 不排队）；持有到最后动作/安全收尾结束（finally 释放）。
-        # 顺序=安装锁→原动作/输入短锁；STOP/急停/输入关闭/只读不经过这里。
+        # 请求级设备互斥→共享安装锁→原动作/输入短锁；均不排队。
+        # 参数测试须从布防前持有到回报、保存及安全收尾结束；STOP/急停不取锁。
         try:
-            _installation_guard = _enter_installation_guard(device, path=path)
+            _installation_guard = _enter_installation_guard(
+                device, path=path, wizard_action=str(body.get("action", "")).strip())
         except Exception as exc:
             log_op("installation_lock", {"path": path}, ok=False, detail=str(exc))
             status, payload = api_error(exc)
@@ -4519,15 +4558,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("未知手势档案操作")
             elif path == "/api/wizard":
                 action = str(body.get("action", "")).strip()
-                # FIX-05（§4.1）：自动校准动作入口认领前取共享安装锁；
-                # 状态/保存/确认/停止类不取锁（动作持锁期间仍可用）。
-                with (_shared_installation_lock(device)
-                      if action in _WIZARD_INSTALLATION_LOCKED_ACTIONS
-                      else nullcontext()):
-                    require_context(device, body.get("contextId") or body.get("context"),
-                                    motion=False)
-                    wizard = get_wizard(device)
-                    result = wizard_http(wizard, action, body)
+                require_context(device, body.get("contextId") or body.get("context"),
+                                motion=False)
+                wizard = get_wizard(device)
+                result = wizard_http(wizard, action, body)
                 if action == "auto-state":
                     # A5：页面轮询兜底触发 PROMOTE 平台同步（run 去重防双发）
                     try:
