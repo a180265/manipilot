@@ -3015,6 +3015,24 @@ class CalibrationWizard:
         except AutoRunError as exc:
             if not implicit:
                 raise WizardError(exc.message) from exc
+            # 2026-10-17 换机重校死锁修复：已存边缘基准复核失败（晋级蒸馏曾丢
+            # frameW/frameH，或手机挪位后旧四角超限）时，先按 §6.1 定位顺序降级
+            # 实测边缘重捕——本会话 live 帧，帧尺寸与四角同源，绑定一致性检查
+            # 天然通过。实测也不可行（PoseUnlocatable 由调用方按 2026-09-29
+            # 拍板记「姿态参考缺席」）或实测自身不稳定（帧间真位移）时，
+            # 落回原有标靶反算链路。显式传入的基准仍必须原样通过。
+            try:
+                live = self._edge_quad()
+            except (WizardError, AutoRunError):
+                live = None
+            if live is not None:
+                fallback = {"edge": live, "binding": deepcopy(facts),
+                            "daemonSession": status["session"], "phoneSessionId": sid}
+                try:
+                    self._manual_phone_pose_stability(fallback)
+                    return fallback
+                except AutoRunError:
+                    pass
             target = self._target_geometry_edge(status, facts, sid)
             if target is None:
                 raise WizardError(exc.message) from exc

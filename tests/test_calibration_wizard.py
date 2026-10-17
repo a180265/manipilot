@@ -998,7 +998,7 @@ def test_acceptance_execute_runs_full_chain(env):
     assert r2["executed"] is True
     assert "TAP 3.000 F1500 P2.2" in env.daemon.cmds
 
-    # 应用项不可执行（人工确认）
+    # 微信项不可执行（人工确认）
     with pytest.raises(WizardError, match="人工确认"):
         env.wizard.acceptance_execute("wechat", "send_message", nx=0.5, ny=0.5)
     # 自动 OCR 不可用时才提示回退到「仅标记」坐标；失败路径必须取消任务
@@ -1240,6 +1240,73 @@ def test_session_restart_preserves_calibration_and_requires_rebind(tmp_path):
     with pytest.raises(WizardError, match="尚未完成重新复核"):
         env.wizard.auto_start()
     assert env.daemon.cmds == []
+
+
+def test_z_confirm_falls_back_to_live_edge_when_carried_edge_distilled_stale(tmp_path):
+    """2026-10-17 换机重校死锁修复：晋级蒸馏把 geometry.edge 缩成 3 键（丢
+    frameW/frameH）且手机已挪位（旧四角超限）时，z 复核按 §6.1 顺序降级
+    实测边缘重捕，不得报「帧尺寸与设备绑定不一致」死锁。
+
+    现场链路（真机 2026-10-17）：motion_ready 档案→挪手机→重新 start→
+    z_confirm_safe→saved edge 无 frameW→binding 检查硬拒，且重试永远同败。
+    """
+    env = Env(tmp_path)
+    env.wizard.start("k40-01")
+    old_sid = env.wizard.state["imeSessionId"]
+    env.open_phone()
+    wait_stage(env, cw.STAGE_Z_READY)
+
+    with env.wizard._lock:
+        env.wizard.state["z"].update({
+            "hoverZ": 2.0,
+            "autoSafe": {"zSafe": 5.0, "tapDepth": 3.0, "validated": True},
+            "trials": [{"sampleId": "z-1", "ok": True}],
+        })
+        env.wizard.state["xy"] = {"validationPassed": True, "accepted": []}
+        env.wizard.state["safePark"] = {
+            "confirmed": True, "parkX": 11.0, "parkY": 12.0, "parkZ": 5.0,
+            "source": "test",
+        }
+        # 蒸馏形态：晋级写入的 3 键 edgeModel（无 frameW/frameH/frameSeq），
+        # 且四角相对 live 检测（env.quad）整体偏移=手机挪位后的旧基准。
+        stale_corners = [[c[0] + 30.0, c[1] + 25.0] for c in env.quad["corners"]]
+        env.wizard.state["geometry"] = {
+            "edge": {"corners": stale_corners, "capturedAt": "2026-10-16T21:39:20",
+                     "source": "auto_calibration"},
+            "homography": {"homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                           "reprojectionRmsPx": 0.1},
+        }
+        env.wizard._sync_bundle()
+        env.wizard._save_state()
+
+    env2 = Env(tmp_path)  # 调试台重启：新实例读回蒸馏态
+    env2.wizard.start("k40-01")
+    assert env2.wizard.state["sessionRebind"]["required"] is True
+    env2.open_phone()
+    wait_stage(env2, cw.STAGE_Z_READY)
+    env2.ime.script = auto_report(env2.ime, env2.daemon)
+
+    result = env2.wizard.z_confirm_safe(tap_depth=3.0)
+    assert result["validated"] is True
+    assert env2.wizard.state["sessionRebind"]["pendingScopes"]["z"] is False
+
+
+def test_auto_promote_edge_model_retains_frame_dimensions(tmp_path):
+    """2026-10-17：晋级蒸馏必须保留 frameW/frameH——会话复核的绑定一致性
+    检查（edge.frameW == binding.frameWidth）依赖它；丢字段=换会话重核死锁。
+    """
+    env = auto_ready_env(tmp_path)
+    env.wizard.auto_start(defer_input_acceptance=False)
+    run_id = _first_active_run_id(env)
+    wait_auto(env, lambda v: v["phase"] == "E_ACCEPTANCE", desc="E")
+    finish_e_acceptance(env, run_id)
+    wait_auto(env, lambda v: v["state"] == "PROMOTED", desc="提升")
+
+    promoted = cb.load_bundle("arm-01", tmp_path)
+    model = promoted["screen"]["edgeModel"]
+    assert model.get("frameW") == CAM_W, "晋级 edgeModel 丢失 frameW"
+    assert model.get("frameH") == CAM_H, "晋级 edgeModel 丢失 frameH"
+    assert env.wizard.state["geometry"]["edge"].get("frameW") == CAM_W
 
 
 def test_p09_park_entries_check_park_own_confirmed_session(tmp_path):
@@ -2852,7 +2919,7 @@ def test_auto_promote_with_debug_only_wechat_deferred(tmp_path):
     run_id = _first_active_run_id(env)
     wait_auto(env, lambda v: v["phase"] == "E_ACCEPTANCE", desc="E 验收")
 
-    # 只记录调试两项 ✓（应用四项不记）
+    # 只记录调试两项 ✓（微信四项不记）
     finish_e_acceptance(env, run_id)
     view = wait_auto(env, lambda v: v["state"] == "PROMOTED", desc="仅调试项提升")
     bundle = cb.load_bundle("arm-01", tmp_path)

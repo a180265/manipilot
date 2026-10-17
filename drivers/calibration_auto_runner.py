@@ -2815,7 +2815,11 @@ class AutoRunner:
         # 门禁 screen_edge_changed 47.8px 误报）。同时同步向导 state，
         # 保证 gate（读 state 构建的档案视图）与磁盘档案一致。
         if run.get("edge"):
+            # frameW/frameH 必须随晋级保留（2026-10-17）：会话重核的绑定一致性
+            # 检查（edge.frameW == binding.frameWidth）依赖它，丢字段=换会话死锁。
             screen["edgeModel"] = {"corners": run["edge"]["corners"],
+                                   "frameW": run["edge"].get("frameW"),
+                                   "frameH": run["edge"].get("frameH"),
                                    "tolerancePx": cb.DEFAULT_EDGE_TOLERANCE_PX,
                                    "safeInsetPx": cb.DEFAULT_SAFE_INSET_PX,
                                    "capturedAt": run["edge"]["capturedAt"],
@@ -2945,7 +2949,12 @@ class AutoRunner:
         run["qualificationStatus"] = promoted["status"]
         if run.get("edge"):
             geometry = dict(self.host.state.get("geometry") or {})
+            # frameW/frameH 必须随晋级保留（2026-10-17）：会话重核的绑定一致性
+            # 检查依赖它，蒸馏丢字段=换会话重核死锁（真机换机重校实爆）。
             geometry["edge"] = {"corners": run["edge"]["corners"],
+                                "frameW": run["edge"].get("frameW"),
+                                "frameH": run["edge"].get("frameH"),
+                                "frameSeq": run["edge"].get("frameSeq"),
                                 "capturedAt": run["edge"]["capturedAt"],
                                 "source": "auto_calibration"}
             self.host.state["geometry"] = geometry
