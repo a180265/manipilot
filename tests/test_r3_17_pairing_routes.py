@@ -54,13 +54,14 @@ def env(tmp_path, monkeypatch):
         "screen_ime_enabled": True,
     }, root=tmp_path)
     runtime = ArmFleetRuntime(config)
+    # Deployment identity policy is selected while routes are mounted.
+    runtime.ime_pairing_trust = dict(TRUST)
     app = create_app(runtime)
     app.state.runtime = runtime
     app.state.device_configs = make_device_configs(1)
     # 隔离配对服务（真实服务，独立临时库）+ 信任材料（部署输入）
     runtime.ime_pairing = ImePairingService(tmp_path / "ime_pairing.db")
     runtime.ime_pairing.init_server_id()
-    runtime.ime_pairing_trust = dict(TRUST)
     with TestClient(app) as client:
         yield {"client": client, "runtime": runtime, "tmp_path": tmp_path}
 

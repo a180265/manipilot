@@ -569,11 +569,13 @@ class LayoutRegionService:
         now = self._now()
         arm_getter = self._env_get("arm_binding")
         arm_id = arm_getter(device_id) if callable(arm_getter) else ""
+        if not isinstance(arm_id, str) or not arm_id.strip():
+            raise RegionError("source_binding_changed", "缺少已登记的机械臂绑定身份，请先核对设备绑定")
         installation_binding = {
             "camera_id": identity["camera_id"],
             "camera_device_unique_id": identity["camera_device_unique_id"],
             "camera_binding_id": identity["camera_binding_id"],
-            "arm_binding_id": arm_id or identity["camera_device_unique_id"],
+            "arm_binding_id": arm_id,
         }
         source_binding = {
             "device_id": device_id,
@@ -755,6 +757,10 @@ class LayoutRegionService:
         identity = self._source_identity(self._env_get("evidence_get")(
             preview["source_binding"]["evidence_id"]))
         _frame_record, _frame_bytes = self._fresh_frame(device_id, identity)
+        arm_getter = self._env_get("arm_binding")
+        if callable(arm_getter) and arm_getter(device_id) != \
+                preview["source_binding"]["installation_binding"]["arm_binding_id"]:
+            raise RegionError("source_binding_changed", "机械臂绑定已变化，请重新预览粗框")
         operation_id = str(uuid.uuid4())
         if publish:
             # 检测门已撤（业主 2026-10-16 拍板：人工画框直接采信——画框人必
@@ -990,6 +996,12 @@ class LayoutRegionService:
                 if current_binding_id and bound \
                         and current_binding_id != bound:
                     status = "needs_review"
+                    reasons.append("source_binding_changed")
+            arm_getter = self._env_get("arm_binding")
+            if record is not None and callable(arm_getter) and arm_getter(device_id) != \
+                    (record.get("installation_binding") or {}).get("arm_binding_id"):
+                status = "needs_review"
+                if "source_binding_changed" not in reasons:
                     reasons.append("source_binding_changed")
             if pending_ref is not None and pointer is None:
                 status = "needs_review"

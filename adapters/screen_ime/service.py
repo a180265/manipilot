@@ -569,7 +569,8 @@ class ImeTaskRepository:
         return task, created
 
     # ---- 手机端长轮询取任务 ----
-    async def next_task(self, device_id: str, wait_seconds: int) -> dict | None:
+    async def next_task(self, device_id: str, wait_seconds: int, *,
+                        disconnect_check=None) -> dict | None:
         self._bind_loop()
         self._require_control_ready("next")
         _require_text(device_id, "deviceId")
@@ -577,6 +578,10 @@ class ImeTaskRepository:
         deadline = asyncio.get_running_loop().time() + remaining
         async with self._condition:
             while True:
+                # A phone may time out/close its input view during the long poll.
+                # Do not claim its one-time delivery after ASGI saw disconnect.
+                if disconnect_check is not None and await disconnect_check():
+                    return None
                 row = self._query_one(
                     "SELECT * FROM tasks WHERE device_id=? AND status IN ('pending','displayed')"
                     " AND task_id NOT IN (SELECT task_id FROM ime_deliveries)"
@@ -604,9 +609,11 @@ class ImeTaskRepository:
                 if remaining <= 0:
                     return None
                 try:
-                    await asyncio.wait_for(self._condition.wait(), timeout=remaining)
+                    interval = min(remaining, 0.25) if disconnect_check is not None else remaining
+                    await asyncio.wait_for(self._condition.wait(), timeout=interval)
                 except asyncio.TimeoutError:
-                    return None
+                    if disconnect_check is None:
+                        return None
 
     # ---- Agent 侧等待状态 ----
     async def wait_for_status(self, task_id: str, expected: set[str], wait_seconds: int,

@@ -175,8 +175,8 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         self.estop = EstopController(
             self.store, self.audit, self.events, self.devices,
             None if self.pre_enable_maintenance else self.reporter)
-        # R2-21：每机独立几何凭据登记（token → ime_device_id）；生产登记
-        # 方式待用户确认，未配置时几何三入口一律 401（§7.1 安全默认）。
+        # R2-21：配对部署的每机独立几何凭据登记（token → ime_device_id）。
+        # 无 trust 的既有 IP 直连部署保留唯一绑定门，不使用配对凭据门。
         self._phone_credentials: dict[str, str] = {}
         self._phone_credentials_lock = threading.Lock()
         # R3-17：手机配对服务（仅当 data/ime_pairing.db 已离线初始化时挂载，
@@ -235,7 +235,8 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         """R3-17 部署输入：ARMFLEET_IME_PAIRING_TRUST_FILE（0600 JSON）→ trust。
 
         字段 https_origin / ca_cert_b64 / spki_sha256（与配对路由消费形状一致）；
-        未配置、坏 JSON 或字段不全一律 None（创建邀请时明确拒绝，不降级）。
+        未配置返回 None（现有直连模式）。显式配置但读取/结构错误则启动失败，
+        不得把配置失效当成未配置而关闭手机身份认证。
         """
         import json as _json
         import os as _os
@@ -245,14 +246,14 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         try:
             doc = _json.loads(Path(raw).read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return None
+            raise ValueError("配对信任配置无法读取或解析，拒绝启动") from None
         if not isinstance(doc, dict):
-            return None
+            raise ValueError("配对信任配置必须是对象，拒绝启动")
         trust = {key: doc.get(key)
                  for key in ("https_origin", "ca_cert_b64", "spki_sha256")}
         if not all(isinstance(value, str) and value.strip()
                    for value in trust.values()):
-            return None
+            raise ValueError("配对信任配置缺少必要字段，拒绝启动")
         return trust
 
     # ================= 生命周期 =================
@@ -847,10 +848,13 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         - 令牌有效但归属与路径手机不一致 → 403 ime_geometry_forbidden；
         - 该手机不是任何机械臂当前唯一绑定 → 403 ime_geometry_forbidden
           （校准档案是正式绑定源 input_binding）。
-        身份不得来自路径/body/自报 header/IP/client_instance_id；凭据核验
-        通过后才进入会话解析或 nonce 领取。
+        配置配对 trust 的部署按上述凭据验证。未配置 trust 时与既有 IP
+        直连模式一致，不要求配对令牌，但仍要求当前唯一机械臂绑定。
         """
         from runtime.ime_geometry import ImeGeometryError
+        if self.ime_pairing_trust is None:
+            self._ime_geometry_bound_arm(ime_device_id)
+            return
         token = credentials.get("token") if isinstance(credentials, dict) else credentials
         if not isinstance(token, str) or not token:
             raise ImeGeometryError(
@@ -876,6 +880,11 @@ class ArmFleetRuntime(PluginCapabilityMixin):
             raise ImeGeometryError(
                 403, "ime_geometry_forbidden",
                 f"凭据属于手机 {phone_id}，不能访问 {ime_device_id} 的几何会话")
+        self._ime_geometry_bound_arm(ime_device_id)
+
+    def _ime_geometry_bound_arm(self, ime_device_id: str) -> str:
+        """Both deployment modes require one current arm binding."""
+        from runtime.ime_geometry import ImeGeometryError
         bound: list[str] = []
         for device in self.devices.all():
             try:
@@ -889,6 +898,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                 403, "ime_geometry_forbidden",
                 f"手机 {ime_device_id} 不是任何机械臂的当前唯一绑定"
                 f"（匹配 {len(bound)} 台），拒绝几何会话访问")
+        return bound[0]
 
     async def _ime_live_geometry_target(self, device_id: str, target_id: str) -> dict:
         """FIX-15（§11.13.2）：候选/删除点击规划前的实时几何快照门。
@@ -942,6 +952,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                         "cameraX": (bounds["left"] + bounds["right"]) / 2.0,
                         "cameraY": (bounds["top"] + bounds["bottom"]) / 2.0,
                         "bounds": deepcopy(bounds),
+                        "display": deepcopy(display),
                         "frameW": display["width_px"],
                         "frameH": display["height_px"],
                         "runtimeSessionId": snap.get("runtime_session_id"),
@@ -961,8 +972,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                             expected_session=snap.get("runtime_session_id"),
                             expected_bounds=deepcopy(bounds),
                             target_ref=ref,
-                            expected_display={"width_px": display["width_px"],
-                                              "height_px": display["height_px"]})
+                            expected_display=deepcopy(display))
                     return ref
                 last_reason = "target_not_executable"
                 continue
@@ -1001,18 +1011,17 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                 raise _DriverError("ime_geometry_unavailable",
                                    "最终接触核验：目标范围或落点参数被修改，禁止 TAP")
             def _credential_and_binding_guard() -> None:
-                # R3-17：配对凭据（生产）或登记凭据（测试/内部装配）任一
-                # 有效即通过；撤销后立即失效。
-                paired = False
+                # 配对部署须有有效凭据；IP 直连仍走下方唯一绑定复核。
+                identity_ok = self.ime_pairing_trust is None
                 pairing = getattr(self, "ime_pairing", None)
-                if pairing is not None:
-                    paired = pairing.phone_has_active_credential(ime_device)
-                if not paired:
+                if not identity_ok and pairing is not None:
+                    identity_ok = pairing.phone_has_active_credential(ime_device)
+                if not identity_ok:
                     with self._phone_credentials_lock:
-                        paired = any(
+                        identity_ok = any(
                             phone == ime_device
                             for phone in self._phone_credentials.values())
-                if not paired:
+                if not identity_ok:
                     raise _DriverError(
                         "ime_geometry_unavailable",
                         "最终接触核验：手机几何凭据已撤销/未配对，禁止 TAP")
@@ -1023,6 +1032,9 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                         "ime_geometry_unavailable",
                         f"最终接触核验：设备当前绑定手机 {bound or '空'} 与"
                         f"规划手机 {ime_device} 不一致，禁止 TAP")
+                if self._ime_geometry_bound_arm(ime_device) != device_id:
+                    raise _DriverError("ime_geometry_unavailable",
+                                       "最终接触核验：手机唯一绑定已变化，禁止 TAP")
             try:
                 snapshot = self.ime_geometry.consume_for_click(
                     ime_device, nonce, target_id=target_id,

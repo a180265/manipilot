@@ -67,6 +67,7 @@ function pendingHarness() {
     return nodes.get(selector);
   };
   node('#wzAutoTapFeed').value = '2000';
+  node('#wzAutoTapDwell').value = '0';
   const state = {busy: 0, contextId: 'ctx-1'};
   const context = {
     document: {createElement: () => ({innerHTML: ''})},
@@ -82,16 +83,18 @@ function pendingHarness() {
     }),
   };
   const requestCode = script.slice(script.indexOf('let WZ = null;'), script.indexOf('function renderWizard()'));
-  const safeHandler = script.slice(script.indexOf('$("#btnWzAutoZSafe").addEventListener'),
+  const safeHandler = script.slice(script.indexOf('$("#wzAutoTapDwell").addEventListener'),
     script.indexOf('$("#btnWzAutoPark").addEventListener'));
   const tapHandler = script.slice(script.indexOf('$("#btnWzTapTest").addEventListener'),
     script.indexOf('$("#btnWzTapSave").addEventListener'));
+  const diagnosticTap = script.slice(script.indexOf('$("#btnTap").addEventListener'),
+    script.indexOf('$("#btnHover").addEventListener'));
   const motionCode = script.slice(script.indexOf('function setBusy(delta)'), script.indexOf('// ---------- 状态轮询'));
   const emergencyHandler = script.slice(script.indexOf('$("#btnEstop").addEventListener'),
     script.indexOf('$("#btnEstopReset").addEventListener'));
   const autoRenderCode = script.slice(script.indexOf('const AUTO_STATE_TEXT'),
     script.indexOf('$("#btnWzAutoZSafe").addEventListener'));
-  vm.runInNewContext(motionCode + requestCode + autoRenderCode + safeHandler + tapHandler + handlers + emergencyHandler + `
+  vm.runInNewContext(motionCode + requestCode + autoRenderCode + safeHandler + tapHandler + diagnosticTap + handlers + emergencyHandler + `
     globalThis.setWizard = value => { WZ = value; };
     globalThis.redrawBusy = renderWizardBusy;
   `, context);
@@ -112,6 +115,54 @@ test('safe Z confirmation sends one contact request while pending, then unlocks'
   assert.equal(h.node('#btnWzAutoZSafe').disabled, false);
   assert.equal(h.state.busy, 0);
   assert.match(h.node('#wzActionInfo').textContent, /参数已验证/);
+});
+
+test('automatic confirmation carries the chosen dwell in milliseconds once', async () => {
+  const h = pendingHarness();
+  h.node('#wzAutoTapDwell').value = '100';
+  h.events['#wzAutoTapDwell']();
+  h.events['#btnWzAutoZSafe']();
+  h.events['#btnWzAutoZSafe']();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].body.tapDwellMs, 100);
+  assert.match(html, /额外停留.*实际触屏时长/);
+  assert.match(html, /下压.*抬起.*时间/);
+  assert.match(html, /重新开始校准/);
+});
+
+test('dwell hydration preserves saved settings and does not overwrite operator edits', () => {
+  const h = pendingHarness();
+  h.context.setWizard({z: {tap: {dwellMs: 120}}, bundle: {z: {tapDwellMs: 120}}, auto: {}});
+  h.context.renderAuto();
+  assert.equal(h.node('#wzAutoTapDwell').value, '120');
+  h.node('#wzAutoTapDwell').value = '50';
+  h.events['#wzAutoTapDwell']();
+  h.context.renderAuto();
+  assert.equal(h.node('#wzAutoTapDwell').value, '50');
+});
+
+test('diagnostic tap converts milliseconds once without saving formal parameters', async () => {
+  const h = pendingHarness();
+  h.node('#tapDwell').value = '50';
+  h.node('#tapFeed').value = '2000';
+  h.events['#btnTap']();
+  h.events['#btnTap']();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].url, '/api/tap');
+  assert.equal(h.calls[0].body.dwell, .05);
+  await flush();
+  assert.equal(h.calls.length, 1);
+});
+
+test('invalid dwell never sends either diagnostic or formal confirmation', () => {
+  for (const value of ['-1', '2001', '1.5', 'invalid']) {
+    const h = pendingHarness();
+    h.node('#tapDwell').value = value;
+    h.node('#wzAutoTapDwell').value = value;
+    h.events['#btnTap']();
+    h.events['#btnWzAutoZSafe']();
+    assert.equal(h.calls.length, 0);
+  }
 });
 
 test('failed confirmation is visible and allows one deliberate retry', async () => {

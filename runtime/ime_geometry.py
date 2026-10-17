@@ -512,6 +512,10 @@ class ImeGeometryService:
                     (expected_display.get("width_px"), expected_display.get("height_px")):
                 raise ImeGeometryError(409, "ime_geometry_view_stale",
                                        "最终接触核验：display 尺寸与规划不一致")
+            if any(key in expected_display and display.get(key) != expected_display[key]
+                   for key in ("display_id", "rotation", "density")):
+                raise ImeGeometryError(409, "ime_geometry_view_stale",
+                                       "最终接触核验：display 方向、密度或显示器与规划不一致")
             current_task = snap.get("current_task_id")
             if current_task != expected_task:
                 raise ImeGeometryError(409, "ime_geometry_task_changed",

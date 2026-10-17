@@ -580,6 +580,8 @@ def _runtime_with_real_device(tmp_path, controller: EmulatedGrblController, scen
             "camera_device_name": "UVC Camera",
             "transport_factory": lambda: controller,
             "camera_frame_provider": scene.frame,
+            # 合成设备只读本例资料，不能回落到工作树的现场校准档案。
+            "data_root": tmp_path,
         },
         {
             "device_id": "arm-02",

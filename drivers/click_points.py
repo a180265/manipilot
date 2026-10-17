@@ -70,6 +70,28 @@ def _clip(polygon, normal, bound):
     return np.asarray(result, dtype=float).reshape(-1, 2)
 
 
+def _has_area(polygon):
+    return len(polygon) >= 3 and abs(float(np.sum(
+        polygon[:, 0] * np.roll(polygon[:, 1], -1)
+        - polygon[:, 1] * np.roll(polygon[:, 0], -1)))) / 2 > 1e-6
+
+
+def _toward_preference(polygon, lower, upper):
+    """Approach the preference from inside the unchanged safe polygon."""
+    center = polygon.mean(axis=0)
+    preferred = np.clip(center, lower, upper)
+    edges = np.roll(polygon, -1, axis=0) - polygon
+    lengths_squared = np.sum(edges * edges, axis=1)
+    active = lengths_squared > 1e-16
+    vertices, edges = polygon[active], edges[active]
+    fractions = np.clip(np.sum((preferred - vertices) * edges, axis=1)
+                        / lengths_squared[active], 0, 1)
+    candidates = vertices + fractions[:, None] * edges
+    nearest = candidates[np.argmin(np.sum((candidates - preferred) ** 2, axis=1))]
+    # A convex blend retains positive clearance from every true target edge.
+    return .9 * nearest + .1 * center
+
+
 def _interior_point(target_id, original, polygon, screen_size, policy, attempt, *, inset=0.0):
     policy = validate_policy(policy, screen_size)
     width, height = screen_size
@@ -80,26 +102,35 @@ def _interior_point(target_id, original, polygon, screen_size, policy, attempt, 
     if original.shape != (2,) or not np.isfinite(original).all():
         raise ValueError("目标原中心无效")
     insets = policy["preferredInsetsPx"]
-    normals = np.vstack((normals, [[1, 0], [0, 1], [-1, 0], [0, -1]]))
-    bounds = np.r_[bounds + inset, insets["left"], insets["top"],
-                   -(width - insets["right"]), -(height - insets["bottom"])]
-    feasible = polygon
+    bounds = bounds + inset
+    safe = polygon
     for normal, bound in zip(normals, bounds):
+        safe = _clip(safe, normal, bound)
+    if not _has_area(safe):
+        raise ValueError("目标真实安全区没有足够的内缩空间")
+    preference_normals = np.array([[1, 0], [0, 1], [-1, 0], [0, -1]])
+    lower = np.array([insets["left"], insets["top"]])
+    upper = np.array([width - insets["right"], height - insets["bottom"]])
+    preference_bounds = np.r_[lower, -upper]
+    feasible = safe
+    for normal, bound in zip(preference_normals, preference_bounds):
         feasible = _clip(feasible, normal, bound)
-        if len(feasible) < 3:
-            raise ValueError("目标安全区与屏幕内部偏好区没有可点击交集")
-    area = abs(float(np.sum(feasible[:, 0] * np.roll(feasible[:, 1], -1)
-                            - feasible[:, 1] * np.roll(feasible[:, 0], -1)))) / 2
-    if area <= 1e-6:
-        raise ValueError("目标安全区与屏幕内部偏好区交集退化")
+    preference_satisfied = _has_area(feasible)
+    if preference_satisfied:
+        normals = np.vstack((normals, preference_normals))
+        bounds = np.r_[bounds, preference_bounds]
+    else:
+        feasible = safe
     distances = normals @ original - bounds
-    point = original.copy() if (np.all(distances[:4] > 1e-7)
-                                and np.all(distances[4:] >= 0)) else feasible.mean(axis=0)
+    if preference_satisfied:
+        point = original.copy() if (np.all(distances[:4] > 1e-7)
+                                    and np.all(distances[4:] >= 0)) else feasible.mean(axis=0)
+    else:
+        point = _toward_preference(safe, lower, upper)
     distances = normals @ point - bounds
     if np.any(distances[:4] <= 1e-7) or np.any(distances[4:] < -1e-7):
         raise ValueError("目标交集没有足够的内部选点空间")
-    # Pick the longest symmetric direction that remains inside the *same*
-    # intersection, rather than sending a retry back toward the old centre.
+    # Alternatives remain in this same feasible target area.
     axes = [np.array([1., 0.]), np.array([0., 1.]), *edges]
     reach, direction = 0., None
     for axis in axes:
@@ -122,6 +153,9 @@ def _interior_point(target_id, original, polygon, screen_size, policy, attempt, 
         "originalCenter": original.tolist(), "aim": point.tolist(),
         "selectionOffset": (point - original).tolist(), "policy": policy,
         "feasible_polygon": feasible.tolist(), "max_offset_px": offset if supported else 0.,
+        "preferenceSatisfied": preference_satisfied,
+        **({"preferenceReason": "no_positive_area_intersection"}
+           if not preference_satisfied else {}),
     }
 
 

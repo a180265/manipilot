@@ -35,6 +35,7 @@ from drivers import ui_targets
 from drivers import screen_gestures
 from drivers import screen_pose
 from drivers import click_points
+from drivers import ime_coordinates
 from drivers.arm import ArmDriver, DriverError
 from drivers.daemon_protocol import (
     DEFAULT_DAEMON_ADDR,
@@ -742,6 +743,28 @@ class DaemonArmDriver(ArmDriver):
 
         return check
 
+    def _ime_coordinate_guard(self, entry, calibration, previous_guard):
+        if entry.get("target_source") != "live_ime_geometry":
+            return previous_guard
+        from runtime.layout_state import content_sha
+        pinned = content_sha(calibration)
+
+        def check(position=None):
+            if previous_guard is not None:
+                previous_guard(position)
+            try:
+                current = target_archive.load_runtime_calibration(self.device_id, self.data_root)
+                if content_sha(current) != pinned:
+                    raise ValueError("输入法接触前校准已变化")
+                frame = ime_coordinates.coordinate_frame(
+                    self.device_id, current, entry["ime_display"], self.data_root)
+                if frame["coordinate_frame_hash"] != entry["ime_coordinate_frame_hash"]:
+                    raise ValueError("输入法接触前坐标桥已变化")
+            except Exception as exc:
+                # This guard can run after XY travel. Do not claim zero motion.
+                raise DriverError("driver_uncalibrated", str(exc)) from exc
+        return check
+
     def _pin_dynamic_visual_context(self, target, ref, frame, expected) -> dict:
         """S3：为动态视觉目标固定任务快照（上下文+定位来源身份）。
 
@@ -1089,14 +1112,24 @@ class DaemonArmDriver(ArmDriver):
                 "coordinate_version": target_ref.get("coordinateVersion") or target_ref.get("coordinate_version"),
             }
             if dynamic_source == "live_ime_geometry":
-                # R2-10：把经验证的 display 尺寸随 entry 保留到最终解析——
-                # _resolve_live_geometry_target 据此还原屏幕像素域目标中心，
-                # 不再读相机帧尺寸（此前 KeyError/域混算的根因）。
-                entry["frameW"] = frame_w
-                entry["frameH"] = frame_h
+                # 原始引用保留 Android display 坐标。内部 entry 转成同次校准
+                # root 域后再求 robotToScreen 逆映射，不能混用相机尺寸。
+                try:
+                    ime_frame = ime_coordinates.coordinate_frame(
+                        self.device_id, calibration, target_ref.get("display"), self.data_root)
+                    (root_x, root_y), root_bounds = ime_coordinates.root_geometry(target_ref, ime_frame)
+                except Exception as exc:
+                    error = DriverError("driver_policy_rejected", str(exc))
+                    error.motion_not_started = True
+                    raise error from exc
+                frame_w, frame_h = ime_frame["root_width_px"], ime_frame["root_height_px"]
+                entry.update(frameW=frame_w, frameH=frame_h,
+                             nx=root_x/frame_w, ny=root_y/frame_h,
+                             ime_display=copy.deepcopy(target_ref["display"]),
+                             ime_coordinate_frame_hash=ime_frame["coordinate_frame_hash"])
                 if region_qualified:
                     try:
-                        bounds = target_ref.get("bounds")
+                        bounds = root_bounds
                         if not isinstance(bounds, dict):
                             raise ValueError("输入法目标缺少真实可点击范围")
                         left, top, right, bottom = [
@@ -1116,7 +1149,8 @@ class DaemonArmDriver(ArmDriver):
                         chosen, _, safety = click_points.rectangle_point(
                             target_id, safe_rect, frame_w, frame_h, policy=click_policy)
                         safety.update(source="live_ime_geometry", inset_px=inset,
-                                      target_bounds=dict(bounds))
+                                      target_bounds=dict(bounds), display_bounds=copy.deepcopy(target_ref["bounds"]),
+                                      coordinate_frame_hash=ime_frame["coordinate_frame_hash"])
                         entry.update(nx=float(chosen[0] / frame_w), ny=float(chosen[1] / frame_h),
                                      click_attempt=0, click_retry_supported=False,
                                      click_point={"screen": chosen.tolist(), "camera": None,
@@ -1235,8 +1269,8 @@ class DaemonArmDriver(ArmDriver):
                                       profile: dict) -> dict:
         """FIX-15（§11.13.2）：live 键盘几何目标解析（屏幕像素 → 机械坐标）。
 
-        输入 nx/ny 已按手机 display 宽高归一化（Runtime 几何门注入的
-        live_ime_geometry target_ref）；robotToScreen 逆映射不经相机单应，
+        输入 nx/ny 已由原始 display 几何减去同次校准 root 原点，按 root
+        宽高归一化；robotToScreen 逆映射不经相机单应，
         避免把屏幕像素当相机像素。Z 参数与普通目标同源（profile 兜底）。
         """
         robot_to_screen = ((calibration.get("xy") or {}).get("robotToScreen"))
@@ -1244,11 +1278,11 @@ class DaemonArmDriver(ArmDriver):
             raise DriverError("driver_uncalibrated",
                               "统一校准档案缺少 robotToScreen 映射，无法解析 live 几何目标")
         if entry.get("frameW") in (None, "") or entry.get("frameH") in (None, ""):
-            # R2-10：进入本函数前 entry 必须已带经验证的 display 尺寸
-            #（_resolve_business_target 注入）；缺失即协议不符，不读相机帧尺寸。
+            # entry 必须已完成 display → root 转换并携带校准 root 尺寸；
+            # 缺失即协议不符，不读相机帧尺寸。
             raise DriverError("driver_policy_rejected",
-                              "live 几何目标缺少 display 尺寸（frameW/frameH）："
-                              "禁止以相机帧尺寸冒充手机 display")
+                              "live 几何目标缺少校准 root 尺寸（frameW/frameH）："
+                              "禁止以相机帧尺寸替代")
         sx = float(entry["nx"]) * float(entry["frameW"])
         sy = float(entry["ny"]) * float(entry["frameH"])
         rx, ry = calibration_bundle.robot_from_screen(robot_to_screen, sx, sy)
@@ -1937,6 +1971,7 @@ class DaemonArmDriver(ArmDriver):
             layout, target_id, resolved, _calib, pose, wechat_send=target_id == "send_button",
             dynamic_snapshot=dynamic_snapshot)
         command_guard = self._region_contact_guard(entry, _calib, command_guard, pose)
+        command_guard = self._ime_coordinate_guard(entry, _calib, command_guard)
         mpos, phases = await self._with_motion_lease(
             resolved, with_tap=with_tap, input_claim=input_claim,
             generation=generation,

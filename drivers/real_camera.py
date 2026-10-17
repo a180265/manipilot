@@ -212,7 +212,8 @@ class RealCameraDriver(CameraDriver):
             frame = await self._capture_for_operation()
         aligned, pose = self._aligned_screen_frame(
             frame, bundle, return_pose=True, search_region=selected.region)
-        return await asyncio.to_thread(selected.prepare, aligned, frame, bundle, pose, fingerprint,
+        raw = screen_proof.decode(frame.get("image") or frame.get("image_bytes"))
+        return await asyncio.to_thread(selected.prepare, raw, frame, bundle, pose, fingerprint,
                                        ocr_engine=self.ocr_engine)
 
     def _ensure_layout_current(self, layout):

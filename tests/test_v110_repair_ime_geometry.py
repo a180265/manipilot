@@ -65,6 +65,8 @@ def make_runtime(tmp_path: Path, *, ime_device_id: str | None = IME_DEVICE,
         root=tmp_path,
     )
     runtime = ArmFleetRuntime(config)
+    # These identity/nonce tests exercise the configured pairing deployment.
+    runtime.ime_pairing_trust = {"https_origin": "https://fleet.test"}
 
     def _register() -> None:
         asyncio.run(runtime.devices.register_all(make_device_configs(n_devices)))

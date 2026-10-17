@@ -17,6 +17,7 @@ from drivers import FakeArmDriver, FakeCameraDriver, FakeInputDriver
 from drivers.camera_broker import (
     CameraQualityCheckError, quality_diagnostics, quality_failure_diagnostics,
 )
+from runtime.arm_binding import normalize_daemon_binding
 from runtime.capabilities import DEFAULT_DEVICE_CAPABILITIES
 from runtime.errors import ApiError
 from runtime.status import (
@@ -468,6 +469,7 @@ class DeviceManager:
         真机模式（hardware_mode=real）下只有绑定表声明 driver_mode=real 的槽位
         实例化真机驱动，其余槽位仍为仿真驱动（先接单台，后扩展十台）。
         """
+        cfg = normalize_daemon_binding(cfg)
         device_id = cfg["device_id"]
         self._validate_registration(cfg, replacing=replacing)
         previous = self._store.get_device(device_id) or {}
@@ -529,6 +531,7 @@ class DeviceManager:
             "camera_device_unique_id": cfg.get("camera_device_unique_id"),
             "camera_binding_id": cfg.get("camera_binding_id"),
             "daemon_binding_id": cfg.get("daemon_binding_id") or cfg.get("arm_binding_id"),
+            "daemon_resource_id": cfg.get("daemon_resource_id"),
             "source_geometry_id": cfg.get("source_geometry_id"),
             "camera_mode": cfg.get("camera_mode"),
             "camera_frame_url": cfg.get("camera_frame_url"),
@@ -621,6 +624,7 @@ class DeviceManager:
 
     async def register_and_selfcheck(self, cfg: dict, *, replacing: bool = False) -> dict:
         """硬件自检不要求特定应用界面；应用核对由外部任务插件负责。"""
+        cfg = normalize_daemon_binding(cfg)
         if not any(str(item.get("device_id")) == str(cfg.get("device_id")) for item in self._registered_configs):
             self._registered_configs.append(dict(cfg))
         else:
@@ -884,6 +888,8 @@ class DeviceManager:
             "device_id": device_id,
             "binding": {field: device.get(field) for field in self.BINDING_FIELDS},
             "binding_revision": device.get("binding_revision", 1),
+            "daemon_binding_id": device.get("daemon_binding_id"),
+            "daemon_resource_id": device.get("daemon_resource_id"),
             "config_version": device.get("config_version", "1"),
             "binding_enabled": device.get("binding_enabled", True),
             "binding_enabled_display": "启用" if device.get("binding_enabled", True) else "已禁用",
@@ -1008,7 +1014,11 @@ class DeviceManager:
             field = "daemon_addr" if kind == "daemon" else "serial_port"
             if not str(cfg.get(field) or "").strip():
                 raise ApiError("binding_resource_unavailable", f"设备 {value} 没有已登记的{field}")
-            return {field: cfg[field]}
+            resolved = {field: cfg[field]}
+            if kind == "daemon":
+                resolved.update(daemon_resource_id=resource_id,
+                                serial_port=cfg.get("serial_port"))
+            return resolved
         raise ApiError("binding_resource_invalid", f"不支持的绑定资源类型：{kind}")
 
     # 影响 physical 连接的字段：变更必须重建驱动并重新自检（走挂载路径）
@@ -1106,7 +1116,7 @@ class DeviceManager:
         ctrl = self._input_control
         try:
             settings = iset.load_settings(device_id, self.settings_data_root(device_id))
-        except InputSettingsError as exc:
+        except iset.InputSettingsError as exc:
             raise ApiError("input_settings_invalid",
                            f"换手机前无法解释输入设置（保持阻断）：{exc.message}")
         boundary = int(settings.get("revoked_through_revision") or 0)
@@ -1288,7 +1298,10 @@ class DeviceManager:
                     if str(item.get("device_id")) == device_id), None)
         if cfg is None:
             cfg = dict(device)
-        merged = {**cfg, **allowed, "device_id": device_id}
+        merged = normalize_daemon_binding({**cfg, **allowed, "device_id": device_id})
+        if merged.get("daemon_addr"):
+            allowed.update({key: merged[key] for key in
+                            ("daemon_resource_id", "daemon_binding_id")})
         # 先做一对一校验：冲突请求不得改变设备状态（不暂停、不递增版本）
         self._validate_registration(merged, replacing=True)
         self._release_device_lease(device_id, "绑定变更，撤销旧租约")

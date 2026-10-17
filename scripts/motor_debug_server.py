@@ -319,7 +319,7 @@ def _agent_json(method: str, path: str, body: dict | None = None) -> dict:
         raise RuntimeError(f"平台 agent 不可达（{IME_BASE_URL}）：{exc}") from exc
 
 
-def _agent_passthrough(method: str, path: str, body: dict | None) -> tuple[int, dict]:
+def _agent_passthrough(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
     """input-settings 代理（§4.2.3）：保留上游 HTTP 状态与错误键/trace_id，
     不把上游错误吞成统一 400；上游不可达=502 upstream_error。"""
     import urllib.error
@@ -2560,7 +2560,7 @@ def wizard_http(wizard: CalibrationWizard, action: str, body: dict) -> dict:
         return wizard.auto_view()
     if action == "z-confirm-safe":
         return wizard.z_confirm_safe(body.get("zSafe"), body.get("tapDepth"),
-                                     body.get("tapFeed"))
+                                     body.get("tapFeed"), body.get("tapDwellMs"))
     if action == "park-confirm":
         return wizard.park_confirm()
     if action == "park-clear":

@@ -36,6 +36,11 @@ def _size(value):
 
 
 def matrix_and_size(bundle):
+    from drivers.calibration_display import validate_display_reference
+    try:
+        validate_display_reference(bundle)
+    except (ValueError, KeyError, TypeError) as exc:
+        _reject(str(exc))
     try:
         model = (bundle.get("camera") or {}).get("cameraToScreen") or {}
         matrix = np.asarray(model.get("homography"), dtype=float)
@@ -144,6 +149,40 @@ def locate_in_region(image, region, saved):
         raise LayoutGeometryError("items_unverified", str(exc)) from exc
 
 
+def warp_root_from_raw(image, bundle, pose, region):
+    """Resample real raw pixels once; validate continuous physical/source coverage."""
+    from drivers.screen_pose import validate_corners
+
+    matrix, width, height = matrix_and_size(bundle)
+    saved = validate_corners(bundle["screen"]["edgeModel"]["corners"])
+    points = _screen_footprint(matrix, width, height)
+    edges = np.roll(saved, -1, axis=0) - saved
+    delta = points[:, None, :] - saved[None, :, :]
+    cross = edges[None,:,0] * delta[:,:,1] - edges[None,:,1] * delta[:,:,0]
+    distance = cross / np.linalg.norm(edges, axis=1)
+    # 1e-5 camera px is numerical precision, never a geometric expansion.
+    # Integer polygon masks invent invalid border pixels before resampling.
+    if not (np.all(distance >= -1e-5) or np.all(distance <= 1e-5)):
+        _reject("摆正采样包含校准屏幕以外的像素")
+    try:
+        movement = np.asarray(pose["matrix"], dtype=float)
+        if movement.shape != (3,3) or not np.isfinite(movement).all():
+            raise ValueError
+        composed = matrix @ np.linalg.inv(movement)
+    except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):
+        _reject("当前手机姿态矩阵无效")
+    live_points = _screen_footprint(composed, width, height)
+    camera_size = (image.shape[1], image.shape[0])
+    if camera_size != _size(bundle.get("frame")):
+        _reject("实际原图尺寸与校准来源不一致", "source_binding_changed")
+    lower, upper = _region_bounds(region, camera_size)
+    if np.any(live_points < 0) or np.any(live_points > np.asarray(camera_size)-1):
+        _reject("摆正屏幕超出原图，不能使用边界填充作为证据")
+    if np.any(live_points < lower) or np.any(live_points > upper):
+        _reject("摆正屏幕超出当前生效粗框")
+    return cv2.warpPerspective(image, composed, (width,height), flags=cv2.INTER_LINEAR)
+
+
 def rectify_capture(*, device_id, snapshot, current_binding, bundle,
                     region_record, capture, frame_reader):
     """Validate both raw frames, then rectify without accepting border fill."""
@@ -207,12 +246,6 @@ def rectify_capture(*, device_id, snapshot, current_binding, bundle,
     if capture.get("device_id") != device_id or len(evidence) != 2 \
             or len({e.get("evidence_id") for e in evidence}) != 2:
         _reject("页面匹配必须使用本设备两帧证据", "page_evidence_invalid")
-    support = np.zeros((camera_size[1], camera_size[0]), np.uint8)
-    cv2.fillConvexPoly(support, np.rint(saved).astype(np.int32), 255)
-    support = cv2.warpPerspective(support, matrix, (width, height),
-                                 flags=cv2.INTER_LINEAR)
-    if np.any(support != 255):
-        _reject("摆正采样包含校准屏幕以外的像素")
     frames = []
     for row in evidence:
         source = row.get("source_binding") or {}
@@ -238,9 +271,7 @@ def rectify_capture(*, device_id, snapshot, current_binding, bundle,
                 or np.any(live_quad < 0) \
                 or np.any(live_quad > np.array(camera_size) - 1):
             _reject("当前手机超出原图或生效粗框，不能裁断后登记")
-        aligned = screen_pose.align_screen(image, saved, pose)
-        rectified = cv2.warpPerspective(aligned, matrix, (width, height),
-                                        flags=cv2.INTER_LINEAR)
+        rectified = warp_root_from_raw(image, bundle, pose, region)
         ok, encoded = cv2.imencode(".png", rectified)
         if not ok:
             raise LayoutGeometryError("source_unavailable", "摆正图编码失败", 503)

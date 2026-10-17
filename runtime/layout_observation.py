@@ -370,6 +370,7 @@ class SelectedLayout:
     def prepare(self, image, frame, bundle, pose, calibration_binding, *, ocr_engine=None):
         """Use raw full-resolution v3 warp only, after the existing pose gate."""
         matrix, width, height = self.verify_saved_binding(bundle)
+        inverse = np.linalg.inv(matrix)
         expected = self.region["installation_binding"]
         for saved, live in (("camera_id", "camera_id"),
                             ("camera_device_unique_id", "device_unique_id"),
@@ -384,20 +385,11 @@ class SelectedLayout:
         _require(np.all(corners >= [rect["x1"], rect["y1"]])
                  and np.all(corners <= [rect["x2"], rect["y2"]]),
                  "当前屏幕超出已选粗框", "screen_outside_region")
-        inverse = np.linalg.inv(matrix)
-        points = np.array([[0, 0, 1], [width - 1, 0, 1], [width - 1, height - 1, 1],
-                           [0, height - 1, 1]], dtype=float) @ inverse.T
-        _require(np.isfinite(points).all() and (
-            np.all(points[:, 2] > 1e-10) or np.all(points[:, 2] < -1e-10)),
-            "屏幕反投影无效", "geometry_changed")
-        points = points[:, :2] / points[:, 2:]
-        _require(np.all(points >= [0, 0]) and np.all(points <= [cw - 1, ch - 1]),
-                 "屏幕摆正范围超出原相机帧", "item_outside_screen")
-        support = np.zeros((ch, cw), np.uint8)
-        cv2.fillConvexPoly(support, np.rint(bundle["screen"]["edgeModel"]["corners"]).astype(np.int32), 255)
-        support = cv2.warpPerspective(support, matrix, (width, height))
-        _require(np.all(support == 255), "屏幕摆正包含无效边界像素", "item_outside_screen")
-        screen = cv2.warpPerspective(image, matrix, (width, height), flags=cv2.INTER_LINEAR)
+        from runtime.layout_geometry import LayoutGeometryError, warp_root_from_raw
+        try:
+            screen = warp_root_from_raw(image, bundle, pose, self.region)
+        except LayoutGeometryError as exc:
+            raise LayoutObservationError(str(exc), "item_outside_screen") from exc
         encoded = cv2.imencode(".png", screen)[1].tobytes()
         matches = []
         page_scores = {}
@@ -548,7 +540,7 @@ class LayoutFrame:
         from drivers import calibration_bundle as cb
 
         self.ensure_current(bundle)
-        self.target(target_id)
+        selected = self.target(target_id)
         definition = next(item for item in self.selected.pages[self.state]["targets"]
                           if item["id"] == target_id)
         result = next(item for item in self.check["item_results"]
@@ -566,7 +558,8 @@ class LayoutFrame:
         _require(rect["x"] < x < rect["x"] + rect["width"]
                  and rect["y"] < y < rect["y"] + rect["height"],
                  "走位后的目标安全区已变化，禁止沿用旧落点", "geometry_changed")
-        if self.click_policy is not None and definition["mode"] == "tap":
+        if (self.click_policy is not None and definition["mode"] == "tap"
+                and selected["click_point"]["safety"]["preferenceSatisfied"]):
             insets = self.click_policy["preferredInsetsPx"]
             _require(insets["left"] <= x * width <= width - insets["right"]
                      and insets["top"] <= y * height <= height - insets["bottom"],

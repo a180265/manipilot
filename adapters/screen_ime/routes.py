@@ -72,7 +72,8 @@ def create_screen_ime_router(service: ScreenImeService | None = None,
                              frame_source=None,
                              geometry_provider=None,
                              phone_identity_provider=None,
-                             pairing_provider=None) -> APIRouter:
+                             pairing_provider=None,
+                             phone_identity_required=None) -> APIRouter:
     """geometry_provider(request)→ImeGeometryService：Fleet 挂载时注入当前
     Runtime 持有的几何实例；缺省回退进程级共享单例（独立部署原合同）。
 
@@ -82,9 +83,15 @@ def create_screen_ime_router(service: ScreenImeService | None = None,
     router = APIRouter()
     get_service = lambda: service or get_default_service()
 
+    # Resolve deployment policy when the request arrives: production constructs
+    # the Runtime in lifespan, after these routes have already been mounted.
+    def identity_required() -> bool:
+        return phone_identity_provider is not None and (
+            phone_identity_required is None or phone_identity_required())
+
     # ---- R3-17-P4：手机/机器两类入口身份边界 ----
     def require_phone(request: Request, path_device: str | None = None) -> dict:
-        if phone_identity_provider is None:
+        if not identity_required():
             return {}
         token = request.headers.get("x-ime-phone-token")
         identity = phone_identity_provider(token) if token else None
@@ -112,7 +119,7 @@ def create_screen_ime_router(service: ScreenImeService | None = None,
     def require_machine(request: Request) -> None:
         """管理类别路由：Fleet 挂载时只接受本机回环机器调用（N1：管理口不
         映射 LAN）；手机/局域网请求一律拒绝。"""
-        if phone_identity_provider is None:
+        if not identity_required():
             return
         client = request.client.host if request.client else ""
         if client not in ("127.0.0.1", "::1", "testclient"):  # testclient=TestClient 回环语义
@@ -245,7 +252,8 @@ def create_screen_ime_router(service: ScreenImeService | None = None,
         require_active_phone(request, device_id)  # R3-17-P4：领取在校验之后
         get_service().tasks.touch(device_id)  # 设备轮询=隐式心跳（保持在线状态真实）
         wait = _clamp_int(request.query_params.get("waitSeconds"), 20, 0, 20, "waitSeconds")
-        task = await get_service().tasks.next_task(device_id, wait)
+        task = await get_service().tasks.next_task(
+            device_id, wait, disconnect_check=request.is_disconnected)
         if task is None:
             return Response(status_code=204)
         return task

@@ -47,6 +47,20 @@ DISPLAY = {"display_id": 0, "width_px": 1080, "height_px": 2400,
            "rotation": 0, "density": 2.75}
 
 
+def seed_coordinate_frame(root, *, origin=(0, 0)):
+    from drivers import gesture_program as gp, screen_gestures as sg
+    bundle = cb.load_bundle(ARM_DEVICE, root)
+    frame = gp.build_coordinate_frame(
+        binding=sg.binding_snapshot(bundle),
+        calibration_run_id=(bundle.get("autoCalibration") or {}).get("runId") or "manual-finish",
+        root_width_px=bundle["screen"]["screenWidth"],
+        root_height_px=bundle["screen"]["screenHeight"],
+        display_width_px=1080, display_height_px=2400,
+        root_origin_display_px=list(origin), density=2.75, source_client_instance_id=str(uuid.uuid4()))
+    gp.save_coordinate_frame(ARM_DEVICE, frame, data_root=root)
+    return frame
+
+
 def _expected_robot(screen_xy: tuple[float, float]) -> tuple[float, float]:
     sx, sy = screen_xy
     return (round((sx - ROBOT_TO_SCREEN["c"]) / ROBOT_TO_SCREEN["a"], 3),
@@ -121,11 +135,13 @@ def _snapshot_body(session_id: str, seq: int, nonce: str | None, *,
 class LiveGeometryEnv:
     """真实 Runtime + 真实 DaemonArmDriver（FakeDaemon 传输）+ 几何凭据。"""
 
-    def __init__(self, tmp_path: Path, *, enable_input: bool = True):
+    def __init__(self, tmp_path: Path, *, enable_input: bool = True,
+                 paired_deployment: bool = True):
         self.tmp_path = tmp_path
         self.daemon = FakeDaemon().start()
         root = tmp_path / "calibration"
         cb.save_bundle(_v3_bundle(), root)
+        seed_coordinate_frame(root)
         from runtime.config import PlatformConfig
 
         config = PlatformConfig(
@@ -137,9 +153,13 @@ class LiveGeometryEnv:
              "hotplug_discovery_enabled": False},
             root=tmp_path)
         self.runtime = ArmFleetRuntime(config)
+        self.runtime.ime_pairing_trust = ({"https_origin": "https://fleet.test"}
+                                          if paired_deployment else None)
+        self.phone_credentials = GEOM_TOKEN if paired_deployment else None
         asyncio.run(self.runtime.devices.register_all(make_device_configs(1)))
         self.runtime.devices._devices[ARM_DEVICE]["ime_device_id"] = IME_DEVICE
-        self.runtime.register_phone_credential(IME_DEVICE, GEOM_TOKEN)
+        if paired_deployment:
+            self.runtime.register_phone_credential(IME_DEVICE, GEOM_TOKEN)
         # 真实 DaemonArmDriver 替换仿真机械臂驱动（外部 IO=socket 由 FakeDaemon 替换）
         from drivers.daemon_arm import DaemonArmDriver
 
@@ -167,7 +187,7 @@ class LiveGeometryEnv:
         self.geometry = self.runtime.ime_geometry
         self.session = self.geometry.handshake(IME_DEVICE, {
             "contract_version": CONTRACT_VERSION, "imeGeometryVersion": 1,
-            "client_instance_id": str(uuid.uuid4())}, credentials=GEOM_TOKEN)
+            "client_instance_id": str(uuid.uuid4())}, credentials=self.phone_credentials)
         self._seq = 0
         self._view = str(uuid.uuid4())
         self._phone_task: asyncio.Task | None = None
@@ -192,7 +212,7 @@ class LiveGeometryEnv:
             while True:
                 claimed = await asyncio.to_thread(
                     self.geometry.poll_next, IME_DEVICE,
-                    self.session["runtime_session_id"], 1, GEOM_TOKEN)
+                    self.session["runtime_session_id"], 1, self.phone_credentials)
                 if claimed is None:
                     await asyncio.sleep(0.005)
                     continue
@@ -202,7 +222,7 @@ class LiveGeometryEnv:
                     claimed["request_nonce"], view_instance_id=self._view,
                     **self._snapshot_kwargs)
                 await asyncio.to_thread(
-                    self.geometry.report, IME_DEVICE, body, GEOM_TOKEN)
+                    self.geometry.report, IME_DEVICE, body, self.phone_credentials)
 
         self._phone_task = asyncio.create_task(phone())
 

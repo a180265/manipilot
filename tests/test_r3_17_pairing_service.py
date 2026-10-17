@@ -361,3 +361,33 @@ def test_s7_request_response_fixtures_match_contract(svc):
                    "error": {"code": "authentication_required",
                              "message": "邀请不存在或秘密无效"}}
     validate_against(error_shell, schema["$defs"]["error"])
+
+
+def test_invitation_and_activation_deadlines_report_persisted_expiry(svc, monkeypatch):
+    """Android validates these dates before pairing and after a lost activation response."""
+    from datetime import datetime, timezone
+
+    now = 1_800_000_000_123
+    monkeypatch.setattr(ip, "_now_ms", lambda: now)
+    secret = new_invite_secret()
+    invite = svc.create_invitation(
+        request_id="expiry-invite", invite_secret=secret,
+        arm_id="arm-01", source="console", trust=TRUST)
+    expected = datetime.fromtimestamp(
+        (now + ip.INVITATION_TTL_S * 1000) / 1000, timezone.utc
+    ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    assert invite["expires_at"] == expected
+    now += 10_000
+    assert svc.get_invitation(invite["invitation_id"])["expires_at"] == expected
+    confirmed, _, token, _ = _confirm(
+        svc, invitation_id=invite["invitation_id"], secret=secret,
+        request_id="expiry-confirm")
+    deadline = datetime.fromtimestamp(
+        (now + ip.ACTIVATION_DEADLINE_S * 1000) / 1000, timezone.utc
+    ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    assert confirmed["activation_deadline"] == deadline
+    now += 10_000
+    assert svc.get_pairing(confirmed["pairing_id"], token=token)["activation_deadline"] == deadline
+    now += ip.INVITATION_TTL_S * 1000
+    expired = svc.get_invitation(invite["invitation_id"])
+    assert expired["expires_at"] == expected

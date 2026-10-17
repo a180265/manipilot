@@ -261,6 +261,14 @@ class DaemonSupervisor:
             env["ARM_DAEMON_BAUD"] = str(config["baud_rate"])
         log_handle = None
         command = [self.python_executable, str(self.script_path)]
+        # Fleet's service controller stops its entire process group on reload.
+        # A daemon owns a serial session and must outlive that group; explicit
+        # stop_device/stop_all still terminate the exact retained Popen process.
+        process_options = {}
+        if os.name == "posix":
+            process_options["start_new_session"] = True
+        elif os.name == "nt":
+            process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             log_handle = log_path.open("a", encoding="utf-8")
@@ -271,6 +279,7 @@ class DaemonSupervisor:
                 stdin=subprocess.DEVNULL,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
+                **process_options,
             )
         except Exception as exc:
             if log_handle is not None:

@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from drivers.real_camera import RealCameraDriver, ScreenRoiNotFound
+from drivers.real_camera import RealCameraDriver
 from drivers.screen_edge import ScreenEdgeError, detect_screen_quad, locate_screen_quad
 
 
@@ -88,12 +88,14 @@ CAPTURES = (Path(__file__).resolve().parents[2] /
             "reports/wx-console-v1.10/live-registration-2026-10-08/arm-01")
 
 
-@pytest.mark.parametrize("prefix,expected_quality", [
-    ("01-wechat-list", "clear"), ("02-chat-ime-hidden", "clear"),
-    ("03-keyboard-candidate", "abnormal"), ("04-ime-text", "abnormal"),
-    ("06-phone-b-hidden", "abnormal"), ("07-phone-b-list", "abnormal"),
+@pytest.mark.parametrize("prefix,expected_corners", [
+    ("01-wechat-list", None), ("02-chat-ime-hidden", None),
+    ("03-keyboard-candidate", [[152, 64], [1189, 101], [1195, 561], [123, 546]]),
+    ("04-ime-text", [[152, 64], [1189, 101], [1195, 561], [123, 546]]),
+    ("06-phone-b-hidden", [[134, 108], [1174, 111], [1197, 569], [123, 597]]),
+    ("07-phone-b-list", [[134, 108], [1174, 111], [1197, 569], [123, 597]]),
 ])
-def test_local_saved_phone_states_preserve_strict_boundary_outcome(prefix, expected_quality):
+def test_local_saved_phone_states_use_the_visible_boundary(prefix, expected_corners):
     manifest_path = CAPTURES / f"{prefix}-draft.json"
     if not manifest_path.is_file():
         pytest.skip("Private local capture is not distributed with the test suite")
@@ -107,9 +109,12 @@ def test_local_saved_phone_states_preserve_strict_boundary_outcome(prefix, expec
     assert frame is not None
     ok, png = cv2.imencode(".png", frame)
     assert ok
-    if expected_quality == "clear":
-        metrics = RealCameraDriver._analyze(png.tobytes(), require_phone=True)
-        assert RealCameraDriver._classify(metrics, False) == expected_quality
-    else:
-        with pytest.raises(ScreenRoiNotFound):
-            RealCameraDriver._analyze(png.tobytes(), require_phone=True)
+    # Visual review of these genuine frames confirms all four screen sides.
+    # Previously rejected frames contain dim adjoining reflections, not a
+    # missing side. Check their reviewed outer boundary instead of freezing
+    # the old Otsu-only detector failure as the expected behavior.
+    if expected_corners is not None:
+        np.testing.assert_allclose(detect_screen_quad(frame)['corners'],
+                                   expected_corners, atol=2)
+    metrics = RealCameraDriver._analyze(png.tobytes(), require_phone=True)
+    assert RealCameraDriver._classify(metrics, False) == 'clear'

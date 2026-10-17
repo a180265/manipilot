@@ -70,6 +70,31 @@ def detect_screen_quad(frame) -> dict:
                 if corners is not None:
                     candidates.append((area, corners))
         tiers.append(candidates)
+    # Free detection needs the same photometric reflection separation as
+    # calibrated localization. Every candidate still fits four observed
+    # sides and passes the unchanged ambiguity, occlusion and border gates.
+    otsu_level, _ = cv2.threshold(
+        blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    foreground = gray[gray > otsu_level]
+    reflection_candidates = []
+    if foreground.size:
+        upper_level, _ = cv2.threshold(
+            foreground, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if upper_level > otsu_level:
+            binary = cv2.threshold(
+                gray, (otsu_level + upper_level) / 2,
+                255, cv2.THRESH_BINARY)[1]
+            contours, _ = cv2.findContours(
+                binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            candidates = []
+            for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+                area = cv2.contourArea(contour)
+                if min_area <= area <= w * h * .90:
+                    corners = _quad_from_observed_edges(contour)
+                    if corners is not None:
+                        candidates.append((area, corners))
+            reflection_candidates = candidates
+            tiers.append(candidates)
     if not any(tiers):
         raise ScreenEdgeError("画面中未检出屏幕四边形（确认屏幕点亮且在画面内）")
     candidates = sorted(next(items for items in tiers if items),
@@ -80,9 +105,19 @@ def detect_screen_quad(frame) -> dict:
             np.roll(item[1], -1, axis=0) - np.asarray(item[1]), axis=1)
         return float(edges.min() / edges.max()) >= .25
 
-    if any(substantial_quad(item) for item in candidates[1:]):
-        raise ScreenEdgeError("画面中存在多个可能的屏幕四边形，无法确认手机")
     best_area, best = candidates[0]
+    # Each threshold must agree on the same physical screen. A valid first
+    # tier must not hide a second screen revealed after reflection separation.
+    distinct = [candidates[0]]
+    # Raw/blur/closing are ordered noise treatments of the ordinary threshold;
+    # preserve raw boundary preference so closing cannot merge a nearby stand.
+    for tier in (candidates, reflection_candidates):
+        for item in tier:
+            if not any(quad_deviation_px(item[1], seen[1]) <= 3
+                       for seen in distinct):
+                distinct.append(item)
+    if any(substantial_quad(item) for item in distinct[1:]):
+        raise ScreenEdgeError("画面中存在多个可能的屏幕四边形，无法确认手机")
     # JPEG ringing can connect a one-pixel gap to a wide support. A mild
     # opening exposes that disagreement; it must not silently become a baseline.
     raw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
@@ -159,6 +194,20 @@ def locate_screen_quad(frame, expected_corners: list | None = None,
                 thresholds.append(cv2.threshold(
                     gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1])
             if expected_corners is not None:
+                if not small_phone:
+                    # A dim reflection touching a bright display can join its
+                    # Otsu contour. Split the foreground photometrically before
+                    # fitting, rather than deleting exterior contour points.
+                    # The intermediate level retains dimmer true display edges
+                    # that a foreground-only Otsu split would cut into.
+                    foreground = gray[gray > otsu_level]
+                    if foreground.size:
+                        upper_level, _ = cv2.threshold(
+                            foreground, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                        if upper_level > otsu_level:
+                            thresholds.append(cv2.threshold(
+                                gray, (otsu_level + upper_level) / 2,
+                                255, cv2.THRESH_BINARY)[1])
                 # A dim display may contain brighter content than its own edge.
                 # Otsu alone then extracts rows/text, not the phone silhouette.
                 low = float(np.percentile(blurred, 20))

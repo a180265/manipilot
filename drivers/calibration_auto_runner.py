@@ -317,8 +317,8 @@ class AutoRunner:
                     click_policy = policy_from_bundle(base)
                 except ValueError as exc:
                     raise WizardError(str(exc)) from exc
-                frozen_z = {**auto_safe, "tapDwellMs":
-                            (self.host.state["z"].get("tap") or {}).get("dwellMs", 0)}
+                frozen_z = {**auto_safe, "tapDwellMs": auto_safe.get(
+                    "tapDwellMs", (self.host.state["z"].get("tap") or {}).get("dwellMs", 0))}
                 frozen_z["tapDwellMs"] = self._auto_tap_dwell_ms({"z": frozen_z})
                 run = {
                     "runId": f"run-{uuid.uuid4().hex[:12]}",
@@ -381,6 +381,19 @@ class AutoRunner:
                     "edge": None,
                     "lastPark": None,
                 }
+                # Freeze same-session root/display facts while the calibration page
+                # is still active. Missing metadata never borrows an old sidecar.
+                from drivers.calibration_display import validate_metadata
+                fetch_metadata = getattr(self.host.ime, "fetch_gesture_frame_metadata", None)
+                try:
+                    raw_metadata = (fetch_metadata(self.host.state.get("imeDeviceId"),
+                                                   run["phoneSessionId"])
+                                    if fetch_metadata else None)
+                    run["displayCoordinateMetadata"] = validate_metadata(
+                        raw_metadata, ime_device_id=self.host.state.get("imeDeviceId"),
+                        session_id=run["phoneSessionId"], screen=run["screen"])
+                except Exception as exc:
+                    self._auto_event(run, "display_metadata_missing", {"error": str(exc)})
                 self._auto_event(run, "run_created",
                                  {"baseStatus": run["baseStatus"],
                                   "realHardware": run["realHardware"]})
@@ -3114,11 +3127,26 @@ class AutoRunner:
         }
         promoted["autoCalibration"] = {
             "runId": run["runId"], "state": AUTO_STATE_PROMOTED,
+            "phoneSessionId": run.get("phoneSessionId"),
             "phase": "PROMOTE", "iteration": run["iteration"],
             "modelVersion": run["modelVersion"], "lastFailure": None,
             "promotedAt": _now(),
             "deferInputAcceptance": deferred,
         }
+        # The bright calibration root omits Android system bars. Runtime pose
+        # needs the whole display; retain the observed root as separate evidence.
+        promoted["screen"]["displayGeometryVersion"] = 1
+        for stale_key in ("calibrationRootEdgeModel", "displayCoordinateMetadata"):
+            promoted["screen"].pop(stale_key, None)
+        if run.get("displayCoordinateMetadata") is not None:
+            from drivers.calibration_display import attach_display_reference
+            try:
+                attach_display_reference(
+                    promoted, run["displayCoordinateMetadata"],
+                    ime_device_id=self.host.state.get("imeDeviceId"),
+                    session_id=run["phoneSessionId"])
+            except ValueError as exc:
+                raise AutoRunError("promote_display_invalid", str(exc)) from exc
         if deferred:
             facts = run["binding"]
             checks = cb.validate_calibration_bundle(
@@ -3143,12 +3171,8 @@ class AutoRunner:
             geometry = dict(self.host.state.get("geometry") or {})
             # frameW/frameH 必须随晋级保留（2026-10-17）：会话重核的绑定一致性
             # 检查依赖它，蒸馏丢字段=换会话重核死锁（真机换机重校实爆）。
-            geometry["edge"] = {"corners": run["edge"]["corners"],
-                                "frameW": run["edge"].get("frameW"),
-                                "frameH": run["edge"].get("frameH"),
-                                "frameSeq": run["edge"].get("frameSeq"),
-                                "capturedAt": run["edge"]["capturedAt"],
-                                "source": "auto_calibration"}
+            geometry["edge"] = deepcopy(promoted["screen"]["edgeModel"])
+            geometry["edge"]["frameSeq"] = run["edge"].get("frameSeq")
             self.host.state["geometry"] = geometry
         # 坐标桥旁档尽力写入（第 4.2/22.4 节）：失败只向本 run 留痕，
         # 不影响已保存的提升结果

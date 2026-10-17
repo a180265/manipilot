@@ -86,6 +86,37 @@ def console(tmp_path, monkeypatch):
     env.close()
 
 
+@pytest.mark.parametrize("dwell", [0, 50, 100])
+def test_http_confirmation_forwards_dwell_to_one_contact_and_saved_parameters(console, dwell):
+    env, call = console
+    auto_report(env.ime, env.daemon)
+    start = len(env.daemon.cmds)
+    status, result = call("/api/wizard", {
+        "action": "z-confirm-safe", "tapDepth": 3, "tapFeed": 1500, "tapDwellMs": dwell})
+    assert status == 200, result
+    assert result["tapDwellMs"] == dwell
+    taps = [line for line in env.daemon.cmds[start:] if line.startswith("TAP")]
+    assert taps == ["TAP 3.000 F1500" + (f" P{dwell / 1000:g}" if dwell else "")]
+    assert env.wizard.state["z"]["tap"]["dwellMs"] == dwell
+
+
+def test_diagnostic_tap_preserves_ready_calibration_and_uses_requested_dwell_once(console):
+    from drivers import calibration_bundle as cb
+
+    env, call = console
+    bundle = cb.load_bundle("arm-01", env.wizard.data_root)
+    bundle["status"] = "ready"
+    bundle["z"].update(tapDepth=10, tapFeed=2000, tapDwellMs=0)
+    cb.save_bundle(bundle, env.wizard.data_root)
+    original = cb.bundle_path("arm-01", env.wizard.data_root).read_bytes()
+    start = len(env.daemon.cmds)
+    status, result = call("/api/tap", {"depth": 8, "feed": 2000, "dwell": .05})
+    assert status == 200, result
+    assert [line for line in env.daemon.cmds[start:] if line.startswith("TAP")] == [
+        "TAP 8.000 F2000 P0.05"]
+    assert cb.bundle_path("arm-01", env.wizard.data_root).read_bytes() == original
+
+
 @pytest.mark.parametrize("action", ["z-confirm-safe", "z-test"])
 @pytest.mark.parametrize("wait_phase", ["arming", "report"])
 def test_parameter_test_rejects_conflicting_requests_without_queueing(console, action, wait_phase):
@@ -205,3 +236,34 @@ def test_parameter_confirmation_rejects_jog_during_phone_arming(console):
             release.set()
             status, result = active.result(timeout=5)
             assert status == 200, result
+
+
+def test_input_settings_read_proxy_uses_get_without_request_body(console, monkeypatch):
+    """真实调试 GET 入口曾因缺少 body 参数始终返回 400。"""
+    _env, call = console
+    requests = []
+
+    class Upstream:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"enabled":false,"revision":0}'
+
+    def upstream(request, timeout):
+        requests.append(request)
+        return Upstream()
+
+    monkeypatch.setattr(debug.urllib.request, "urlopen", upstream)
+    status, body = call("/api/input-settings?deviceId=arm-01&contextId=ctx")
+    assert status == 200
+    assert body == {"enabled": False, "revision": 0}
+    assert len(requests) == 1
+    assert requests[0].get_method() == "GET"
+    assert requests[0].data is None
+    assert requests[0].full_url.endswith("/v1/devices/arm-01/input-settings")

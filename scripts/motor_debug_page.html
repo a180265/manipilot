@@ -216,7 +216,7 @@
         <input type="number" id="wzTapDepth" value="3" step="0.5" min="0.5" max="10"></label>
       <label class="p">下压速度 F（30~2000，禁 300）
         <input type="number" id="wzTapFeed" value="1500" step="50" min="30" max="2000"></label>
-      <label class="p">接触停留 ms（0=短按，≤2000）
+      <label class="p">额外停留 ms（0=不额外等待，≤2000）
         <input type="number" id="wzTapDwell" value="0" step="50" min="0" max="2000"></label>
     </div>
     <div class="row">
@@ -300,11 +300,17 @@
             <input type="number" id="wzAutoTapDepth" value="3" step="0.5" min="0.5" max="10" style="width:64px"></label>
           <label class="p" title="TAP 下压进给（30~2000，禁 300）">点击 F
             <input type="number" id="wzAutoTapFeed" value="1500" step="50" min="30" max="2000" style="width:76px"></label>
+          <label class="p" title="达到下压位置后的额外等待；0 不等于零触屏时长">额外停留 ms
+            <input type="number" id="wzAutoTapDwell" value="0" step="50" min="0" max="2000" style="width:76px"></label>
           <button class="small" id="btnWzAutoZSafe" title="先把探头停在手机屏幕上方安全悬停高度（XY 在屏幕内），点此按钮会在当前位置真实点击一次并等待手机触点回报——收到回报才算参数确认成功">确认 zSafe+点击参数（测试点击）</button>
         </div>
         <div class="row"><button class="small" id="btnWzAutoPark" title="把机械臂停到屏幕外/安全停靠位后确认（Z 自动取 zSafe）。注意：停靠位必须在摄像头画面外或至少不遮挡手机屏幕——自动校准 Phase 0 需要完整看到全部 9 个绿框标靶">确认 SAFE PARK（当前 XY）</button>
           <span class="hint" id="wzAutoConfirmInfo"></span></div>
         <div class="hint" id="wzAutoNextStep" role="status"></div>
+        <div class="hint" id="wzAutoDwellInfo" role="status"></div>
+        <div class="hint">额外停留不等于实际触屏时长：下压与抬起接触屏幕也占用时间，0ms 不能保证手机按短按处理。
+          仅试不同深度/停留可用下方「点击测试」，一次只点击一次且不改正式参数。
+          保存新停留需先重新开始校准、确认参数并完成自动验证；WX 沿用本台校准保存的同一值。</div>
       </div>
       <div><b>② 自动校准控制</b>
         <div class="row" style="margin-top:4px">
@@ -404,7 +410,7 @@
     </section>
 
     <section>
-      <h2>点击测试</h2>
+      <h2>点击测试（仅诊断，不保存校准）</h2>
       <div class="split">
         <label class="p" title="探头从当前位置向屏幕下压的距离（mm）。现场验证 3~3.5mm 合适，过大可能压伤屏幕/机构。">
           下压深度 mm
@@ -416,15 +422,16 @@
             <option value="100">100 · 保守</option>
             <option value="150">150 · 稳妥</option>
             <option value="1500" selected>1500 · 已验证点击</option>
+            <option value="2000">2000 · 上限</option>
           </select>
         </label>
-        <label class="p" title="压到接触位置后停留的秒数。0 = 立即抬起；停留过长会被手机识别为长按。">
-          接触停留 秒
-          <input type="number" id="tapDwell" value="0" step="0.05" min="0" max="2">
+        <label class="p" title="达到下压位置后的额外等待；实际接触还包括下压和抬起过程，0 不保证短按。">
+          额外停留 ms
+          <input type="number" id="tapDwell" value="0" step="50" min="0" max="2000">
         </label>
       </div>
       <div class="row"><button class="primary" id="btnTap">执行一次点击</button>
-        <span class="hint">下压后会自动抬回，无需手动恢复。</span></div>
+        <span class="hint">原地单击后自动抬回；本次参数只用于测试，不修改已保存校准或 WX 点击参数。</span></div>
       <div class="sub row">
         <label class="p" title="XY 平移与点击前的安全 Z 高度（相对本次会话零点）。现场验证 Z=2 为安全行驶高度：低于它探头可能刮屏。">
           悬停高度 Z mm
@@ -2774,7 +2781,11 @@ $$(".jog").forEach(btn => btn.addEventListener("click", () => {
 $("#btnTap").addEventListener("click", () => {
   const depth = parseFloat($("#tapDepth").value) || 3;
   const feed = parseFloat($("#tapFeed").value);
-  const dwell = parseFloat($("#tapDwell").value) || 0;
+  const dwellMs = Number($("#tapDwell").value);
+  if (!Number.isInteger(dwellMs) || dwellMs < 0 || dwellMs > 2000) {
+    toast("普通点击额外停留需为 0~2000ms 的整数", "err"); return;
+  }
+  const dwell = dwellMs / 1000;
   motion("/api/tap", {depth, feed, dwell}, "点击完成",
     `点击 深度${depth} F${feed}${dwell ? ` 停留${dwell}s` : ""}`);
 });
@@ -3075,6 +3086,7 @@ $("#btnLogRefresh").addEventListener("click", refreshLog);
 
 let WZ = null;
 let WZ_ACTION_BUSY = "";
+let WZ_DWELL_EDITOR = {device: null, dirty: false};
 
 function renderWizardBusy() {
   const busy = Boolean(WZ_ACTION_BUSY) || S.busy > 0;
@@ -3316,8 +3328,16 @@ function renderAuto() {
     + `seed：${(A.armSeed && A.armSeed.hasSeed) ? "有" : "无"}`;
   const conf = A.confirmations || {};
   const zs = conf.zSafe, pk = conf.safePark || {};
+  if (WZ_DWELL_EDITOR.device !== DEV_RAW()) WZ_DWELL_EDITOR = {device: DEV_RAW(), dirty: false};
+  const savedDwell = WZ.bundle?.z?.tapDwellMs;
+  if (!WZ_DWELL_EDITOR.dirty) $("#wzAutoTapDwell").value = String(
+    zs?.tapDwellMs ?? WZ.z?.tap?.dwellMs ?? savedDwell ?? 0);
+  $("#wzAutoDwellInfo").textContent =
+    `当前档案额外停留：${savedDwell == null ? "尚未保存" : savedDwell + "ms"}`
+    + (zs?.tapDwellMs != null ? ` · 本次确认：${zs.tapDwellMs}ms` : "")
+    + "。实际触屏持续时间需以手机触摸反馈和页面效果验证。";
   $("#wzAutoConfirmInfo").innerHTML =
-    (zs ? `zSafe=<b>${zs.zSafe}mm</b>（深${zs.tapDepth} F${zs.tapFeed}${zs.validated ? " ✓已验证" : ` <span style="color:#ffce8a">未通过触点回报验证</span>`}）` : `<span style="color:#ffce8a">zSafe 未确认</span>`)
+    (zs ? `zSafe=<b>${zs.zSafe}mm</b>（深${zs.tapDepth} F${zs.tapFeed} 额外停留${zs.tapDwellMs ?? WZ.z?.tap?.dwellMs ?? 0}ms${zs.validated ? " ✓已验证" : ` <span style="color:#ffce8a">未通过触点回报验证</span>`}）` : `<span style="color:#ffce8a">zSafe 未确认</span>`)
     + " · " + (pk.confirmed ? `SAFE PARK=(${pk.parkX},${pk.parkY},Z${pk.parkZ})` : `<span style="color:#ffce8a">SAFE PARK 未确认</span>`)
     ;
   $("#wzAutoNextStep").textContent = active
@@ -3394,13 +3414,22 @@ function renderAuto() {
       + ` · Arm RMS≤${th.arm_rms_target_px}px · 单点重采样≤${th.max_resample} 次 · 迭代≤${th.max_iterations} 轮`;
 }
 
+$("#wzAutoTapDwell").addEventListener("input", () => { WZ_DWELL_EDITOR.dirty = true; });
 $("#btnWzAutoZSafe").addEventListener("click", () => {
   if (WZ_ACTION_BUSY || S.busy > 0) return;
+  const tapDwellMs = Number($("#wzAutoTapDwell").value);
+  if (!Number.isInteger(tapDwellMs) || tapDwellMs < 0 || tapDwellMs > 2000) {
+    toast("普通点击额外停留需为 0~2000ms 的整数", "err"); return;
+  }
   if (!confirm(`确认当前 Z 为 zSafe 并保存点击参数？\n将在当前位置真实点击一次并等待手机触点回报（请确认探头在手机屏幕上方、手机亮屏停留在校准页）。`)) return;
   wzAction("z-confirm-safe", {
     tapDepth: parseFloat($("#wzAutoTapDepth").value) || 3,
     tapFeed: parseFloat($("#wzAutoTapFeed").value) || 1500,
-  }, r => `点击参数已验证 ✓ zSafe=${r.zSafe}mm（深${r.tapDepth} F${r.tapFeed}，触点回报 (${Math.round(r.report.screenX)},${Math.round(r.report.screenY)})）。确认 SAFE PARK 后点击「启动自动校准」。`);
+    tapDwellMs,
+  }, r => {
+    WZ_DWELL_EDITOR.dirty = false;
+    return `点击参数已验证 ✓ zSafe=${r.zSafe}mm（深${r.tapDepth} F${r.tapFeed}，额外停留${r.tapDwellMs ?? tapDwellMs}ms，触点回报 (${Math.round(r.report.screenX)},${Math.round(r.report.screenY)})）。确认 SAFE PARK 后点击「启动自动校准」。`;
+  });
 });
 $("#btnWzAutoPark").addEventListener("click", () => {
   if (!confirm("确认把当前机械臂位置作为 SAFE PARK（XY=当前，Z=zSafe）？\n停靠位必须在屏幕外/安全区，且不能遮挡摄像头看手机屏幕（自动校准需要完整看到 9 个绿框）。")) return;

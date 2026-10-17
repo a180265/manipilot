@@ -23,7 +23,8 @@ def policy(**insets):
 
 def enable(rig, value):
     rig.bundle["xy"]["clickPointPolicy"] = value
-    cb.save_bundle(rig.bundle, rig.data)
+    # 保存会刷新 updatedAt；后续最终守卫必须使用同一份已落盘快照。
+    rig.bundle = cb.save_bundle(rig.bundle, rig.data)
 
 
 @pytest.mark.parametrize("attempt", [0, 1, 2])
@@ -37,6 +38,8 @@ def test_rectangle_selection_and_retries_stay_in_the_same_intersection(attempt):
     assert details["aim"] == point.tolist()
     assert details["selectionOffset"] == pytest.approx(point - [200, 125])
     assert details["max_offset_px"] <= 12
+    assert details["preferenceSatisfied"] is True
+    assert point == pytest.approx([200 + (0, -12, 12)[attempt], 180])
 
 
 @pytest.mark.parametrize("insets", [
@@ -65,10 +68,45 @@ def test_safe_center_is_preserved_and_small_intersection_allows_only_one_point()
 
 
 @pytest.mark.parametrize("top", [200, 201])
-def test_empty_or_line_intersection_cannot_fall_back_to_center(top):
-    with pytest.raises(ValueError, match="交集"):
-        rectangle_point("back_button", {"x": .1, "y": .05, "width": .2, "height": .15},
-                        1000, 1000, policy=policy(top=top))
+def test_empty_or_line_preference_uses_interior_of_the_same_target(top):
+    point, _, safety = rectangle_point(
+        "back_button", {"x": .1, "y": .05, "width": .2, "height": .15},
+        1000, 1000, policy=policy(top=top))
+    assert 100 < point[0] < 300 and 125 < point[1] < 200
+    assert safety["preferenceSatisfied"] is False
+    assert safety["preferenceReason"] == "no_positive_area_intersection"
+    assert safety["safe_rect"] == {"x": .1, "y": .05, "width": .2, "height": .15}
+
+
+@pytest.mark.parametrize("attempt", [0, 1, 2])
+@pytest.mark.parametrize("insets,axis,direction", [
+    ({"top": 150}, 1, 1), ({"left": 150}, 0, 1),
+    ({"right": 950}, 0, -1), ({"bottom": 950}, 1, -1),
+    ({"left": 150, "top": 150}, 1, 1),
+])
+def test_disjoint_edge_preference_never_escapes_real_control(attempt, insets, axis, direction):
+    chosen, _, safety = rectangle_point(
+        "back_button", {"x": .05, "y": .05, "width": .08, "height": .08},
+        1000, 1000, attempt, policy=policy(**insets))
+    assert np.all(chosen > 50) and np.all(chosen < 130)
+    assert direction * (chosen[axis] - 90) > 0
+    assert safety["preferenceSatisfied"] is False
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_disjoint_ocr_preference_preserves_perspective_and_measured_inset(reverse):
+    polygon = np.array([[20, 30], [220, 40], [200, 120], [10, 100]], dtype=float)
+    if reverse:
+        polygon = polygon[::-1]
+    for attempt in (0, 1, 2):
+        camera, chosen, _, safety = ocr_point(
+            "conversation_item", [0, 0, 1000, 1000], polygon.mean(axis=0), np.eye(3), 10,
+            [1000, 1000], attempt, camera_polygon=polygon, policy=policy(top=150))
+        assert camera == pytest.approx(chosen)
+        assert safety["preferenceSatisfied"] is False
+        for a, b in zip(polygon, np.roll(polygon, -1, axis=0)):
+            edge, delta = b - a, chosen - a
+            assert abs(edge[0] * delta[1] - edge[1] * delta[0]) / np.linalg.norm(edge) > 12
 
 
 @pytest.mark.parametrize("value", [None, {}, False, {"mode": "unknown"},
@@ -113,7 +151,7 @@ def test_ocr_policy_requires_original_polygon_and_never_expands_a_narrow_word():
     args = ("conversation_item", [0, 0, 320, 640], [60, 30], np.eye(3), 5, [320, 640])
     with pytest.raises(ValueError, match="四角"):
         ocr_point(*args, policy=policy())
-    with pytest.raises(ValueError, match="交集"):
+    with pytest.raises(ValueError, match="安全区"):
         ocr_point(*args, camera_polygon=[[10, 25], [110, 25], [110, 35], [10, 35]],
                   policy=policy())
 
@@ -161,7 +199,7 @@ def test_real_ocr_driver_preserves_original_credentials_while_selecting_aim(targ
 
 
 @pytest.mark.parametrize("kind", ["shared", "ocr"])
-def test_policy_intersection_rejection_is_definitely_before_any_motion(target_rig, kind):
+def test_driver_disjoint_preference_still_uses_real_target_and_one_contact(target_rig, kind):
     rig = target_rig
     enable(rig, policy(top=220))
     if kind == "shared":
@@ -169,10 +207,92 @@ def test_policy_intersection_rejection_is_definitely_before_any_motion(target_ri
         target = {"target_id": "back_button"}
     else:
         target = locate(rig)
-    with pytest.raises(DriverError) as caught:
-        asyncio.run(rig.arm.click(target))
+    result = asyncio.run(rig.arm.click(target))
+    choice = result["click_point"]
+    assert choice["safety"]["preferenceSatisfied"] is False
+    assert choice["screen"][1] < 220
+    if kind == "shared":
+        assert 16 < choice["screen"][0] < 48 and 32 < choice["screen"][1] < 48
+    else:
+        assert 28 < choice["screen"][0] < 68 and 208 < choice["screen"][1] < 216
+    assert sum(cmd.startswith("TAP ") for cmd in motion(rig)) == 1
+
+
+def test_disjoint_preference_keeps_send_single_contact_without_alternatives(target_rig, monkeypatch):
+    rig = target_rig
+    enable(rig, policy(bottom=630))
+    rig.screens["chat_ime_text"][532:548, 40:80] = 30
+    rig.source.image = rig.frame("chat_ime_text")
+    monkeypatch.setattr(rig.arm, "_input_switch_allowed", lambda _: True)
+    result = asyncio.run(rig.arm.click({"target_id": "send_button"}))
+    assert result["click_point"]["safety"]["preferenceSatisfied"] is False
+    assert result["click_retry_supported"] is False
+    assert sum(cmd.startswith("TAP ") for cmd in motion(rig)) == 1
+    before = motion(rig)
+    with pytest.raises(DriverError, match="禁止替代"):
+        asyncio.run(rig.arm.click({"target_id": "send_button", "click_attempt": 1}))
+    assert motion(rig) == before
+
+
+def test_disjoint_preference_cannot_rescue_ocr_smaller_than_calibration_error(target_rig):
+    from adapters.vision.ocr import OcrWord
+    from tests.test_layout_text_location import TextEngine
+
+    rig = target_rig
+    enable(rig, policy(top=220))
+    rig.camera.ocr_engine = TextEngine(words=[OcrWord("Ann", 12, 20, 8, 6, .99)])
+    located = asyncio.run(rig.camera.locate_text("Ann", region="account", exact=True))
+    with pytest.raises(DriverError, match="安全区") as caught:
+        asyncio.run(rig.arm.click({"target_id": "conversation_item", "target_ref": {
+            "source": "camera_ocr", **located}}))
     assert caught.value.motion_not_started is True
     assert motion(rig) == []
+
+
+@pytest.mark.parametrize("kind", ["shared", "ocr"])
+def test_disjoint_preference_still_checks_final_position_against_real_target(
+        target_rig, monkeypatch, kind):
+    from tests.test_region_qualified_clicks import region_driver
+
+    rig = target_rig
+    region_driver(rig.arm, monkeypatch)
+    load = cb.load_bundle
+
+    def region_with_preference(*args, **kwargs):
+        calibration = load(*args, **kwargs)
+        calibration["xy"]["clickPointPolicy"] = policy(top=220)
+        return calibration
+
+    monkeypatch.setattr(cb, "load_bundle", region_with_preference)
+    if kind == "shared":
+        rig.source.image = rig.frame("chat_ime_hidden")
+        target = {"target_id": "back_button"}
+    else:
+        target = locate(rig)
+
+    def after_travel(line):
+        if line.startswith("XY "):
+            rig.transport.position["x"] += 20
+
+    rig.transport.after_send = after_travel
+    with pytest.raises(DriverError, match="安全范围|安全区"):
+        asyncio.run(rig.arm.click(target))
+    assert any(cmd.startswith("XY ") for cmd in motion(rig))
+    assert not any(cmd.startswith("TAP") for cmd in motion(rig))
+
+
+def test_existing_preference_intersection_remains_in_final_position_guard(target_rig, monkeypatch):
+    rig = target_rig
+    # 明确跨过保存时间戳边界，避免同秒运行掩盖内存/落盘快照不一致。
+    saved_at = "2026-10-19T00:00:01"
+    monkeypatch.setattr(cb, "now_iso", lambda: saved_at)
+    enable(rig, policy(top=36))
+    assert rig.bundle["updatedAt"] == saved_at
+    rig.source.image = rig.frame("chat_ime_hidden")
+    frame = asyncio.run(rig.camera._selected_layout_frame())
+    # (32, 32) is in the real safe box but below the existing preference intersection.
+    with pytest.raises(ValueError, match="内部偏好区"):
+        frame.verify_target_point("back_button", {"robotX": -6.8, "robotY": -21}, rig.bundle)
 
 
 @pytest.mark.parametrize("value", [None, policy(top=-1), policy(top=640)])

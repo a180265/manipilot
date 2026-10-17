@@ -484,31 +484,14 @@ class ImeCalibrationClient:
 def build_gesture_coordinate_frame(bundle: dict, metadata: dict, *,
                                    ime_device_id: str, session_id: str) -> dict:
     """从同次校准的原始页面证据构造旁档；纯函数，不读写或操作硬件。"""
-    if not isinstance(metadata, dict):
-        raise WizardError("legacy metadata 缺失，不能重建坐标桥")
-    page = metadata.get("page") or {}
-    if (not ime_device_id or not session_id
-            or metadata.get("deviceId") != ime_device_id
-            or metadata.get("sessionId") != session_id
-            or page.get("legacyCalibrationSessionId") != session_id
-            or page.get("pageId") != "legacy-calibration"):
-        raise WizardError("legacy metadata 设备、会话或原校准页面不匹配")
-    if page.get("rotation") != 0 or page.get("coordinateSpaceVersion") != 2:
-        raise WizardError("legacy metadata 坐标版本或屏幕方向不受支持")
-    for field in ("rootWidthPx", "rootHeightPx", "displayWidthPx", "displayHeightPx"):
-        if type(page.get(field)) is not int or page[field] <= 0:
-            raise WizardError("legacy metadata 屏幕尺寸无效")
-    origin = page.get("rootOriginDisplayPx")
-    if (not isinstance(origin, list) or len(origin) != 2
-            or any(type(value) is not int or value < 0 for value in origin)
-            or origin[0] + page["rootWidthPx"] > page["displayWidthPx"]
-            or origin[1] + page["rootHeightPx"] > page["displayHeightPx"]):
-        raise WizardError("legacy metadata 校准根视图超出物理屏幕")
-    density = page.get("density")
-    if (type(density) not in (int, float) or not math.isfinite(density) or density <= 0
-            or not isinstance(metadata.get("clientInstanceId"), str)
-            or not metadata["clientInstanceId"].strip()):
-        raise WizardError("legacy metadata 密度或客户端来源无效")
+    from drivers.calibration_display import validate_metadata
+    try:
+        metadata = validate_metadata(metadata, ime_device_id=ime_device_id,
+                                     session_id=session_id, screen=bundle["screen"])
+    except ValueError as exc:
+        raise WizardError(str(exc)) from exc
+    page = metadata["page"]
+    origin, density = page["rootOriginDisplayPx"], page["density"]
     frame = gp.build_coordinate_frame(
         binding=sg.binding_snapshot(bundle),
         calibration_run_id=(bundle.get("autoCalibration") or {}).get("runId") or "manual-finish",
@@ -1913,6 +1896,13 @@ class CalibrationWizard:
                 z["tap"] = {"depth": latest["depth"], "feed": latest["feed"],
                             "dwellMs": latest["dwellMs"], "validated": True,
                             "sampleId": latest["sampleId"], "savedAt": _now()}
+                auto_safe = z.get("autoSafe") or {}
+                if auto_safe.get("validated") and any(
+                        auto_safe.get(key, 0 if key == "tapDwellMs" else None) != latest[source]
+                        for key, source in (("tapDepth", "depth"), ("tapFeed", "feed"),
+                                            ("tapDwellMs", "dwellMs"))):
+                    auto_safe["validated"] = False
+                    auto_safe["validationError"] = "普通点击参数已变化，请重新确认 zSafe+点击参数"
             elif kind == "delete":
                 latest = next((t for t in reversed(z["trials"])
                                if t["kind"] == "delete" and t["ok"]), None)
@@ -2492,7 +2482,8 @@ class CalibrationWizard:
         return quad
 
     def _bundle_edge_corners(self) -> list | None:
-        saved = ((self._bundle().get("screen") or {}).get("edgeModel")
+        screen = self._bundle().get("screen") or {}
+        saved = (screen.get("calibrationRootEdgeModel") or screen.get("edgeModel")
                  or {}).get("corners")
         return saved if saved and len(saved) == 4 else None
 
@@ -4245,10 +4236,12 @@ class CalibrationWizard:
             session_id = self.state.get("imeSessionId")
             if not ime_device or not session_id:
                 raise WizardError("legacy metadata 的原校准设备或会话缺失")
-            fetch = getattr(self.ime, "fetch_gesture_frame_metadata", None)
-            if fetch is None:
-                raise WizardError("legacy metadata 只读查询不可用")
-            metadata = fetch(ime_device, session_id)
+            metadata = (bundle.get("screen") or {}).get("displayCoordinateMetadata")
+            if metadata is None:
+                fetch = getattr(self.ime, "fetch_gesture_frame_metadata", None)
+                if fetch is None:
+                    raise WizardError("legacy metadata 只读查询不可用")
+                metadata = fetch(ime_device, session_id)
             frame = build_gesture_coordinate_frame(
                 bundle, metadata, ime_device_id=ime_device, session_id=session_id)
             gp.save_coordinate_frame(self.device, frame, data_root=self.data_root)
@@ -4321,7 +4314,7 @@ class CalibrationWizard:
     # ---------- v1.1 自动校准：操作员确认入口（zSafe / tapDepth / SAFE PARK） ----------
 
     def z_confirm_safe(self, z_safe: float | None = None, tap_depth: float | None = None,
-                       tap_feed: float | None = None) -> dict:
+                       tap_feed: float | None = None, tap_dwell_ms: int | None = None) -> dict:
         """确认 zSafe/tapDepth 并当场验证：原地执行一次测试点击，收到触点回报才算确认成功。
 
         用户拍板 2026-09-03：只有真实点一次、手机回报触点，才能肯定 Z 参数没问题
@@ -4333,6 +4326,17 @@ class CalibrationWizard:
         with self._lock:
             self._require_motion_goal()
             self._require_no_auto_run("确认点击参数（含一次测试点击）")
+            saved = cb.load_bundle(self.device, self.data_root) or {}
+            saved_dwell = (saved.get("z") or {}).get("tapDwellMs")
+            if tap_dwell_ms is None:
+                tap_dwell_ms = (self.state["z"].get("tap") or {}).get(
+                    "dwellMs", saved_dwell if saved_dwell is not None else 0)
+            if type(tap_dwell_ms) is not int or not 0 <= tap_dwell_ms <= TAP_DWELL_MAX_MS:
+                raise WizardError(f"普通点击停留需为 0~{TAP_DWELL_MAX_MS}ms 的整数")
+            if (saved.get("status") in {"ready", cb.MOTION_READY_STATUS}
+                    and tap_dwell_ms != (saved_dwell if saved_dwell is not None else 0)):
+                raise WizardError("修改普通点击停留需先重新开始校准并完成验证；"
+                                  "仅试参数请用「点击测试」，不会改写当前正式校准")
             # 这是新 daemon/IME 会话恢复执行资格的唯一复核入口；
             # 普通动作仍由 _require_session 的 rebind 门禁拦截。
             self._require_session(allow_rebind=True)
@@ -4368,6 +4372,7 @@ class CalibrationWizard:
                 raise WizardError(f"点击深度 {tap_depth}mm 超出 0.5~10mm")
             record = {
                 "zSafe": z_safe, "tapDepth": tap_depth, "tapFeed": tap_feed,
+                "tapDwellMs": tap_dwell_ms,
                 "source": "operator_confirmed", "confirmedAt": _now(),
                 "daemonSession": self.state.get("daemonSession"),
                 "mposAtConfirm": {k: round(float(mpos.get(k)), 3) for k in ("x", "y", "z")},
@@ -4380,7 +4385,7 @@ class CalibrationWizard:
             self.daemon.ensure_debug_lease()
             try:
                 report = self._tap_with_report(
-                    sample_id, lambda: self._daemon_tap(tap_depth, tap_feed, 0),
+                    sample_id, lambda: self._daemon_tap(tap_depth, tap_feed, tap_dwell_ms),
                     phone_reference=phone_reference, allow_rebind=True)
             except TouchReportTimeout as exc:
                 record["validationError"] = str(exc)
@@ -4395,6 +4400,10 @@ class CalibrationWizard:
                                 "screenWidth": report["screenWidth"],
                                 "screenHeight": report["screenHeight"],
                                 "sampleId": sample_id}
+            self.state["z"]["tap"] = {
+                "depth": tap_depth, "feed": tap_feed, "dwellMs": tap_dwell_ms,
+                "validated": True, "sampleId": sample_id, "savedAt": _now(),
+            }
             if pose_note:
                 record["poseReference"] = pose_note
             self._save_tap_anchor(mpos, report, "z_confirm_safe")
@@ -4404,6 +4413,7 @@ class CalibrationWizard:
             self._sync_bundle()
             self._save_state()
             return {"zSafe": z_safe, "tapDepth": tap_depth, "tapFeed": tap_feed,
+                    "tapDwellMs": tap_dwell_ms,
                     "confirmedAt": record["confirmedAt"], "validated": True,
                     "report": record["report"]}
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 import threading
 import time
 
+from runtime.arm_binding import require_arm_binding
+
 _REQUIRED = ("evidence_id", "camera_id",
              "camera_binding_id", "source_geometry_id", "frame_width",
              "frame_height", "source_generation_id", "source_frame_seq",
@@ -40,6 +42,7 @@ def frame_from_record(record: dict, *, read_bytes, arm_binding_id: str) -> dict:
     if missing:
         raise ValueError(f"来源证据缺少可信字段 {missing}（不补默认值）")
     camera_identity = archived_camera_identity(record)
+    arm_identity = require_arm_binding(arm_binding_id)
     data = read_bytes(record["evidence_id"])
     return {
         "evidence_id": record["evidence_id"],
@@ -48,9 +51,7 @@ def frame_from_record(record: dict, *, read_bytes, arm_binding_id: str) -> dict:
             "camera_id": str(record["camera_id"]),
             "camera_device_unique_id": camera_identity,
             "camera_binding_id": str(record["camera_binding_id"]),
-            "arm_binding_id": str(arm_binding_id
-                                  or record.get("arm_binding_id")
-                                  or camera_identity),
+            "arm_binding_id": arm_identity,
         },
         "source_size": {"width": int(record["frame_width"]),
                         "height": int(record["frame_height"])},

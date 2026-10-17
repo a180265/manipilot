@@ -91,6 +91,9 @@ LISTEN = ("127.0.0.1", int(os.environ.get("ARM_DAEMON_PORT", "8795")))
 DEVICE_ID = os.environ.get("ARM_DAEMON_DEVICE_ID", "arm-01").strip() or "arm-01"
 WATCH_INTERVAL_S = 2.0
 MPOS_RESPONSE_TIMEOUT_S = 2.0
+CONNECT_HANDSHAKE_TIMEOUT_S = 4.0
+CONNECT_STABLE_WINDOW_S = 0.5
+RESUME_CONFIRM_TIMEOUT_S = 1.5  # 调试台控制请求总超时为 2 秒。
 CLIENT_IDLE_TIMEOUT_S = 120.0
 COMMAND_LOCK_TIMEOUT_S = 5.0
 MAX_CLIENTS = 64
@@ -108,10 +111,11 @@ class ArmSession:
     def __init__(self) -> None:
         self.session = uuid.uuid4().hex
         self.serial = None
-        # P11 宽限：开串口必然复位 ESP32，Grbl 启动横幅是预期输出而非
-        # "会话中途隐藏复位"。宽限在首次成功位置/指令交换后关闭，此后
-        # 同会话再出现横幅仍按隐藏复位撤销会话。
+        # 启动宽限仅覆盖连接握手。首次位置可能早于延迟启动横幅，不能
+        # 只凭第一条回包就宣布就绪；握手完成后横幅仍立即撤销会话。
         self._boot_banner_grace = True
+        self._initializing_connection = True
+        self._startup_banner_count = 0
         try:
             self.serial = self._open_serial()
             # 部分 macOS USB-串口驱动不支持 DTR/RTS 控制，会在设备已成功打开后
@@ -144,10 +148,34 @@ class ArmSession:
             except Exception as exc:
                 raise RuntimeError(
                     f"串口连接失败（阶段 startup_flush）：{exc}") from exc
+            try:
+                self._confirm_connection()
+            except Exception as exc:
+                raise RuntimeError(f"串口连接失败（阶段状态握手）：{exc}") from exc
         except Exception:
             self.close()
             raise
         print(f"串口已连接，会话锚点 {self.session}", flush=True)
+
+    def _confirm_connection(self) -> None:
+        """只读等待稳定状态；启动横幅重置窗口，不下发复位或运动。"""
+        deadline = time.monotonic() + CONNECT_HANDSHAKE_TIMEOUT_S
+        stable_key, stable_since = None, None
+        while time.monotonic() < deadline:
+            position = self.mpos(deadline=deadline)
+            state = position["state"]
+            key = (self._startup_banner_count, state,
+                   position["x"], position["y"], position["z"])
+            if state not in {"Idle", "Hold:0", "Alarm", "Door:0", "Check", "Sleep"}:
+                stable_key, stable_since = None, None
+            elif key != stable_key:
+                stable_key, stable_since = key, time.monotonic()
+            elif time.monotonic() - stable_since >= CONNECT_STABLE_WINDOW_S:
+                self._boot_banner_grace = False
+                self._initializing_connection = False
+                return
+            time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+        raise serial.serialutil.SerialException("连接状态握手未取得连续稳定位置，未宣布连接就绪")
 
     @staticmethod
     def _close_serial(serial_port) -> None:
@@ -265,7 +293,9 @@ class ArmSession:
             guard = getattr(self, "_motion_guard", None)
             if guard is not None:
                 guard()
-            self.serial.write((line + "\n").encode())
+            data = (line + "\n").encode()
+            if self.serial.write(data) != len(data):
+                raise serial.serialutil.SerialException("串口指令写入不完整")
         if not expect_ok:
             return []
         out: list[str] = []
@@ -276,11 +306,13 @@ class ArmSession:
                 continue
             if self._is_controller_reset_banner(text):
                 if getattr(self, "_boot_banner_grace", False):
+                    self._startup_banner_count = getattr(self, "_startup_banner_count", 0) + 1
                     continue  # CONNECT 启动横幅：预期内的开机输出，跳过
                 raise self._controller_reset_error(text)
             out.append(text)
             if text == "ok":
-                self._boot_banner_grace = False
+                if not getattr(self, "_initializing_connection", False):
+                    self._boot_banner_grace = False
                 return out
             if text.startswith("error"):
                 raise RuntimeError(f"控制器拒绝: {text}（{line}）")
@@ -304,13 +336,16 @@ class ArmSession:
             f"控制器启动/复位提示出现在已建立的串口会话中：{text}"
             "（坐标基准丢失，会话已撤销；请重新连接并按新坐标系复核校准）")
 
-    def mpos(self) -> dict:
-        self.serial.write(b"?\n")
-        deadline = time.monotonic() + MPOS_RESPONSE_TIMEOUT_S
+    def mpos(self, *, deadline: float | None = None) -> dict:
+        deadline = min(deadline if deadline is not None else float("inf"),
+                       time.monotonic() + MPOS_RESPONSE_TIMEOUT_S)
+        if self.serial.write(b"?\n") != 2:
+            raise serial.serialutil.SerialException("状态查询写入不完整")
         while time.monotonic() < deadline:
             text = self._readline(deadline).decode(errors="ignore").strip()
             if self._is_controller_reset_banner(text):
                 if getattr(self, "_boot_banner_grace", False):
+                    self._startup_banner_count = getattr(self, "_startup_banner_count", 0) + 1
                     continue  # CONNECT 启动横幅：预期内的开机输出，跳过
                 raise self._controller_reset_error(text)
             if (not text.startswith("<") or not text.endswith(">")
@@ -327,9 +362,31 @@ class ArmSession:
             if len(values) != 3 or not all(math.isfinite(value) for value in values):
                 continue
             x, y, z = values
-            self._boot_banner_grace = False
+            if not getattr(self, "_initializing_connection", False):
+                self._boot_banner_grace = False
             return {"x": x, "y": y, "z": z, "state": parts[0]}
         raise serial.serialutil.SerialException("状态查询无响应")
+
+    def resume(self) -> dict:
+        """发送一次恢复字节，仅观察到退出保持状态后才报告成功。"""
+        deadline = time.monotonic() + RESUME_CONFIRM_TIMEOUT_S
+        with getattr(self, "_write_lock", nullcontext()):
+            guard = getattr(self, "_motion_guard", None)
+            if guard is not None:
+                guard()
+            if self.serial.write(b"~") != 1:
+                raise serial.serialutil.SerialException("恢复指令写入不完整")
+        while time.monotonic() < deadline:
+            if guard is not None:
+                guard()
+            position = self.mpos(deadline=deadline)
+            state = position["state"]
+            if state in {"Idle", "Run", "Jog"}:
+                return {"resumed": True, **position}
+            if not state.startswith("Hold"):
+                raise RuntimeError(f"恢复未确认：控制器当前状态 {state}")
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+        raise RuntimeError("恢复未确认：控制器仍处于进给保持，未自动重放恢复指令")
 
     def idle(self, timeout: float = 30.0) -> dict:
         deadline = time.monotonic() + timeout
@@ -742,9 +799,7 @@ def handle(line: str, conn_id: int,
         return json.dumps({"estop_locked": False, "reset_by": operator}, ensure_ascii=False)
     if cmd == "RESUME":
         def do_resume(arm: ArmSession) -> str:
-            arm.send("~", expect_ok=False)
-            time.sleep(0.3)
-            return '{"resumed": true}'
+            return json.dumps(arm.resume(), ensure_ascii=False)
         return holder.run(do_resume, conn_id, motion=True, cancel_event=cancel_event)
 
     # ---- 运动租约管理 ----

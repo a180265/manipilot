@@ -26,7 +26,19 @@ class _OpenableSerial:
         self.closed = False
         self.is_open = False
         self.writes = []
+        self.timeout = kwargs.get("timeout", 0.6)
+        self.pending = b""
         type(self).instances.append(self)
+
+    def write(self, data):
+        self.writes.append(data)
+        if data == b"?\n":
+            self.pending += b"<Idle|MPos:0,0,0>\n"
+        return len(data)
+
+    def read(self, size=1):
+        result, self.pending = self.pending[:size], self.pending[size:]
+        return result
 
     def open(self):
         failure = type(self).open_failures.pop(0) if type(self).open_failures else None

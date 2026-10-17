@@ -35,7 +35,8 @@ def get_active_coordinator():
 
 
 def create_gesture_router(service: ScreenImeService | None = None,
-                          phone_identity_provider=None) -> APIRouter:
+                          phone_identity_provider=None,
+                          phone_identity_required=None) -> APIRouter:
     """gesture-capture.v1 手机采样路由。
 
     phone_identity_provider（W4-001/D 接口请求①）：与 screen_ime 路由同款
@@ -54,7 +55,8 @@ def create_gesture_router(service: ScreenImeService | None = None,
             _active_coordinator.configure_metadata_storage(Path(database["file"]).parent)
 
     def require_phone(request: Request, path_device: str | None = None) -> dict:
-        if phone_identity_provider is None:
+        if phone_identity_provider is None or (
+                phone_identity_required is not None and not phone_identity_required()):
             return {}
         token = request.headers.get("x-ime-phone-token")
         identity = phone_identity_provider(token) if token else None

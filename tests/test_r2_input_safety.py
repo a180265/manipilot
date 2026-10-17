@@ -613,6 +613,7 @@ def geometry_env(tmp_path):
     configs = _mdc(2, camera_device_unique_id="uvc-01", binding_revision=7,
                    daemon_addr="127.0.0.1:8795", expected_frame_width=64,
                    expected_frame_height=48)
+    runtime.ime_pairing_trust = {"https_origin": "https://fleet.test"}
     for index, cfg in enumerate(configs):
         cfg["daemon_addr"] = f"127.0.0.1:{8795 + index}"
         cfg["camera_device_unique_id"] = f"uvc-{index + 1:02d}"

@@ -129,6 +129,13 @@ def _now_iso() -> str:
         timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _iso_from_ms(timestamp_ms: int) -> str:
+    import datetime
+    return datetime.datetime.fromtimestamp(
+        timestamp_ms / 1000, datetime.timezone.utc
+    ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -343,7 +350,7 @@ class ImePairingService:
                     "request_id": request_id,
                     "invitation_id": invitation_id,
                     "server_id": server_id,
-                    "expires_at": _now_iso(),
+                    "expires_at": _iso_from_ms(record["expires_at_ms"]),
                     "status": "offered",
                     "arm_id": arm_id,
                     "trust": dict(trust or {}),
@@ -372,12 +379,12 @@ class ImePairingService:
                 and _now_ms() > int(rec.get("expires_at_ms") or 0):
             return {"contract_version": CONTRACT_VERSION,
                     "invitation_id": invitation_id, "status": "expired",
-                    "expires_at": _now_iso(), "arm_id": rec.get("arm_id"),
+                    "expires_at": _iso_from_ms(rec["expires_at_ms"]), "arm_id": rec.get("arm_id"),
                     "created_at": rec.get("created_at"),
                     "consumed_by_pairing": rec.get("consumed_by_pairing")}
         return {"contract_version": CONTRACT_VERSION,
                 "invitation_id": invitation_id, "status": rec["status"],
-                "expires_at": _now_iso(), "arm_id": rec.get("arm_id"),
+                "expires_at": _iso_from_ms(rec["expires_at_ms"]), "arm_id": rec.get("arm_id"),
                 "created_at": rec.get("created_at"),
                 "consumed_by_pairing": rec.get("consumed_by_pairing")}
 
@@ -667,7 +674,7 @@ class ImePairingService:
                     "ime_device_id": ime_device_id,
                     "state": "pending",
                     "revision": int(phone["revision"]),
-                    "activation_deadline": _now_iso(),
+                    "activation_deadline": _iso_from_ms(pairing["activation_deadline_ms"]),
                     "server_id": self.server_id,
                     "replayed": False,
                 }
@@ -815,7 +822,7 @@ class ImePairingService:
                 "ime_device_id": pairing["ime_device_id"],
                 "state": pairing["state"],
                 "revision": int(pairing["revision"]),
-                "activation_deadline": _now_iso()
+                "activation_deadline": _iso_from_ms(pairing["activation_deadline_ms"])
                 if pairing["state"] == "pending" else None,
                 "credential_id": pairing.get("credential_id"),
                 "generation": None}

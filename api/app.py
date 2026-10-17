@@ -186,8 +186,12 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         # 业主产品决策 2026-10-16：未配置配对信任材料（ime_pairing_trust 空）=
         # 开放部署模式，不注入手机身份门（填 IP+端口直连即用；LAN 明文前提下
         # 身份/撤销能力不启用）；配置了信任材料的部署仍强制配对身份。
-        _ime_pairing_enforced = (runtime is not None and getattr(
-            runtime, "ime_pairing_trust", None) is not None)
+        def phone_identity_required():
+            # The factory commonly receives runtime=None; decide only after
+            # lifespan has loaded deployment trust. Before readiness fail closed.
+            active_runtime = getattr(app.state, "runtime", None)
+            return active_runtime is None or getattr(
+                active_runtime, "ime_pairing_trust", None) is not None
         def phone_identity_provider(token):
             rt_ = getattr(app.state, "runtime", None)
             if rt_ is None or not token:
@@ -203,15 +207,16 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
 
         app.include_router(create_screen_ime_router(
             ime_service, camera_source_for, geometry_provider=geometry_provider,
-            phone_identity_provider=phone_identity_provider if _ime_pairing_enforced else None,
-            pairing_provider=pairing_provider))
+            phone_identity_provider=phone_identity_provider,
+            phone_identity_required=phone_identity_required, pairing_provider=pairing_provider))
         # gesture-capture.v1 手机采样协议路由（规范第 5.2 节，同挂 8788）。
-        # D 接口请求①：手机侧 5 端点同款 token 门（W4-001：与 screen_ime
-        # 路由共用同一 phone_identity_provider，未配对零采样入口）。
+        # 与 screen_ime 共用部署模式：配置 trust 时强制身份；现有 IP 直连
+        # 模式同样接通校准 metadata，不能只让旧校准端点成功而旁档一直 401。
         from adapters.screen_ime.gesture_routes import create_gesture_router
 
         app.include_router(create_gesture_router(
-            ime_service, phone_identity_provider=phone_identity_provider))
+            ime_service, phone_identity_provider=phone_identity_provider,
+            phone_identity_required=phone_identity_required))
         app.add_exception_handler(ScreenImeApiError, screen_ime_error_handler)
 
     @asynccontextmanager
@@ -1290,8 +1295,12 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
     # ---- Runtime 事实源（R2-16/R2-15 提供器；缺可信字段拒绝） ----
     def _device_arm_binding(rt_, device_id: str) -> str:
         device = rt_.devices.get(device_id) or {}
-        return str(device.get("daemon_binding_id")
-                   or device.get("arm_binding_id") or "")
+        from runtime.arm_binding import require_arm_binding
+        try:
+            return require_arm_binding(device.get("daemon_binding_id")
+                                       or device.get("arm_binding_id"))
+        except ValueError as exc:
+            raise LayoutHttpError("layout_binding_changed", str(exc), 409) from exc
 
     def _calibration_facts(rt_, device_id: str) -> dict | None:
         from drivers import calibration_bundle as cb
@@ -1606,8 +1615,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
                     "camera_device_unique_id":
                         facts["camera_device_unique_id"],
                     "camera_binding_id": facts["camera_binding_id"],
-                    "arm_binding_id": facts.get("arm_binding_id")
-                    or facts["camera_device_unique_id"]},
+                    "arm_binding_id": facts["arm_binding_id"]},
                 "source_size": size,
                 "source_geometry_id": facts["source_geometry_id"],
                 "ime_device_id": facts.get("ime_device_id") or device_id,
@@ -2159,8 +2167,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
                     "camera_device_unique_id":
                         facts["camera_device_unique_id"],
                     "camera_binding_id": facts["camera_binding_id"],
-                    "arm_binding_id": facts.get("arm_binding_id")
-                    or facts["camera_device_unique_id"]},
+                    "arm_binding_id": facts["arm_binding_id"]},
                 "source_size": size,
                 "source_geometry_id": facts["source_geometry_id"],
                 "ime_device_id": facts.get("ime_device_id") or device_id,

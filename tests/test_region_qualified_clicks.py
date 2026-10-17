@@ -17,6 +17,16 @@ def region_driver(driver, monkeypatch):
     # Qualification/geometry evidence is tested in bundle tests; exercise the
     # real target-resolution and daemon path with a region-qualified snapshot.
     original = cb.load_bundle
+    # This fixture toggles only the execution-policy branch, without creating
+    # a complete region calibration. Preserve its actual source calibration
+    # identity when the IME coordinate bridge validates the frozen binding.
+    from drivers import screen_gestures as sg
+    original_binding = sg.binding_snapshot
+    base = original(driver.device_id, driver.data_root)
+    base_binding = original_binding(base)
+    monkeypatch.setattr(sg, 'binding_snapshot', lambda bundle:
+                        deepcopy(base_binding) if (bundle.get('validation') or {}).get('criterion') == 'target_region_v1'
+                        else original_binding(bundle))
 
     def located(*args, **kwargs):
         bundle = deepcopy(original(*args, **kwargs))
