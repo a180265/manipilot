@@ -238,7 +238,9 @@ class SelectedLayout:
     def _verify_page_evidence(self, state, width, height):
         page, check = self.pages[state], self.checks[state]
         purposes = [item["purpose"] for item in page["regions"]]
-        required = ({"unread", "content", "foreground", "background"}
+        # List pages may derive their palette from the two verified anchors.
+        # Message bubbles still require explicit foreground/background regions.
+        required = ({"unread", "content"}
                     if state == "wechat_list" else
                     {"title", "input", "content", "foreground", "background"})
         _require(required <= set(purposes) and len(purposes) == len(set(purposes)),

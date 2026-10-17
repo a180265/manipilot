@@ -122,7 +122,9 @@ class EvidenceStore:
         不再丢弃截图与采样时序的关联。
         """
         frame = camera.capture_sync()
-        camera_id = camera.device_id if hasattr(camera, "device_id") else None
+        # Shared brokers expose camera_id; legacy drivers use device_id.
+        # Read the source actually used for this capture, never the task target.
+        camera_id = getattr(camera, "camera_id", None) or getattr(camera, "device_id", None)
         return self.archive_camera_frame(
             frame,
             device_id=device_id, task_id=task_id, label=label,

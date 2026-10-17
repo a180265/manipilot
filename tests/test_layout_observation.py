@@ -802,8 +802,9 @@ def test_full_v3_size_used_without_clahe_or_thumbnail(layout_rig):
 
 
 @pytest.mark.parametrize("reverse_regions", [False, True])
+@pytest.mark.parametrize("list_color_regions", [True, False])
 def test_real_four_page_publish_products_are_consumed_by_runtime_camera(
-        tmp_path, monkeypatch, reverse_regions):
+        tmp_path, monkeypatch, reverse_regions, list_color_regions):
     """No seeded template/adaptation, direct services only, no HTTP/lifespan."""
     import base64
     import uuid
@@ -814,6 +815,9 @@ def test_real_four_page_publish_products_are_consumed_by_runtime_camera(
         svc = rig.parts["adaptation_svc"]
         pages = copy.deepcopy(rig.template["pages"])
         for page in pages:
+            if page["state"] == "wechat_list" and not list_color_regions:
+                page["regions"] = [region for region in page["regions"]
+                                   if region["purpose"] in {"unread", "content"}]
             for region in page["regions"]:
                 if region["purpose"] == "input":
                     region["relative_rect"] = {
@@ -927,8 +931,13 @@ def test_real_four_page_publish_products_are_consumed_by_runtime_camera(
         record = rig.parts["ops_svc"].resolve_adaptation(
             "arm-01", published["adaptation_ref"]["version"])
         for sample in record["color_samples"]:
-            assert sample["foreground_rgb"] == [100, 210, 80]
-            assert sample["background_rgb"] == [240, 240, 240]
+            if sample["state"] == "wechat_list" and not list_color_regions:
+                assert np.linalg.norm(np.array(sample["foreground_rgb"], dtype=float)
+                                      - sample["background_rgb"]) >= 60
+                assert sample["evidence_ids"]
+            else:
+                assert sample["foreground_rgb"] == [100, 210, 80]
+                assert sample["background_rgb"] == [240, 240, 240]
             ref = sample["empty_input_asset_ref"]
             if ref:
                 data = rig.state.read_adaptation_asset(
@@ -951,3 +960,14 @@ def test_real_four_page_publish_products_are_consumed_by_runtime_camera(
         assert ("input", 240, 40) in rig.engine.seen
     finally:
         rig.close()
+
+
+@pytest.mark.parametrize("state", ["chat_ime_hidden", "chat_ime_empty", "chat_ime_text"])
+@pytest.mark.parametrize("purpose", ["title", "input", "foreground", "background"])
+def test_chat_page_evidence_still_requires_explicit_regions(layout_rig, state, purpose):
+    from runtime.layout_observation import LayoutObservationError
+    selected = layout_rig.runtime.layout_observation.resolve("arm-01")
+    selected.pages[state]["regions"] = [row for row in selected.pages[state]["regions"]
+                                        if row["purpose"] != purpose]
+    with pytest.raises(LayoutObservationError, match="明确用途"):
+        selected._verify_page_evidence(state, 320, 640)
