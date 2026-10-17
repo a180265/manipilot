@@ -234,7 +234,7 @@ def test_raw_live_camera_point_is_never_translated_twice(memory_rig, offset):
 @pytest.mark.parametrize("action", ACTIONS)
 def test_large_initial_move_never_travels_or_contacts(memory_rig, action):
     daemon, driver, bundle, phone, _transport = memory_rig
-    phone.offset = (20.0, 0.0)
+    phone.offset = (50.0, 0.0)
     with pytest.raises(DriverError):
         run_action(action, driver, request_for(action, bundle))
     assert daemon.commands == []
@@ -246,7 +246,7 @@ def test_move_seen_before_contact_blocks_touch(memory_rig, action):
 
     def move_after_travel():
         if daemon.commands:
-            phone.offset = (20.0, 0.0)
+            phone.offset = (50.0, 0.0)
 
     phone.before_sample = move_after_travel
     if action == "wake":
@@ -279,7 +279,7 @@ def test_drift_during_last_status_wait_must_block_contact(memory_rig, action):
             at_contact = phone.calls == 2
         if at_contact:
             injected.append(phone.calls)
-            phone.offset = (20.0, 0.0)
+            phone.offset = (50.0, 0.0)
 
     phone.after_sample = record_sample
     transport.on_request = status_wait
@@ -291,7 +291,7 @@ def test_drift_during_last_status_wait_must_block_contact(memory_rig, action):
     assert injected, "The test must reach the STATUS wait after the final pose check"
     assert last_samples
     assert not contact_commands(daemon), (
-        f"Phone shifted 20px during final STATUS wait; contact was sent: "
+        f"Phone shifted 50px during final STATUS wait; contact was sent: "
         f"{contact_commands(daemon)!r}; result={error!r}")
 
 
@@ -303,7 +303,7 @@ def test_drift_during_lease_mpos_must_block_initial_travel(memory_rig, action):
     def mpos_wait(line):
         if line == "MPOS" and not injected:
             injected.append(True)
-            phone.offset = (20.0, 0.0)
+            phone.offset = (50.0, 0.0)
 
     transport.on_request = mpos_wait
     with pytest.raises(DriverError):
@@ -482,7 +482,7 @@ def test_pose_consensus_must_reject_temporary_identity_mismatch(
 
 
 @pytest.mark.parametrize("live", [
-    [[24, 4], [79, 4], [79, 43], [24, 43]],
+    [[54, 4], [109, 4], [109, 43], [54, 43]],
     [[4, 4], [70, 4], [59, 43], [4, 43]],
 ])
 def test_large_or_nonrigid_pose_cannot_be_downgraded_to_advisory(monkeypatch, live):
@@ -493,7 +493,7 @@ def test_large_or_nonrigid_pose_cannot_be_downgraded_to_advisory(monkeypatch, li
 
 
 @pytest.mark.parametrize(("metric", "amount", "allowed"), [
-    ("movement", 15.99, True), ("movement", 16.01, False),
+    ("movement", 44.99, True), ("movement", 45.01, False),
     ("residual", 1.99, True), ("residual", 2.01, False),
     ("scale", 1.0099, True), ("scale", 1.0101, False),
 ])

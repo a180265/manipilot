@@ -8,7 +8,13 @@ import numpy as np
 
 from drivers import calibration_bundle as cb
 
-MAX_COMPENSATION_PX = 16.0
+# 2026-10-17 业主拍板 16→45（≈6mm）：手动滑手机切页的轻微蹭动（实测 2-5mm，
+# 28-45px 相机像素）曾超 16px 上限被动作链拒止。仅放宽可补偿位移幅值；
+# 刚性护栏全部不动（拟合残差 ≤2px、尺度 ≤1%、多帧共识、补偿后目标必须在
+# 实测屏四边形内、接触前 2px 复核、WX 侧动作后效果验证）。校准链各处
+# 显式传 max_movement（采样 10px/点击 4px）不受影响。拿起重放级位移
+# （>45px）仍拒止，属重校准场景。
+MAX_COMPENSATION_PX = 45.0
 MAX_FIT_ERROR_PX = 2.0
 MAX_SCALE_CHANGE = 0.01
 

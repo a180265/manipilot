@@ -1,4 +1,5 @@
 import cv2
+import math
 import numpy as np
 import pytest
 
@@ -31,13 +32,23 @@ def test_rigid_phone_translation_compensates_a_calibrated_point():
 
 
 @pytest.mark.parametrize("live", [
-    [[x + 25, y] for x, y in SAVED],
+    [[x + 55, y] for x, y in SAVED],
     [[30, 10], [100, 10], [90, 80], [30, 80]],
     [[28, 7], [92, 7], [92, 83], [28, 83]],
 ])
 def test_unsafe_phone_geometry_never_produces_robot_coordinates(live):
     with pytest.raises(ValueError):
         fit_pose(SAVED, live)
+
+
+def test_swipe_nudge_translation_within_runtime_ceiling_compensates():
+    """2026-10-17 业主场景：手动滑手机蹭动 2-5mm（≈30-45px 相机像素），
+    动作链应按姿态补偿继续执行——45px 上限内纯平移全程可补偿。"""
+    live = [[x + 30, y + 12] for x, y in SAVED]
+    pose = fit_pose(SAVED, live)
+    assert pose["movementPx"] == pytest.approx((30 ** 2 + 12 ** 2) ** .5, abs=.01)
+    rx, ry = physical_point(bundle(), pose, 50, 45)
+    assert math.isfinite(rx) and math.isfinite(ry)
 
 
 @pytest.mark.parametrize("corners", [
@@ -92,10 +103,11 @@ def test_compensated_quadratic_inverse_must_converge(already_live):
 
 
 @pytest.mark.parametrize("translation,expect_ok", [
-    pytest.param((15.0, 0.0), True, id="movement-equals-limit-passes"),
-    pytest.param((16.0, 0.0), True, id="movement-at-limit-passes"),
-    pytest.param((16.01, 0.0), False, id="movement-over-limit-rejects"),
-    pytest.param((11.32, 11.32), False, id="diagonal-over-limit-rejects"),
+    pytest.param((15.0, 0.0), True, id="movement-within-passes"),
+    pytest.param((44.0, 0.0), True, id="movement-below-new-limit-passes"),
+    pytest.param((45.0, 0.0), True, id="movement-at-limit-passes"),
+    pytest.param((45.01, 0.0), False, id="movement-over-limit-rejects"),
+    pytest.param((31.82, 31.82), False, id="diagonal-over-limit-rejects"),
 ])
 def test_g03_compensation_boundary_exact_limit_passes_and_epsilon_over_rejects(
         translation, expect_ok):
