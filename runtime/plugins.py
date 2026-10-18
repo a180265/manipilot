@@ -67,6 +67,12 @@ class PluginManager:
                     raise ApiError("plugin_manifest_invalid", "任务请求外壳约束无效") from exc
             if "read_only_task" in entry and type(entry["read_only_task"]) is not bool:
                 raise ApiError("plugin_manifest_invalid", "只读任务声明必须为布尔值")
+            if "focuses_input_before_typing" in entry:
+                if (type(entry["focuses_input_before_typing"]) is not bool
+                        or (entry["focuses_input_before_typing"] is True
+                            and (entry.get("requires_input") is not True
+                                 or entry.get("requires_keyboard_active") is not False))):
+                    raise ApiError("plugin_manifest_invalid", "输入聚焦声明必须为布尔值，且仅用于先聚焦的输入任务")
             fields = entry.get("context_fields", [])
             if (not isinstance(fields, list) or any(not isinstance(field, str) or not field.strip()
                                                   for field in fields)

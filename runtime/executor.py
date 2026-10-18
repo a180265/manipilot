@@ -130,6 +130,7 @@ class TaskExecutor:
             device_id, require_input=requires_input and device.get("enforce_input_gate", False),
             ime_device_id=(task.get("payload") or {}).get("ime_device_id"),
             require_keyboard_active=entry.get("requires_keyboard_active", True),
+            require_ime_ready=entry.get("focuses_input_before_typing") is not True,
         )
         if set(eligibility["blocking_checks"]) - {"device_busy"} != {"camera_waiting"}:
             return None
@@ -373,6 +374,7 @@ class TaskExecutor:
                     task["device_id"], require_input=True,
                     ime_device_id=payload_body.get("ime_device_id"),
                     require_keyboard_active=task_type_entry.get("requires_keyboard_active", True),
+                    require_ime_ready=task_type_entry.get("focuses_input_before_typing") is not True,
                 )
                 blocking = list(eligibility["blocking_checks"])
                 # C 组阻断缺陷修复：派发器取得租约后设备进入忙碌，忙碌由本任务
@@ -877,6 +879,7 @@ class TaskExecutor:
                     "park_completed": park_entry.get("outcome") == "success",
                     "park_target_id": park_detail.get("park_target_id"),
                     "park_tap_executed": bool(park_detail.get("park_tap_executed")),
+                    "park_role": park_detail.get("role"),
                     "park_outcome": park_entry.get("outcome"),
                     "park_message": park_entry.get("message", ""),
                 }
@@ -974,7 +977,9 @@ class TaskExecutor:
         }
         if park_result is not None:
             task["home_check"]["parking_semantics"] = (
-                "业务界面停靠位（ime_delete_key），不等于校准安全停车位或硬件回零"
+                "校准安全停车位（无屏幕接触，非硬件回零）"
+                if park_result.get("park_role") == "calibration_safe_park" else
+                "业务界面停靠位（ime_delete_key），非硬件回零"
             )
         if extras.get("provider_message_id"):
             task["provider_message_id"] = extras["provider_message_id"]

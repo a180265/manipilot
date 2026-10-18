@@ -156,6 +156,62 @@ def test_mapping_envelope_includes_real_contact_gap_and_selected_loo():
     assert cb.mapping_error_bound(bundle) is None
 
 
+def displaced_aim_bundle():
+    bundle = region_bundle()
+    for point in bundle["validation"]["points"]:
+        rect = point["regionEvidence"]["targetRect"]
+        center = [rect["u"] * 1080, rect["v"] * 2400]
+        evidence = cb.calibration_region_evidence(
+            rect, SCREEN, [center[0] + 35, center[1]], [center[0] + 32, center[1]])
+        point.update(regionEvidence=evidence, touchTargetErrorPx=35, cameraTouchGapPx=3)
+    bundle["camera"]["visualVerify"] = {
+        "passed": True, "contactVsNominalMaxPx": 35, "contactVsCameraMaxPx": 3}
+    bundle["camera"]["cameraToScreen"]["maxErrorPx"] = 1.62
+    loo = bundle["xy"]["modelSelection"]["affine"]["leaveOneOut"]
+    loo.update(residualsPx=[8.70963508446729] * 9,
+               maxErrorPx=8.70963508446729, rmsPx=8.70963508446729)
+    return bundle
+
+
+def test_region_mapping_excludes_nominal_aim_offset_but_keeps_loo_and_camera_error():
+    bundle = displaced_aim_bundle()
+    assert cb.automatic_calibration_verified(bundle)
+    assert cb.mapping_error_bound(bundle) == pytest.approx(10.32963508446729)
+    # The saved diagnostics still show that the detected aim was off-center.
+    assert bundle["camera"]["visualVerify"]["contactVsNominalMaxPx"] == 35
+    assert bundle["validation"]["points"][0]["regionEvidence"]["touchTargetErrorPx"] == 35
+    bundle["xy"]["maxResidualPx"] = 12
+    bundle["xy"]["modelSelection"]["affine"]["training"]["maxErrorPx"] = 12
+    assert cb.mapping_error_bound(bundle) == pytest.approx(13.62)
+
+
+@pytest.mark.parametrize("source", ["point", "summary"])
+def test_region_nominal_diagnostic_is_still_validated(source):
+    bundle = displaced_aim_bundle()
+    if source == "point":
+        bundle["validation"]["points"][0]["touchTargetErrorPx"] = float("nan")
+    else:
+        bundle["camera"]["visualVerify"]["contactVsNominalMaxPx"] = float("nan")
+    assert cb.mapping_error_bound(bundle) is None
+
+
+def test_region_displaced_aim_can_use_measured_narrow_target_without_erasing_mapping_margin():
+    from runtime import layout_matching
+
+    bundle = displaced_aim_bundle()
+    page = {"targets": [{"id": "candidate", "mode": "tap", "anchor_id": "ime"}]}
+    check = {"status": "passed", "reason_codes": [], "anchor_results": [
+        {"id": "ime", "status": "passed", "matched_rect": {},
+         "localization_error_bound_px": 0}], "item_results": [
+            {"kind": "target", "id": "candidate", "status": "passed",
+             "resolved_rect": {"x": .1, "y": .1, "width": .8, "height": 50 / 2400}}]}
+    result = layout_matching.apply_target_safety(
+        check, page, (1080, 2400), cb.mapping_error_bound(bundle))
+    item = result["item_results"][0]
+    assert item["status"] == "passed"
+    assert item["safe_rect"]["height"] * 2400 == pytest.approx(28)
+
+
 def test_legacy_pixel_qualification_remains_strict():
     bundle=region_bundle()
     del bundle["validation"]["criterion"]

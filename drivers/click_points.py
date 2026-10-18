@@ -277,3 +277,44 @@ def ocr_point(target_id, bbox, camera_point, matrix, error_bound, screen_size, a
                              else f"目标不支持替代点击落点：{exc}") from exc
         safety["reason"] = str(exc)
         return camera_point, screen_point, False, safety
+
+
+def verify_ocr_region(original, observed_polygon, bundle):
+    """Keep every original selectable tap inside the newly observed text.
+
+    OCR edge jitter is harmless only while the chosen centre and bounded retry
+    points retain the measured calibration clearance. Never replace coordinates
+    with a new observation, or enlarge either polygon to tolerate a moved row.
+    """
+    from drivers import calibration_bundle
+
+    matrix = np.asarray(bundle["camera"]["cameraToScreen"]["homography"], dtype=float).reshape(3, 3)
+    error_bound = calibration_bundle.mapping_error_bound(bundle)
+    screen = bundle["screen"]
+    screen_size = [screen.get("screenWidth") or screen.get("widthPx"),
+                   screen.get("screenHeight") or screen.get("heightPx")]
+    policy = policy_from_bundle(bundle)
+    polygon = project(matrix, observed_polygon)
+    polygon, _, normals, bounds = _polygon_planes(polygon)
+    if (type(error_bound) not in (int, float) or not np.isfinite(error_bound)
+            or error_bound < 0):
+        raise ValueError("文字范围复核缺少校准最大误差")
+    margin = float(error_bound) + 2.0
+    for attempt in range(3):
+        _, point, supported, safety = ocr_point(
+            "conversation_item", original.get("bbox"),
+            [original["cameraX"], original["cameraY"]], matrix, error_bound,
+            screen_size, attempt, camera_polygon=original.get("cameraPolygon"),
+            require_polygon=True, policy=policy)
+        if "screen_polygon" not in safety:
+            # Preserve the strict legacy centre-only path for tiny targets.
+            # It receives no area-based jitter allowance or retry coordinates.
+            previous, _, _, _ = _polygon_planes(project(matrix, original["cameraPolygon"]))
+            if float(np.max(np.linalg.norm(polygon - previous, axis=1))) > 2.0:
+                raise ValueError("文字四角已移动且没有可用的点击范围")
+            return
+        clearance = float(np.min(normals @ point - bounds))
+        if not np.isfinite(clearance) or clearance <= margin:
+            raise ValueError(f"原落点已超出新文字安全范围（边距{clearance:.2f}，需>{margin:.2f}屏幕像素）")
+        if not supported:
+            break

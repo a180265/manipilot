@@ -1995,12 +1995,18 @@ def _camera_point_to_robot(bundle: dict, robot_to_screen: dict,
 
 # ---------- 摄像头 ----------
 
-def fetch_camera_frame(device: str) -> tuple[bytes, int]:
-    """校准链取帧唯一入口：经 HttpFrameSource 单实现（Auto_CS#6）。
+def fetch_camera_frame(device: str, *,
+                       not_before_monotonic_ns: int | None = None) -> tuple[bytes, int]:
+    """经 HttpFrameSource 取桥上原字节，恢复复核可要求动作后采样证明。
 
-    与观测链同一套契约（身份/必填头/新鲜度校验，失败同样收敛为
-    RuntimeError）；返回桥上原字节（证据存档与 MJPEG 不二次编码）。
+    序号推进和收到新帧不证明采样发生在动作后；有门槛时按可信源采样
+    时刻减不确定度核对，最多轮询三秒。普通取帧保留原有单次读取行为。
     """
+    from drivers.camera_broker import frame_chain_identity
+
+    if not_before_monotonic_ns is not None and (
+            type(not_before_monotonic_ns) is not int or not_before_monotonic_ns < 0):
+        raise ValueError("动作完成采样门槛必须是非负单调时刻")
     cfg = device_config(device)
     camera_id = str(cfg.get("camera_id") or "")
     source = HttpFrameSource(
@@ -2009,15 +2015,42 @@ def fetch_camera_frame(device: str) -> tuple[bytes, int]:
         expected_device_id=device,
         allow_legacy=cfg.get("camera_mode") == "legacy_single",
     )
-    try:
-        data, seq = source.fetch_bytes()
-    except Exception as exc:
-        raise RuntimeError(
-            f"设备 {device} 取流失败：{exc}（摄像头 {camera_id}）"
-        ) from exc
-    if not data:
-        raise RuntimeError("取流服务尚无画面（请检查 CameraHelper 对应通道）")
-    return data, int(seq or 0)
+    deadline_ns = time.monotonic_ns() + 3_000_000_000
+    for _attempt in range(61):
+        if not_before_monotonic_ns is not None:
+            remaining_ns = deadline_ns - time.monotonic_ns()
+            if remaining_ns <= 0:
+                break
+            source.timeout = min(3.0, remaining_ns / 1e9)
+        try:
+            data, seq = source.fetch_bytes()
+        except Exception as exc:
+            raise RuntimeError(
+                f"设备 {device} 取流失败：{exc}（摄像头 {camera_id}）"
+            ) from exc
+        if not data:
+            raise RuntimeError("取流服务尚无画面（请检查 CameraHelper 对应通道）")
+        if not_before_monotonic_ns is None:
+            return data, int(seq or 0)
+        identity = frame_chain_identity({
+            "source_generation_id": source.last_source_generation_id,
+            "source_capture_seq": source.last_source_capture_seq,
+            "source_captured_monotonic_ns": source.last_source_captured_monotonic_ns,
+            "source_capture_uncertainty_ms": source.last_source_capture_uncertainty_ms,
+            "source_timing_provenance": source.last_source_timing_provenance,
+        })
+        if identity is None:
+            raise RuntimeError("恢复复核缺少可信源采样时刻证明，拒绝使用兼容帧")
+        earliest_ns = (identity["captured_monotonic_ns"]
+                       - math.ceil(identity["uncertainty_ms"] * 1_000_000))
+        remaining_ns = deadline_ns - time.monotonic_ns()
+        if remaining_ns <= 0:
+            break
+        if earliest_ns > not_before_monotonic_ns:
+            return data, int(seq or 0)
+        # 仅用于限制轮询频率；sleep 本身从不构成动作后采样证明。
+        time.sleep(min(0.05, remaining_ns / 1e9))
+    raise RuntimeError("等待动作完成后的可信相机采样超时，拒绝恢复旧坐标")
 
 
 def camera_status(device: str) -> dict:
@@ -2174,19 +2207,14 @@ def _arm_anchor_verify(device: str) -> bool:
     =偏差超限不通过）。任何一步失败抛错/返回 False，由调用方转人工。"""
     import cv2
     import numpy as np
-    from drivers.screen_edge import locate_screen_quad
+    from runtime.recovery import locate_recovery_screen, recovery_anchor
     from drivers.screen_pose import fit_pose
 
     import drivers.calibration_bundle as cb
     bundle = cb.load_bundle(device, DATA_DIR)
     if bundle is None:
         raise RuntimeError("无校准档案，无法臂侧核对")
-    point = next((p for p in (bundle.get("xy") or {}).get("validation") or []
-                  if p.get("effectiveRobotXY") and p.get("targetScreen")), None)
-    if point is None:
-        raise RuntimeError("档案缺少验证点（effectiveRobotXY+targetScreen），无法臂侧核对")
-    rx, ry = (float(v) for v in point["effectiveRobotXY"])
-    sx, sy = (float(v) for v in point["targetScreen"])
+    (rx, ry), (sx, sy) = recovery_anchor(bundle)
     z = bundle.get("z") or {}
     hover_z = z.get("hoverZ")
     # N2（第七轮验收）：type 严格检查（bool 是 int 子类）+ isfinite
@@ -2194,44 +2222,58 @@ def _arm_anchor_verify(device: str) -> bool:
         # F5（第七轮复审）：缺键静默取 0 = 动绝对 Z 0，绝对禁止。
         raise RuntimeError("档案缺少有效 hoverZ，拒绝锚点走位（不能盲动 Z）")
 
-    # 有界走位：do_goto_robot 内置单次上限/分段/残差检查（超限即抛），
-    # 悬停不点击——验证的是坐标系，不是功能动作。
-    do_goto_robot(device, rx, ry, tap=False,
-                  hover_z=float(hover_z), feed_xy=1500.0,
-                  tap_depth=float(z.get("tapDepth", 3.0)),
-                  tap_feed=float(z.get("tapFeed", 1500.0)))
-
-    jpg, _seq = fetch_camera_frame(device)
-    tip = detect_tip_with_frame(jpg)
-    if tip is None:
-        raise RuntimeError("探头尖不可见，无法臂侧核对")
-    homography = ((bundle.get("camera") or {}).get("cameraToScreen") or {}).get("homography")
-    if not homography:
-        raise RuntimeError("档案缺少 cameraToScreen 单应，无法臂侧核对")
-    matrix = np.asarray(homography, dtype=float).reshape(3, 3)
-    inverse = np.linalg.inv(matrix)
-    vec = inverse @ np.array([sx, sy, 1.0])
-    if abs(float(vec[2])) < 1e-9 or not np.isfinite(vec).all():
-        raise RuntimeError("H 逆投影无效")
-    saved_px = np.array([float(vec[0] / vec[2]), float(vec[1] / vec[2])])
-
-    live = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
-    saved_corners = ((bundle.get("screen") or {}).get("edgeModel") or {}).get("corners")
-    if live is None or not saved_corners:
-        raise RuntimeError("live 帧或屏幕四边基准缺失，无法臂侧核对")
-    located = locate_screen_quad(live, saved_corners, tolerance_px=32,
-                                 require_fittable=True)
-    pose = fit_pose(saved_corners, located["corners"])
-    mapped = np.asarray(pose["matrix"], dtype=float) @ np.array(
-        [saved_px[0], saved_px[1], 1.0])
-    live_px = mapped[:2] / mapped[2]
-    deviation = float(np.hypot(tip[0] - live_px[0], tip[1] - live_px[1]))
-    tolerance = 45.0  # Z 触点验收 10px 量级 + 姿态/投影余量
-    log_op("arm_anchor_verify", {"device": device}, ok=deviation <= tolerance,
-           detail={"deviationPx": round(deviation, 1), "tolerancePx": tolerance})
-    if deviation > tolerance:
-        return False
-    return True
+    daemon = daemon_for(device)
+    session = daemon.status().get("session")
+    origin = daemon.mpos()
+    if not session or origin.get("state") != "Idle" or abs(origin["z"] - hover_z) > .05:
+        raise RuntimeError("锚点复核必须从已确认的安全悬停高度开始")
+    origin_confirmed_ns = time.monotonic_ns()
+    before_jpg, before_seq = fetch_camera_frame(
+        device, not_before_monotonic_ns=origin_confirmed_ns)
+    before = cv2.imdecode(np.frombuffer(before_jpg, np.uint8), cv2.IMREAD_COLOR)
+    try:
+        # Use only the measured anchor, then return this exact observed start.
+        do_goto_robot(device, rx, ry, tap=False,
+                      hover_z=float(hover_z), feed_xy=CALIBRATED_TRAVEL_FEED,
+                      tap_depth=float(z.get("tapDepth", 3.0)),
+                      tap_feed=float(z.get("tapFeed", 1500.0)))
+        motion_finished_ns = time.monotonic_ns()
+        jpg, after_seq = fetch_camera_frame(
+            device, not_before_monotonic_ns=motion_finished_ns)
+        if before_seq == after_seq:
+            raise RuntimeError("锚点移动后未取得新相机帧")
+        homography = ((bundle.get("camera") or {}).get("cameraToScreen") or {}).get("homography")
+        if not homography:
+            raise RuntimeError("档案缺少 cameraToScreen 单应，无法臂侧核对")
+        matrix = np.asarray(homography, dtype=float).reshape(3, 3)
+        vec = np.linalg.inv(matrix) @ np.array([sx, sy, 1.0])
+        if abs(float(vec[2])) < 1e-9 or not np.isfinite(vec).all():
+            raise RuntimeError("H 逆投影无效")
+        saved_px = np.array([float(vec[0] / vec[2]), float(vec[1] / vec[2])])
+        live = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+        saved_corners = ((bundle.get("screen") or {}).get("edgeModel") or {}).get("corners")
+        if live is None or not saved_corners:
+            raise RuntimeError("live 帧或屏幕四边基准缺失，无法臂侧核对")
+        located = locate_recovery_screen(live, saved_corners)
+        from runtime.recovery import observe_recovery_probe
+        tip = observe_recovery_probe(before, live, located["corners"])
+        pose = fit_pose(saved_corners, located["corners"])
+        mapped = np.asarray(pose["matrix"], dtype=float) @ np.array(
+            [saved_px[0], saved_px[1], 1.0])
+        live_px = mapped[:2] / mapped[2]
+        deviation = float(np.hypot(tip[0] - live_px[0], tip[1] - live_px[1]))
+        tolerance = 45.0
+        log_op("arm_anchor_verify", {"device": device}, ok=deviation <= tolerance,
+               detail={"deviationPx": round(deviation, 1), "tolerancePx": tolerance,
+                       "observedTip": list(tip), "expectedTip": live_px.tolist()})
+        return deviation <= tolerance
+    finally:
+        if daemon.status().get("session") != session:
+            raise RuntimeError("锚点复核期间串口会话变化，禁止按旧坐标返回")
+        do_goto_robot(device, origin["x"], origin["y"], tap=False,
+                      hover_z=float(hover_z), feed_xy=CALIBRATED_TRAVEL_FEED,
+                      tap_depth=float(z.get("tapDepth", 3.0)),
+                      tap_feed=float(z.get("tapFeed", 1500.0)))
 
 
 def attempt_recovery_action(device: str) -> dict:
@@ -2254,6 +2296,7 @@ def attempt_recovery_action(device: str) -> dict:
         # 一次普通向导操作把恢复成果静默冲回旧会话（场景 B）或降 draft（A）。
         with wizard._lock:
             wizard.state["daemonSession"] = session
+            wizard.state["safePark"] = dict(restored.get("safePark") or {})
             wizard.state["sessionRebind"] = CalibrationWizard._blank_session_rebind()
             try:
                 wizard._save_state()
@@ -3173,7 +3216,8 @@ async def _run_basic_gesture(device: str, body: dict, gesture: dict) -> tuple[st
             arm.motion_verifier._evidence_dir = directory / body["requestId"]
             arm.motion_verifier._evidence_dir.mkdir(parents=True, exist_ok=True)
 
-        async def live_gate(*, wechat_send=False, screen_edge_advisory=False):
+        async def live_gate(*, wechat_send=False, screen_edge_advisory=False,
+                            contact_reference=None):
             require_context(device, body["contextId"], motion=True)
             state = await arm.read_state()
             binding, bundle = _basic_binding(device, context, state.get("session"))
@@ -3186,6 +3230,7 @@ async def _run_basic_gesture(device: str, body: dict, gesture: dict) -> tuple[st
                 camera=camera, bundle=bundle,
                 screen_edge_advisory=screen_edge_advisory,
                 require_pose=not screen_edge_advisory,
+                contact_reference=contact_reference,
             )
             return {"checks": checks, "pose": frame.get("_screen_pose")}
 
@@ -3571,7 +3616,8 @@ async def _run_gesture_test(device: str, context_id: str, entry: dict) -> tuple[
             evidence_dir=directory / "motion",
         )
 
-        async def live_gate(*, wechat_send=False, screen_edge_advisory=False):
+        async def live_gate(*, wechat_send=False, screen_edge_advisory=False,
+                            contact_reference=None):
             require_context(device, context_id, motion=True)
             current = await arm.read_state()
             bundle = calibration_bundle.load_bundle(device, DATA_DIR)
@@ -3583,6 +3629,7 @@ async def _run_gesture_test(device: str, context_id: str, entry: dict) -> tuple[
                 camera=camera, bundle=bundle,
                 screen_edge_advisory=screen_edge_advisory,
                 require_pose=not screen_edge_advisory,
+                contact_reference=contact_reference,
             )
             return {"checks": checks, "pose": frame.get("_screen_pose")}
 

@@ -569,7 +569,8 @@ def test_single_click_never_inherits_gesture_observation(rig):
     result = execute(rig, "click", legacy=True)
     assert len(rig.daemon.commands) == 1
     assert not result["motion_verified"] and result["outcome_hint"] == "unknown"
-    assert "controller_completed" not in result
+    assert result["controller_completed"] is False
+    assert result["motion_observation_only"] is False
 
 
 def test_single_click_keeps_legacy_position_only_reply_handling(rig):
@@ -586,5 +587,6 @@ def test_single_click_keeps_legacy_position_only_reply_handling(rig):
     result = execute(rig, "click", legacy=True)
     assert result["motion_verified"] is True
     assert result["outcome_hint"] == "success"
-    assert "controller_completed" not in result
+    assert result["controller_completed"] is True
+    assert result["motion_observation_only"] is False
     assert rig.daemon.commands[-1].startswith("TAP ")

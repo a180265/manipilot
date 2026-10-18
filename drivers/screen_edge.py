@@ -150,11 +150,33 @@ def detect_screen_quad(frame) -> dict:
 def locate_screen_quad(frame, expected_corners: list | None = None,
                        *, tolerance_px: float = 32.0,
                        require_fittable: bool = False,
-                       reject_clipped_candidate: bool = False) -> dict:
-    """Locate either display polarity near the calibrated phone, when available."""
+                       reject_clipped_candidate: bool = False,
+                       contact_reference_corners: list | None = None) -> dict:
+    """Locate either display polarity near the calibrated phone, when available.
+
+    An explicit contact reference must come from a strict clean observation
+    immediately before this approach. The caller verifies its freshness and
+    source binding. It permits connected exterior artifacts only while all four
+    currently observed sides remain within the existing 2px contact guard.
+    It never qualifies a new calibration or supplies a missing observed side.
+    """
     if frame is None:
         raise ScreenEdgeError("摄像头帧为空")
     height, width = frame.shape[:2]
+    contact_reference = None
+    if contact_reference_corners is not None:
+        try:
+            contact_reference = np.asarray(contact_reference_corners, dtype=float)
+            if (expected_corners is None or contact_reference.shape != (4, 2)
+                    or not np.isfinite(contact_reference).all()
+                    or not cv2.isContourConvex(contact_reference.astype(np.float32))
+                    or (np.linalg.norm(np.roll(contact_reference, -1, axis=0)
+                                       - contact_reference, axis=1) < 24).any()
+                    or (contact_reference < [2, 2]).any()
+                    or (contact_reference > [width - 3, height - 3]).any()):
+                raise ValueError("invalid reference")
+        except (TypeError, ValueError, cv2.error) as exc:
+            raise ScreenEdgeError("接触复核缺少有效的近期清晰屏幕参考") from exc
     small_phone = False
     if expected_corners is None:
         crop, left, top = frame, 0, 0
@@ -165,6 +187,8 @@ def locate_screen_quad(frame, expected_corners: list | None = None,
             raise ScreenEdgeError("校准屏幕区域无效")
         small_phone = bool((np.linalg.norm(
             np.roll(corners, -1, axis=0) - corners, axis=1) < 24).any())
+        if contact_reference is not None and small_phone:
+            raise ScreenEdgeError("屏幕边长过短，无法使用接触参考复核")
         margin = max(24, int(math.ceil(tolerance_px + 12)))
         left = max(0, int(math.floor(corners[:, 0].min())) - margin)
         top = max(0, int(math.floor(corners[:, 1].min())) - margin)
@@ -238,7 +262,9 @@ def locate_screen_quad(frame, expected_corners: list | None = None,
                             found_quads.append((area, _quad_from_observed_edges(contour)))
                         elif width * height * MIN_AREA_RATIO <= area <= width * height * .90:
                             fitted = _quad_from_screen_edges(
-                                contour, corners - [left, top], tolerance_px)
+                                contour, corners - [left, top], tolerance_px,
+                                contact_reference_corners=(contact_reference - [left, top]
+                                    if contact_reference is not None else None))
                             if fitted is not None:
                                 found_quads.append((area, fitted))
         for area, local in found_quads:
@@ -323,7 +349,9 @@ def _quad_from_observed_edges(contour) -> list[list[float]] | None:
 
 
 def _quad_from_screen_edges(contour, expected: np.ndarray,
-                            tolerance_px: float) -> list[list[float]] | None:
+                            tolerance_px: float, *,
+                            contact_reference_corners: np.ndarray | None = None,
+                            ) -> list[list[float]] | None:
     """Intersect four observed sides; the saved quad only bounds the search."""
     points = contour.reshape(-1, 2).astype(float)
     sides = np.roll(expected, -1, axis=0) - expected
@@ -370,13 +398,18 @@ def _quad_from_screen_edges(contour, expected: np.ndarray,
     quad = np.asarray(intersections, dtype=np.float32)
     if not np.isfinite(quad).all() or not cv2.isContourConvex(quad):
         return None
+    # This reference only bounds a fully observed current fit. In particular,
+    # ordinary candidates may not silently move to a different inner boundary.
+    if (contact_reference_corners is not None and quad_deviation_px(
+            _order_corners(quad), contact_reference_corners) > 2.0):
+        return None
     # An occluder's inner edge must not exclude still-observed parts of the phone.
     # Keep the existing max(3px, 1% of the short side) noise tolerance.
     occlusion_tolerance = max(3.0, 0.01 * float(min(
         np.linalg.norm(quad[1] - quad[0]), np.linalg.norm(quad[2] - quad[1]))))
     # A narrow exterior patch can also be the last visible strip of a mostly
     # occluded screen. Single-frame line support cannot disambiguate the two.
-    if any(cv2.pointPolygonTest(
+    if contact_reference_corners is None and any(cv2.pointPolygonTest(
             quad, (float(point[0]), float(point[1])), True) < -occlusion_tolerance
             for point in cv2.convexHull(contour).reshape(-1, 2)):
         return None

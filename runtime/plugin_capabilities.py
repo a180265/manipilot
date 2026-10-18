@@ -8,6 +8,7 @@ ArmFleetRuntime 经 Mixin 继承本模块；tasks/plugin_api 与 runtime/executo
 from __future__ import annotations
 
 import asyncio
+import os
 from copy import deepcopy
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from runtime.action_receipts import motion_receipt_unknown
 from runtime.device_eligibility import INPUT_TASK_TYPES
 from runtime.errors import ApiError
 from runtime import screen_wake
-from runtime.util import iso, parse_iso, sha256_bytes, utc_now
+from runtime.util import iso, parse_iso, sha256_bytes, sha256_text, utc_now
 
 # 自 runtime.py 随唯一消费者 _stop_task_arm 迁入；字符串路径补丁已跟随本模块
 # （test_plugin_cancellation）。
@@ -56,6 +57,29 @@ class PluginCapabilityMixin:
         task["layout_execution_binding"] = deepcopy(current)
         self._save_task_progress(task)
         return current
+
+    def _calibrated_ime_candidate_target(self, plugin_id, task, params):
+        """Use the selected layout after the existing paired IME task is displayed."""
+        from adapters.screen_ime.service import get_default_service
+        from drivers.arm import DriverError
+
+        device_id = task["device_id"]
+        state = self.plugin_state_get(plugin_id, device_id, "observed_layout_state")
+        task_id = f"{task['task_id']}-ime"
+        active = self.plugin_state_get(plugin_id, device_id, "active_ime_task_id")
+        text_hash = self.plugin_state_get(plugin_id, device_id, "active_ime_text_hash")
+        ime_id = self.devices.input_binding(device_id).get("ime_device_id")
+        displayed = get_default_service().tasks.find(task_id) if active == task_id else None
+        if (not params.get("_layout_binding") or not isinstance(state, str) or not state
+                or not ime_id or not displayed or displayed.get("status") != "displayed"
+                or displayed.get("deviceId") != ime_id
+                or not isinstance(displayed.get("content"), str)
+                or sha256_text(displayed["content"]) != text_hash):
+            error = DriverError("driver_policy_rejected", "候选点击缺少已登记页面或本任务已显示的配对输入候选")
+            error.motion_not_started = True
+            raise error
+        # Only registered geometry selects the point; discard caller coordinates/nonces.
+        return {"layout_state": state}
 
     def _hold_task_motion_unknown(self, task: dict, message: str) -> None:
         task["motion_result_unknown"] = True
@@ -312,6 +336,10 @@ class PluginCapabilityMixin:
             pinned = self._pin_task_layout(stored, task)
             if capability_id in {"arm.click", "arm.double_tap"}:
                 params["_layout_binding"] = deepcopy(pinned)
+                if os.environ.get("ARMFLEET_RUNTIME_VISION_MODE") == "calibrated":
+                    state = self.plugin_state_get(plugin_id, device_id, "observed_layout_state")
+                    if isinstance(state, str) and state:
+                        params["target_ref"] = {**(params.get("target_ref") or {}), "layout_state": state}
         task_type = stored.get("task_type")
         entry = next(
             (item for item in record["manifest"]["task_types"]
@@ -320,21 +348,24 @@ class PluginCapabilityMixin:
         # 按当前任务而非插件资源分类；同一插件的纯导航仍可执行。
         if (resource == "input" or (
                 resource == "arm" and requires_input
-                and capability_id not in {"arm.stop", "arm.home"})):
+                and capability_id not in {"arm.stop", "arm.home", "arm.park"})):
             if not self.input_switch_allowed(device_id):
                 raise DriverError(
                     "input_switch_disabled",
                     "输入与发送未允许（input_switch_disabled），禁止继续输入或发送")
         # §4.8.4-3/4：受控副作用固定 slot 并持久 prepared；最终认领由
         # 驱动下发边界消费（P05）——串口/网络等待不占任何锁。
-        # FIX-15（§11.13.2）：live 候选/删除点击在规划前必须先取得新鲜几何
-        # 快照并按实时 View 坐标规划；失败最多再取一次只读快照，仍失败即停止，
-        # 绝不落回 ui_targets 旧固定坐标。此门在输入 effect 预置之前执行，
-        # 失败=零 prepared 零接触。
+        # 校准模式候选栏复用已选布局与已显示的配对任务；无需逐次 nonce。
+        # live 候选/删除仍使用实时 View 几何；两条路径都不回退旧坐标。
+        # 定位在输入 effect 预置之前完成，失败=零 prepared 零接触。
         if capability_id == "arm.click" and isinstance(params, dict) \
                 and params.get("target_id") in ("ime_candidate_bar", "ime_delete_key"):
-            params["target_ref"] = await self._ime_live_geometry_target(
-                device_id, str(params["target_id"]))
+            if (params["target_id"] == "ime_candidate_bar"
+                    and os.environ.get("ARMFLEET_RUNTIME_VISION_MODE") == "calibrated"):
+                params["target_ref"] = self._calibrated_ime_candidate_target(plugin_id, task, params)
+            else:
+                params["target_ref"] = await self._ime_live_geometry_target(
+                    device_id, str(params["target_id"]))
         effect_kind = self._input_effect_kind(capability_id, params)
         if effect_kind is not None:
             self._prepare_input_effect(stored, task, effect_kind, params)
@@ -375,6 +406,9 @@ class PluginCapabilityMixin:
         if capability_id == "arm.home":
             return await self._run_task_action(
                 task, capability_id, self.devices.driver(device_id).go_home)
+        if capability_id == "arm.park":
+            return await self._run_task_action(
+                task, capability_id, self.devices.driver(device_id).park)
         if capability_id == "arm.move_preset":
             return await self._run_task_action(
                 task, capability_id,
@@ -447,7 +481,8 @@ class PluginCapabilityMixin:
             observe = getattr(self.devices.camera(device_id), "observe_regions", None)
             if observe is None:
                 raise ApiError("capability_unavailable", "当前摄像头不支持登记区域视觉证据")
-            observed = await observe(include_image=True)
+            observed = await observe(include_image=True, **(
+                {"layout_state": params["layout_state"]} if params.get("layout_state") else {}))
             image = observed.pop("_image_bytes")
             record = self.evidence.save_file_evidence(
                 device_id=device_id, task_id=task["task_id"], data=image,
@@ -467,7 +502,7 @@ class PluginCapabilityMixin:
             if locate is None:
                 raise ApiError("capability_unavailable", "当前摄像头驱动不支持 OCR 文字定位")
             kwargs = {"region": params.get("region", "messages")}
-            for key in ("min_confidence", "exact", "roi"):
+            for key in ("min_confidence", "exact", "roi", "localization_mode", "previous_location_id"):
                 if key in params:
                     kwargs[key] = params[key]
             return await locate(params["text"], **kwargs)
@@ -901,6 +936,8 @@ class PluginCapabilityMixin:
         raise _ApiError("capability_unknown", capability_id)
 
     async def plugin_capture_evidence(self, plugin_id: str, task: dict, label: str) -> dict | None:
+        # Raw visual evidence must freeze the same layout as the next action.
+        self._pin_task_layout(self.store.get_task(task["task_id"]) or {}, task)
         result = await self.plugin_invoke_capability(
             plugin_id, task, "camera.capture", {"label": label},
         )

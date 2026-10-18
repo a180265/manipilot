@@ -304,12 +304,19 @@ def compute_page_check(page: dict, frame_jpeg: bytes,
     frame = decode_image(frame_jpeg)
     frame_h, frame_w = frame.shape[:2]
     anchor_results = []
-    anchor_by_id: dict[str, dict] = {}
     for anchor in page.get("anchors") or []:
         result = _anchor_result(anchor, frame,
                                 anchor_bytes.get(anchor["id"]))
         anchor_results.append(result)
-        anchor_by_id[anchor["id"]] = result
+    return resolve_page_check(page, anchor_results, evidence_ids, (frame_w, frame_h),
+                              mapping_error_bound_px=mapping_error_bound_px)
+
+
+def resolve_page_check(page, anchor_results, evidence_ids, frame_size, *,
+                       mapping_error_bound_px=None):
+    """Resolve effective device geometry against measured anchors, without rematching."""
+    frame_w, frame_h = frame_size
+    anchor_by_id = {anchor["id"]: anchor for anchor in anchor_results}
     item_results = _resolve_items(page, anchor_by_id, (frame_w, frame_h))
     # title/input/content 互不重叠（同 purpose 组内检查 region 项）
     region_items = {r["id"]: r for r in item_results if r["kind"] == "region"}

@@ -15,6 +15,12 @@ private let cameraIDs = (1...10).map { String(format: "cam-%02d", $0) }
 private let timingProvenance = "camera_pts_host_clock.v1"
 private let maxCaptureUncertaintyMs = 20
 
+private func sourceTimestamp(_ date: Date) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: date)
+}
+
 // MARK: - R3-08：helper 机器凭据与受控本机证明（与 WX/手机凭据独立）
 
 /// §4：机器凭据只从受限本机启动配置读取（CAMERA_CONTROL_TOKEN_FILE 指向的
@@ -571,7 +577,7 @@ private final class FrameUploader: @unchecked Sendable {
         request.setValue(String(sourceSequence), forHTTPHeaderField: "X-Source-Frame-Seq")
         request.setValue(String(width), forHTTPHeaderField: "X-Frame-Width")
         request.setValue(String(height), forHTTPHeaderField: "X-Frame-Height")
-        request.setValue(ISO8601DateFormatter().string(from: Date()), forHTTPHeaderField: "X-Captured-At")
+        request.setValue(sourceTimestamp(Date()), forHTTPHeaderField: "X-Captured-At")
         request.httpBody = jpeg
         session.dataTask(with: request) { data, response, error in
             if let error {
@@ -627,6 +633,8 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
     private var syntheticTimer: DispatchSourceTimer?
     private var syntheticFrameIndex: UInt64 = 0
     private var session: AVCaptureSession?
+    /// macOS 必须在整个采集期间保留 activeFormat 的配置锁。
+    private var formatLockedDevice: AVCaptureDevice?
     private var lastFrameAt: CFTimeInterval = 0
     /// 稳态推送节拍：按绝对时刻表放行（30fps 网格上目标 4fps 的稳定档位 = 3.75）。
     private var nextAdmitAt: CFTimeInterval = 0
@@ -762,6 +770,7 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
             self.syntheticTimer?.cancel()
             self.syntheticTimer = nil
             self.session?.stopRunning()
+            self.releaseFormatLock()
             self.session = nil
             self.running = false
             self.uploadInFlight = false
@@ -773,6 +782,11 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
             self.handshakeFacts = nil
             self.publish("已停止")
         }
+    }
+
+    private func releaseFormatLock() {
+        formatLockedDevice?.unlockForConfiguration()
+        formatLockedDevice = nil
     }
 
     /// R4-07-D：合成采集启动。握手事实（format/geometry/clock/binary digest）
@@ -896,10 +910,31 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
         device: AVCaptureDevice,
         completion: (@Sendable (Bool) -> Void)? = nil
     ) {
+        let captureSession = AVCaptureSession()
+        var configuring = false
         do {
-            let captureSession = AVCaptureSession()
+            let requestedFormat = try CaptureFormatPins.shared.get().requestedFormat(
+                uniqueID: device.uniqueID)
             captureSession.beginConfiguration()
-            captureSession.sessionPreset = .hd1280x720
+            configuring = true
+            if requestedFormat == nil {
+                // 首次保持原有自动选择；读取实际格式后再固定，不能据此沿用旧校准。
+                captureSession.sessionPreset = .hd1280x720
+            }
+            if let requestedFormat {
+                let formats = device.formats
+                let index = try CaptureFormatPins.formatIndex(
+                    requested: requestedFormat,
+                    available: formats.map {
+                        formatIDFromDescription($0.formatDescription) ?? "unknown"
+                    })
+                // 先固定物理格式再创建输入，避免端口保留创建时的旧格式。
+                // macOS 若提前释放锁，session 会按 preset 覆盖 activeFormat。
+                // 持锁跨越 commit/start，直到停止采集或启动失败才释放。
+                try device.lockForConfiguration()
+                formatLockedDevice = device
+                device.activeFormat = formats[index]
+            }
             let input = try AVCaptureDeviceInput(device: device)
             guard captureSession.canAddInput(input) else {
                 throw NSError(domain: "CameraHelper", code: 1,
@@ -924,6 +959,7 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
             // videoMinFrameDuration 任何设置都可能停止出帧（2026-10-13），
             // 采集层保持相机原生节奏，只控"推送"节奏。
             captureSession.commitConfiguration()
+            configuring = false
 
             session = captureSession
             running = true
@@ -939,6 +975,18 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
             previewViewerCount = 0
             sourceSession = nil
             captureSession.startRunning()
+            guard captureSession.isRunning,
+                  let actualInput = captureSession.inputs.first?.ports.first?.formatDescription,
+                  let actualFormatID = formatIDFromDescription(actualInput) else {
+                throw NSError(domain: "CameraHelper", code: 3,
+                              userInfo: [NSLocalizedDescriptionKey: "无法读取启动后的实际采集格式"])
+            }
+            try CaptureFormatPins.verifyActual(
+                requested: requestedFormat ?? actualFormatID,
+                device: formatIDFromDescription(device.activeFormat.formatDescription),
+                input: actualFormatID)
+            try CaptureFormatPins.shared.get().remember(
+                formatID: actualFormatID, uniqueID: device.uniqueID)
             // R3-08：普通采集重启=新来源代际+重握手（不动安装 UUID）。
             // 计算受控本机证明事实：实际采集格式/来源几何/宿主代际/二进制摘要。
             if let format = captureSession.inputs.first?.ports.first?
@@ -1001,7 +1049,14 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
             publish("推流中")
             completion?(true)
         } catch {
+            if configuring { captureSession.commitConfiguration() }
+            if captureSession.isRunning { captureSession.stopRunning() }
+            releaseFormatLock()
+            session = nil
             running = false
+            sourceSession = nil
+            handshakeFacts = nil
+            formatFacts = "unknown"
             publish("启动失败：\(error.localizedDescription)")
             completion?(false)
         }
@@ -1250,7 +1305,7 @@ private final class CameraChannel: NSObject, AVCaptureVideoDataOutputSampleBuffe
             sourceSequence: sequence,
             ptsHostNanos: sampledMonotonicNanos,
             capturedMonotonicNanos: sampledMonotonicNanos,
-            capturedAtISO: ISO8601DateFormatter().string(from: sampledAtDate),
+            capturedAtISO: sourceTimestamp(sampledAtDate),
             // 证明标记 camera_pts_host_clock.v1 随头 X-Source-Timing-Provenance
             // 上传；PTS 证明与 capture_registration 的格式误差登记见
             // verify_camera_clock.py（clock_registration）。
@@ -1480,7 +1535,8 @@ private final class ChannelRow {
                     self.fpsField.isEnabled = !started
                     self.toggleButton.isEnabled = true
                     self.toggleButton.title = started ? "停止" : "启动"
-                    self.syncControls()
+                    // 失败详情已由通道先行发布；不能用“等待启动”覆盖真实原因。
+                    if started { self.syncControls() }
                 }
             }
         }) else { return }

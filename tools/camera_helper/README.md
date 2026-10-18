@@ -33,6 +33,31 @@ CameraHelper 只负责采集和上传画面（采集层），不控制机械臂�
 所有上传帧带 `X-Frame-Source: camera_helper` 正式来源标记；Chrome 兼容页帧带
 `chrome_compat` 降级标记，两者不允许同时写同一通道。
 
+## 固定采集格式
+
+程序按物理摄像头 `uniqueID` 保存完整输入格式，避免重启后自动协商出不同媒体子类型而使来源几何变化。
+未登记的设备首次仍按原有 720p preset 启动；启动后读取设备和输入端口的实际格式，两者一致才保存。
+这只记录采集事实，不证明任何旧校准可用；旧校准仍须通过来源几何和绑定校验。
+以后启动精确选择已保存格式；设备不支持、配置损坏或启动后读回不符均停止并明确报错，不能自动换格式。
+macOS 不支持 `inputPriority`，因此固定模式通过配置事务和设备锁设置 `activeFormat`，不设置帧率。
+先固定物理格式再创建输入端口，避免输入仍保留创建时的旧媒体类型。设备配置锁必须保留整个采集期；提前解锁会允许 session 按 preset 重新选择格式。正常停止或启动失败时，先停止 session 再释放锁。
+
+偏好存于 `com.armfleet.camerahelper` 域的 `captureFormatPinsByUniqueID` 字典。
+正式 App 通过 `UserDefaults.standard` 访问自身域；CLI/异域进程显式打开该 suite，打开失败即报错，不能当作空配置。若需恢复已有校准对应的格式，
+先停止通道并退出 App，再按绑定中的物理 `uniqueID` 配置。下面仅为完整格式示例，须与该设备实际支持的格式和校准一致：
+
+~~~bash
+defaults write com.armfleet.camerahelper captureFormatPinsByUniqueID -dict-add \
+  '<物理摄像头 uniqueID>' 'fourcc:79757673;size:1920x1080;pixel-aspect:1/1'
+defaults read com.armfleet.camerahelper captureFormatPinsByUniqueID
+~~~
+
+重新打开 App 并启动通道后，核对帧服务实际 `format_id`、`source_geometry_id` 和已有校准。
+更换摄像头或主动改格式后，原校准不匹配时需要重新校准，不能更改摘要绕过校验。
+离线配置/持久化/精确选择/启动读回拒绝检查：`./test_capture_format_pins.sh`；不会打开摄像头。
+格式锁生命周期/会话重新协商检查：`python3 Tests/check_format_lock_lifetime.py`，提取实际配置与清理方法配假设备重放；不打开摄像头。
+启动成功/失败状态顺序检查：`python3 Tests/check_channel_start_status.py`，提取实际界面方法配假通道重放；不启动 GUI 或摄像头。
+
 ## 窗口行为
 
 - 关闭窗口（红点）＝停止全部采集推流：进程留在程序坞，点程序坞图标（或再

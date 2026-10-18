@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -201,6 +202,7 @@ class DeviceManager:
 
             async def live_gate(*, wechat_send: bool = False,
                                 screen_edge_advisory: bool = False,
+                                contact_reference=None,
                                 _arm=arm, _camera=camera, _device_id=device_id,
                                 _camera_id=cfg.get("camera_id")):
                 from runtime.layout_observation import BINDING_KEYS
@@ -262,6 +264,7 @@ class DeviceManager:
                     wechat_send=wechat_send,
                     screen_edge_advisory=screen_edge_advisory,
                     require_pose=not screen_edge_advisory,
+                    contact_reference=contact_reference,
                 )
                 changed = context_checks()
                 if changed:
@@ -291,7 +294,12 @@ class DeviceManager:
             arm.screen_wake_gate = wake_gate
         inp = RealInputDriver(device_id, keyboard_layout=cfg.get("keyboard_layout"))
         arm.motion_verifier = CameraMotionVerifier(camera)
-        if driver_mode == "daemon":
+        if (driver_mode == "daemon"
+                and os.environ.get("ARMFLEET_RUNTIME_VISION_MODE") == "calibrated"):
+            # Saved calibration positions the arm; camera frames only observe
+            # motion. Plugins independently review the resulting screen effect.
+            arm.gesture_motion_verifier = arm.motion_verifier
+        elif driver_mode == "daemon":
             # 探头照片属于当前校准绑定时保持强校验；过期（换摄像头/重绑/
             # 未登记）自动降级为观察模式——校准档案作为身份源，过期探头
             # 照片只是证据（重新登记探头即恢复强校验）。
@@ -405,6 +413,14 @@ class DeviceManager:
                     "region": context_pointer(provider(device_id)) if provider else None,
                 }
             context_attach(target_context)
+        action_attach = getattr(self._arms[device_id], "attach_text_action_provider", None)
+        if action_attach:
+            def begin_text_action(ref):
+                begin = getattr(self._cameras[device_id], "begin_text_action", None)
+                if begin is None:
+                    raise ValueError("当前摄像头不能受理独立文字点击动作")
+                return begin(ref)
+            action_attach(begin_text_action)
         verify_attach = getattr(self._arms[device_id], "attach_text_target_verifier", None)
         if verify_attach:
             async def verify_text_target(ref, frame):
@@ -420,15 +436,23 @@ class DeviceManager:
             verify_attach(verify_text_target)
         arm_attach = getattr(self._arms[device_id], "attach_layout_provider", None)
         if arm_attach:
-            async def current_frame():
+            async def current_frame(*, observed_state=None):
                 capture = getattr(self._cameras[device_id], "_selected_layout_frame", None)
                 if capture is not None:
-                    return await capture()
+                    return await capture(**({"observed_state": observed_state} if observed_state else {}))
                 provider = self._layout_observation_provider
                 if provider is not None and provider(device_id) is not None:
                     raise ValueError("当前摄像头不支持已选共享布局，禁止回退旧目标")
                 return None
             arm_attach(current_frame)
+        text_attach = getattr(self._arms[device_id], "attach_text_layout_provider", None)
+        if text_attach:
+            async def current_text_frame(ref):
+                capture = getattr(self._cameras[device_id], "current_text_frame", None)
+                if capture is None:
+                    raise ValueError("当前摄像头不支持 screen_text 文字几何观测")
+                return await capture(ref)
+            text_attach(current_text_frame)
 
     def _validate_registration(self, cfg: dict, *, replacing: bool = False) -> None:
         """一对一约束：摄像头、串口、daemon 地址、输入法设备、微信账号和槽位
@@ -1653,7 +1677,7 @@ class DeviceManager:
         return self._config_root / "data"
 
     def eligibility(self, device_id: str, *, require_input: bool = False, ime_device_id: str | None = None,
-                    require_keyboard_active: bool = True) -> dict:
+                    require_keyboard_active: bool = True, require_ime_ready: bool = True) -> dict:
         from runtime.device_eligibility import compute_device_eligibility
         device = dict(self.get(device_id))
         try:
@@ -1672,7 +1696,8 @@ class DeviceManager:
             device["wechat_account_id"] = device.get("wechat_account_id") or "simulation-account"
             ime = {"online": True, "keyboardActive": True}
         return compute_device_eligibility(device, ime_status=ime, require_input=require_input,
-                                          require_keyboard_active=require_keyboard_active)
+                                          require_keyboard_active=require_keyboard_active,
+                                          require_ime_ready=require_ime_ready)
 
     def set_calibration_status(self, device_id: str, status: str, reason: str = "") -> dict:
         if status not in {"validated", "due", "unknown"}:

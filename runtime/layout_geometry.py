@@ -119,10 +119,10 @@ def _region_bounds(region, camera_size):
     return np.array([x * cw, y * ch]), np.array([(x + w) * cw, (y + h) * ch])
 
 
-def locate_in_region(image, region, saved):
+def locate_in_region(image, region, saved, *, contact_reference_corners=None):
     """Constrain calibrated edge fitting and candidate checks to the saved crop."""
     from drivers import screen_pose
-    from drivers.screen_edge import ScreenEdgeError, locate_screen_quad
+    from drivers.screen_edge import MIN_AREA_RATIO, ScreenEdgeError, locate_screen_quad
     from runtime.layout_region import _screen_candidates
     from runtime.layout_matching import _pixel_rect
 
@@ -132,14 +132,61 @@ def locate_in_region(image, region, saved):
     except (KeyError, TypeError, ValueError) as exc:
         raise LayoutGeometryError("items_unverified", "当前生效粗框无效") from exc
     crop = image[top:bottom, left:right]
-    if len(_screen_candidates(crop)) >= 2:
+    # Only contact continuation has an action-local clean witness. All other
+    # callers retain the existing small-independent-screen ambiguity guard.
+    if contact_reference_corners is None and len(_screen_candidates(crop)) >= 2:
         raise LayoutGeometryError(
             "items_unverified", "粗框内存在多个屏幕候选：multiple_screen_candidates")
     try:
         expected = screen_pose.validate_corners(saved) - [left, top]
-        found = locate_screen_quad(
-            crop, expected.tolist(), tolerance_px=32,
-            require_fittable=True, reject_clipped_candidate=True)
+        options = {}
+        if contact_reference_corners is not None:
+            options["contact_reference_corners"] = (
+                screen_pose.validate_corners(contact_reference_corners) - [left, top]).tolist()
+        try:
+            found = locate_screen_quad(
+                crop, expected.tolist(), tolerance_px=32,
+                require_fittable=True, reject_clipped_candidate=True, **options)
+        except ScreenEdgeError as exc:
+            # Bright surroundings/reflections can merge the threshold contour.
+            # Only a missing contour may use independently measured gradients;
+            # ambiguity, clipped edges and contact continuation keep their guards.
+            if (contact_reference_corners is not None
+                    or str(exc) != "画面中无法定位校准手机屏幕"):
+                raise
+            from drivers.screen_edge import locate_quad_by_gradient_lines
+
+            found = locate_quad_by_gradient_lines(crop, expected.tolist(), tolerance_px=32)
+            observed = screen_pose.validate_corners(found["corners"])
+            if np.max(np.linalg.norm(observed - expected, axis=1)) > 32:
+                raise ScreenEdgeError("实测屏幕四角超出32px定位范围")
+            screen_pose.fit_pose(expected.tolist(), observed.tolist(), max_movement=32)
+        if contact_reference_corners is not None:
+            # Measure all four CURRENT sides first. Saved/reference geometry
+            # only constrains that measurement; it never substitutes for it.
+            observed = np.asarray(found["corners"], dtype=np.float32)
+            minimum_area = crop.shape[0] * crop.shape[1] * MIN_AREA_RATIO
+            for candidate in _screen_candidates(crop, limit=None):
+                # Avatars and other rectangles wholly inside the measured
+                # display are content, even when larger than the area floor.
+                if all(cv2.pointPolygonTest(observed, tuple(map(float, point)), False) >= 0
+                       for point in candidate):
+                    continue
+                # Threshold contours and calibrated side fitting can measure
+                # different outlines of the same display. Use the generic
+                # detector's existing same-object overlap rule here too.
+                if cv2.intersectConvexConvex(candidate, observed)[0] >= .8 * min(
+                        cv2.contourArea(candidate), cv2.contourArea(observed)):
+                    continue
+                # Contact-only external display floor matches screen_edge's
+                # existing 5% contract. Smaller external rectangles are not
+                # independently classified as displays in this branch.
+                if cv2.contourArea(candidate) < minimum_area:
+                    continue
+                if np.max(np.linalg.norm(candidate - observed, axis=1)) > 3:
+                    # The occluded phone may be absent from generic candidates;
+                    # one qualifying external display is already ambiguous.
+                    raise ValueError("粗框内存在多个屏幕候选：multiple_screen_candidates")
         corners = np.asarray(found["corners"]) + [left, top]
         if (np.any(corners <= [left + 1, top + 1])
                 or np.any(corners >= [right - 1, bottom - 1])):

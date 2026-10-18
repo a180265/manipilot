@@ -570,12 +570,12 @@ def test_shared_navigation_boxes_are_projected_to_camera(layout_rig):
     assert result["coordinateVersion"] == "calibrated_camera.v1"
 
 
-@pytest.mark.parametrize("shift", [7, 25])
+@pytest.mark.parametrize("shift", [7, 25, 60])
 def test_shared_layout_preserves_existing_pose_gate(layout_rig, shift):
     rig = layout_rig
     rig.source.image = cv2.warpAffine(rig.source.image,
         np.float32([[1, 0, shift], [0, 1, 0]]), (1280, 720), borderValue=(20, 20, 20))
-    if shift == 7:
+    if shift <= 45:
         assert asyncio.run(rig.camera.observe_regions())["ui"]["ui_state"] == "conversation"
     else:
         with pytest.raises(ValueError):
@@ -724,8 +724,9 @@ def test_shared_metadata_and_camera_do_not_require_removed_input_acceptance(layo
     selected = rig.runtime.layout_observation.resolve("arm-01")
     assert selected.metadata(bundle)["usable"] is True
     assert asyncio.run(rig.camera.observe_regions())["ui"]["ui_state"] == "conversation"
+    assert screen_proof.binding("arm-01", rig.data)[0]
     with pytest.raises(ValueError):
-        screen_proof.binding("arm-01", rig.data)
+        screen_proof.binding("arm-01", rig.data, allow_motion_ready=False)
 
 
 @pytest.mark.parametrize("fault", ["missing_foreground", "empty_reference", "fallback_palette"])

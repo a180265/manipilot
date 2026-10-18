@@ -23,7 +23,7 @@ class FakeArmDriver(ArmDriver):
 
     # 平台基础能力 -> 支持
     SUPPORTED = {
-        "arm.home", "arm.move_preset", "arm.move_target", "arm.click",
+        "arm.home", "arm.park", "arm.move_preset", "arm.move_target", "arm.click",
         "arm.double_tap", "arm.swipe", "arm.stop", "arm.estop",
     }
 
@@ -107,6 +107,13 @@ class FakeArmDriver(ArmDriver):
             error.motion_not_started = True
             raise error
         return await self._move("home", "home")
+
+    async def park(self) -> dict:
+        from runtime.parking import calibration_safe_park_record
+
+        result = await self._move("park", "safe_park")
+        return {**result, **calibration_safe_park_record(None),
+                "park": True, "arrived": result.get("ok") is True, "tap_executed": False}
 
     async def move_preset(self, position_id: str) -> dict:
         return await self._move("move_preset", position_id)

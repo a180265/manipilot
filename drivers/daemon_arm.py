@@ -23,6 +23,7 @@ import copy
 import inspect
 import json
 import math
+import os
 import socket
 import threading
 import time
@@ -112,6 +113,7 @@ DYNAMIC_REF_IDENTITY_KEYS = (
     "source", "cameraX", "cameraY", "bbox", "cameraPolygon", "frameW", "frameH", "frameSeq",
     "frameSha256", "coordinateVersion", "template_ref", "adaptation_ref",
     "installation_region_ref", "locationId", "sourceCapturedAt", "sourceReceivedAt",
+    "localizationMode",
 )
 
 
@@ -265,7 +267,7 @@ class DaemonTCPTransport:
 class DaemonArmDriver(ArmDriver):
     DRIVER_VERSION = "daemon-arm-bridge-1.2.0"
     SUPPORTED = {
-        "arm.home", "arm.move_target", "arm.click", "arm.double_tap",
+        "arm.home", "arm.park", "arm.move_target", "arm.click", "arm.double_tap",
         "arm.swipe", "arm.stop", "arm.estop", "arm.wake_screen",
     }
 
@@ -298,13 +300,28 @@ class DaemonArmDriver(ArmDriver):
         self.live_calibration_gate = None  # 业务动作前由 DeviceManager 注入实时绑定门禁
         self.screen_wake_gate = None
         self._layout_provider = None
+        self._text_layout_provider = None
         self._text_target_verifier = None
+        self._text_action_provider = None
+
+    def attach_text_action_provider(self, provider) -> None:
+        self._text_action_provider = provider
 
     def attach_text_target_verifier(self, verifier) -> None:
         self._text_target_verifier = verifier
 
     def attach_layout_provider(self, provider) -> None:
         self._layout_provider = provider
+
+    def attach_text_layout_provider(self, provider) -> None:
+        self._text_layout_provider = provider
+
+    async def _current_visual_frame(self, ref, *, original_ref=None):
+        if ref.get("source") == "camera_ocr" and ref.get("localizationMode") == "screen_text":
+            if self._text_layout_provider is None:
+                raise ValueError("screen_text 动态目标缺少专用文字几何观测器")
+            return await self._text_layout_provider(ref if original_ref is None else original_ref)
+        return await self._layout_provider()
 
     # ---------- 基础 ----------
     @property
@@ -557,11 +574,15 @@ class DaemonArmDriver(ArmDriver):
             return result
 
     async def _check_live_calibration(self, *, wechat_send: bool = False,
-                                      screen_edge_advisory: bool = False) -> dict | None:
+                                      screen_edge_advisory: bool = False,
+                                      contact_reference=None) -> dict | None:
         if self.live_calibration_gate is None:
             return None
+        options = {}
+        if contact_reference is not None:
+            options["contact_reference"] = contact_reference
         evidence = await self.live_calibration_gate(
-            wechat_send=wechat_send, screen_edge_advisory=screen_edge_advisory)
+            wechat_send=wechat_send, screen_edge_advisory=screen_edge_advisory, **options)
         checks = evidence["checks"] if isinstance(evidence, dict) else evidence
         if checks:
             reasons = "；".join(f"{item['code']}：{item['message']}" for item in checks)
@@ -599,11 +620,14 @@ class DaemonArmDriver(ArmDriver):
         resolved["robotX"], resolved["robotY"] = rx, ry
 
     def _contact_pose_guard(self, pose: dict | None, *, wechat_send: bool = False):
-        if pose is None:
+        if (pose is None
+                or os.environ.get("ARMFLEET_RUNTIME_VISION_MODE", "live") == "calibrated"):
             return None
 
         async def check():
-            current = await self._check_live_calibration(wechat_send=wechat_send)
+            current = await self._check_live_calibration(
+                wechat_send=wechat_send,
+                contact_reference=pose.get("_contact_reference"))
             if current is None:
                 raise DriverError("driver_uncalibrated", "接触前无法确认手机屏幕位置")
             previous_corners = np.asarray(pose["corners"], dtype=float)
@@ -617,7 +641,7 @@ class DaemonArmDriver(ArmDriver):
         return check
 
     # ---------- 目标解析 ----------
-    async def _resolve_action_target(self, target, *, allow_click_attempt=False):
+    async def _resolve_action_target(self, target, *, allow_click_attempt=False, text_actions=None):
         if isinstance(target, dict) and target.get("click_attempt", 0) != 0 and not allow_click_attempt:
             error = DriverError("driver_policy_rejected", "替代落点仅允许用于 arm.click 单次点击")
             error.motion_not_started = True
@@ -643,7 +667,12 @@ class DaemonArmDriver(ArmDriver):
                     and target.get("target_id") in DYNAMIC_VISUAL_TARGET_IDS)))
             if not dynamic:
                 try:
-                    layout = await self._layout_provider()
+                    observed_state = (ref.get("layout_state") if isinstance(ref, dict) else None)
+                    if (observed_state is not None
+                            and os.environ.get("ARMFLEET_RUNTIME_VISION_MODE", "live") == "calibrated"):
+                        layout = await self._layout_provider(observed_state=observed_state)
+                    else:
+                        layout = await self._layout_provider()
                     if ("_layout_binding" in target and target["_layout_binding"] != (
                             layout.selected.execution_binding if layout is not None else None)):
                         raise ValueError("目标解析前已选模板或粗框版本变化，禁止沿用任务")
@@ -658,13 +687,25 @@ class DaemonArmDriver(ArmDriver):
                 try:
                     if (target.get("target_id"), ref["source"]) not in DYNAMIC_COMBOS_IN_USE:
                         raise ValueError("动态目标与来源组合未被产品使用，禁止动作")
-                    frame = await self._layout_provider()
+                    action = None
+                    if (text_actions is not None and self._text_action_provider is not None
+                            and ref.get("source") == "camera_ocr"
+                            and ref.get("localizationMode") == "screen_text"):
+                        if self._text_layout_provider is None:
+                            raise ValueError("screen_text 动态目标缺少专用文字几何观测器")
+                        action = self._text_action_provider(ref)
+                        text_actions.append(action)
+                    frame = (await action.current_frame() if action is not None
+                             else await self._current_visual_frame(ref))
                     expected = frame.selected.execution_binding if frame is not None else None
                     if ("_layout_binding" in target and target["_layout_binding"] != expected):
                         raise ValueError("目标解析前已选模板或粗框版本变化，禁止沿用任务")
                     dynamic_snapshot = self._pin_dynamic_visual_context(target, ref, frame, expected)
                     if ref.get("source") == "camera_ocr":
-                        dynamic_snapshot["text_check"] = await self._text_target_verifier(ref, frame)
+                        dynamic_snapshot["text_action"] = action
+                        dynamic_snapshot["text_check"] = (
+                            await action.verify(frame) if action is not None
+                            else await self._text_target_verifier(ref, frame))
                 except (ValueError, RuntimeError) as exc:
                     error = DriverError("driver_policy_rejected", str(exc))
                     error.motion_not_started = True
@@ -809,6 +850,7 @@ class DaemonArmDriver(ArmDriver):
 
     def _layout_motion_guards(self, layout, target_id, resolved, calibration, pose, *,
                               wechat_send=False, dynamic_snapshot=None):
+        calibrated = os.environ.get("ARMFLEET_RUNTIME_VISION_MODE", "live") == "calibrated"
         pose_guard = self._contact_pose_guard(pose, wechat_send=wechat_send)
         if layout is None:
             if dynamic_snapshot is None:
@@ -821,6 +863,7 @@ class DaemonArmDriver(ArmDriver):
         checked_at = [time.monotonic()]
 
         def check_current(position=None, *, check_age=True):
+            check_age = check_age and not calibrated
             from runtime.calibration_gate import _fresh_source_seq
             try:
                 current = target_archive.load_runtime_calibration(self.device_id, self.data_root)
@@ -835,7 +878,7 @@ class DaemonArmDriver(ArmDriver):
                     _fresh_source_seq(latest[0].source, None)
                 if check_age and time.monotonic() - checked_at[0] > 1.0:
                     raise ValueError("目标视觉复核已过期，未下发下一段动作")
-                if position is not None:
+                if position is not None and not calibrated:
                     latest[0].verify_target_point(
                         target_id, {"robotX": position["x"], "robotY": position["y"]}, current)
             except (ValueError, TypeError, KeyError) as exc:
@@ -847,6 +890,8 @@ class DaemonArmDriver(ArmDriver):
             from runtime.calibration_gate import _fresh_source_seq
             try:
                 check_current(check_age=False)
+                if calibrated:
+                    return
                 if pose_guard is not None:
                     await pose_guard()
                 current = await self._layout_provider()
@@ -891,6 +936,7 @@ class DaemonArmDriver(ArmDriver):
         from runtime.calibration_gate import _fresh_source_seq
         from runtime.layout_state import content_sha
 
+        calibrated = os.environ.get("ARMFLEET_RUNTIME_VISION_MODE", "live") == "calibrated"
         latest = [snapshot["frame"]]
         checked_at = [time.monotonic()]
         pinned_binding = snapshot["execution_binding"]
@@ -919,6 +965,7 @@ class DaemonArmDriver(ArmDriver):
                     raise ValueError("动态目标定位来源在动作期间被改写，禁止沿用原落点")
 
         def check_current(position=None, *, check_age=True):
+            check_age = check_age and not calibrated
             try:
                 current = target_archive.load_runtime_calibration(self.device_id, self.data_root)
                 verify_context(latest[0], current)
@@ -938,14 +985,22 @@ class DaemonArmDriver(ArmDriver):
         async def check_frame():
             try:
                 check_current(check_age=False)
+                if calibrated:
+                    return
                 if pose_guard is not None:
                     await pose_guard()
-                current = await self._layout_provider()
+                action = snapshot.get("text_action")
+                current = (await action.current_frame() if action is not None
+                           else await self._current_visual_frame(
+                               snapshot["ref"], original_ref=snapshot["target_ref"]))
                 pinned_frame = snapshot["frame"]
                 if (current is None) != (pinned_frame is None):
                     raise ValueError("动态目标所在页面或已选模板已变化，禁止沿用旧落点")
                 if current is not None:
-                    if pinned_frame is not None and current.state != pinned_frame.state:
+                    mode = getattr(current, "localization_mode", "layout")
+                    if pinned_frame is not None and (
+                            mode != getattr(pinned_frame, "localization_mode", "layout")
+                            or (mode == "layout" and current.state != pinned_frame.state)):
                         raise ValueError("动态目标所在页面已变化，禁止沿用旧落点")
                     verify_context(current, target_archive.load_runtime_calibration(
                         self.device_id, self.data_root))
@@ -970,8 +1025,9 @@ class DaemonArmDriver(ArmDriver):
                         raise ValueError("目标观测时手机再次移动，禁止沿用旧落点")
                     latest[0] = current
                 if snapshot["ref"].get("source") == "camera_ocr":
-                    text_check[0] = await self._text_target_verifier(
-                        snapshot["target_ref"], current)
+                    text_check[0] = (await action.verify(current) if action is not None
+                                     else await self._text_target_verifier(
+                                         snapshot["target_ref"], current))
                 # 无已选布局时没有整帧观测可固定；实时姿态门每次都是新观测，
                 # 以它推进复核时效（不宣称已重新核对列表行内容）。
                 checked_at[0] = time.monotonic()
@@ -1254,7 +1310,7 @@ class DaemonArmDriver(ArmDriver):
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise DriverError("driver_limit_exceeded", str(exc)) from exc
         z_profile = calibration.get("z") or {}
-        dwell_ms = z_profile.get("tapDwellMs", 0)
+        dwell_ms = entry.get("tapDwellMs", z_profile.get("tapDwellMs", 0))
         if dwell_ms is None:
             dwell_ms = 0
         dwell_ms = _finite(dwell_ms, "点击停留毫秒")
@@ -1501,7 +1557,7 @@ class DaemonArmDriver(ArmDriver):
             elif parts[0] in {"XY", "SWIPE"}:
                 expected["x"] += float(parts[1])
                 expected["y"] += float(parts[2])
-            elif parts[0] == "TAP2":
+            elif parts[0] in {"TAP", "TAP2"}:
                 pass
             else:
                 raise ValueError(f"未知手势运动指令：{parts[0]}")
@@ -1736,6 +1792,16 @@ class DaemonArmDriver(ArmDriver):
                         or label.startswith("path_stroke_")):
                     await contact_guard()
                 check_context()
+                if (input_claim is not None and label in CONTACT_LABELS
+                        and not claimed_once["fired"]):
+                    refresh = getattr(input_claim.get("geometry_gate"),
+                                      "refresh_before_contact", None)
+                    if callable(refresh):
+                        # All potentially slow observations have finished. Fetch
+                        # fresh IME evidence before entering short transport/input
+                        # locks; final local consume still enforces the same TTL.
+                        await refresh()
+                        check_context()
                 response = await self._call(execute_command, cmd, label)
                 if validate_gesture_replies:
                     mpos = self._validate_gesture_reply(
@@ -1910,6 +1976,14 @@ class DaemonArmDriver(ArmDriver):
             raise DriverError("driver_policy_rejected", "；".join(reasons))
 
     async def click(self, target: dict) -> dict:
+        text_actions = []
+        try:
+            return await self._click_once(target, text_actions=text_actions)
+        finally:
+            for action in text_actions:
+                action.close()
+
+    async def _click_once(self, target: dict, *, text_actions) -> dict:
         input_claim = target.pop("input_claim", None) if isinstance(target, dict) else None
         # R3-02：最终几何门随 target_ref 下沉（Runtime 在规划时构造）；在
         # 传输锁边界先几何后认领，由 _with_motion_lease 组合执行。
@@ -1920,7 +1994,7 @@ class DaemonArmDriver(ArmDriver):
         self._check_ready()
         generation = self._stop_generation
         target_id, entry, resolved, _calib, layout, dynamic_snapshot = \
-            await self._resolve_action_target(target, allow_click_attempt=True)
+            await self._resolve_action_target(target, allow_click_attempt=True, text_actions=text_actions)
         if (target_id in {"ime_candidate_bar", "ime_delete_key", "send_button"}
                 and not self._input_switch_allowed(_calib)):
             raise DriverError("input_switch_disabled", "输入与发送未允许（开关关闭），禁止输入、清除或发送点击")
@@ -1972,17 +2046,33 @@ class DaemonArmDriver(ArmDriver):
             dynamic_snapshot=dynamic_snapshot)
         command_guard = self._region_contact_guard(entry, _calib, command_guard, pose)
         command_guard = self._ime_coordinate_guard(entry, _calib, command_guard)
+        # Whole-frame changes describe the scene, not physical arrival. A
+        # quiet frame must not strand a calibrated click between XY and TAP.
+        # Keep the observation and validate every controller endpoint instead;
+        # the caller still confirms the actual UI/input effect after parking.
+        observation_only = (
+            getattr(self.motion_verifier, "measurement_kind", None) == "frame_change"
+            and getattr(self.motion_verifier, "observation_only", False) is True)
         mpos, phases = await self._with_motion_lease(
             resolved, with_tap=with_tap, input_claim=input_claim,
             generation=generation,
             session=_calib.get("daemonSession", _calib.get("session")),
+            validate_gesture_replies=observation_only,
+            allow_gesture_observation=observation_only,
             contact_guard=contact_guard, command_guard=command_guard)
+        controller_completed = (bool(phases)
+            and (not with_tap or phases[-1]["phase"] == "tap")
+            and all((p["verification"] or {}).get("stop_required") is not True
+                    for p in phases)) if observation_only else False
         verified = bool(phases) and all(
             p["verification"] and p["verification"].get("verified") for p in phases)
         unverified = any(p["verification"] is None or not p["verification"].get("verified")
                          for p in phases)
-        outcome_hint = "unknown" if unverified else ("success" if verified else None)
+        outcome_hint = ("success" if observation_only and controller_completed
+                        else "unknown" if unverified else "success" if verified else None)
         result = {
+            "controller_completed": controller_completed if observation_only else verified,
+            "motion_observation_only": observation_only,
             "ok": True,
             "position": {k: mpos[k] for k in ("x", "y", "z") if k in mpos},
             "target_id": target_id,
@@ -2449,6 +2539,10 @@ class DaemonArmDriver(ArmDriver):
             raise
         await self._call(self._require_motion_feature, SWIPE_FEATURE, "滑动")
         session = calibration.get("daemonSession", calibration.get("session"))
+        verifier = self._gesture_verifier()
+        observation_only = (
+            getattr(verifier, "measurement_kind", None) == "frame_change"
+            and getattr(verifier, "observation_only", False) is True)
         mpos, phases = await self._with_motion_lease(
             resolved,
             with_tap=False,
@@ -2456,7 +2550,7 @@ class DaemonArmDriver(ArmDriver):
             session=session,
             precheck=lambda item, current: self._precheck_swipe_motion(item, current),
             build_steps=self._build_swipe_steps,
-            verifier=self._gesture_verifier(),
+            verifier=verifier,
             validate_gesture_replies=True,
             allow_gesture_observation=True,
             contact_guard=self._contact_pose_guard(pose),
@@ -2471,6 +2565,10 @@ class DaemonArmDriver(ArmDriver):
             p["verification"] and p["verification"].get("verified") for p in phases)
         unverified = not controller_completed or any(
             p["verification"] is None or not p["verification"].get("verified") for p in phases)
+        # A camera observer records frames, while validated controller replies
+        # establish completion. The caller must still review the screen effect.
+        outcome_hint = ("success" if observation_only and controller_completed
+                        else "unknown" if unverified else "success" if verified else None)
         result = {
             "ok": True,
             "position": {k: mpos[k] for k in ("x", "y", "z") if k in mpos},
@@ -2482,11 +2580,12 @@ class DaemonArmDriver(ArmDriver):
             "duration_ms": duration_ms,
             "swipe_executed": controller_completed,
             "controller_completed": controller_completed,
+            "motion_observation_only": observation_only,
             "effect_status": "unverified",
             "phases": phases,
             "motion_verified": verified,
-            "outcome_hint": "unknown" if unverified else ("success" if verified else None),
-            "message": None if not unverified else
+            "outcome_hint": outcome_hint,
+            "message": None if outcome_hint != "unknown" else
                 "滑动未完整执行或摄像头未确认真实动作，结果未知（不得当作成功）",
         }
         self.action_log.append({"action": "swipe", "gesture": dict(gesture), "result": result})
@@ -2708,15 +2807,25 @@ class DaemonArmDriver(ArmDriver):
         generation = self._stop_generation
         calibration = await self._call(self._ensure_located)
         park = calibration.get("safePark") or {}
-        if not park.get("confirmed") or park.get("parkX") is None:
-            raise DriverError("driver_policy_rejected",
-                              "SAFE PARK 未在校准档案确认，拒绝回停")
+        session = calibration.get("daemonSession", calibration.get("session"))
+        if (park.get("confirmed") is not True or not session
+                or park.get("daemonSession") != session):
+            error = DriverError("driver_policy_rejected",
+                                "SAFE PARK 未在当前会话确认，拒绝回停")
+            error.motion_not_started = True
+            raise error
+        try:
+            park_position = {key: _finite(park.get(key), f"SAFE PARK {key}")
+                             for key in ("parkX", "parkY", "parkZ")}
+        except DriverError as error:
+            error.motion_not_started = True
+            raise
         profile = await self._call(
             target_archive.load_profile, self.device_id, self.data_root)
         resolved = {
-            "robotX": float(park["parkX"]),
-            "robotY": float(park["parkY"]),
-            "hoverZ": float(park.get("parkZ", 0.0)),
+            "robotX": park_position["parkX"],
+            "robotY": park_position["parkY"],
+            "hoverZ": park_position["parkZ"],
             "tapDepth": float(profile.get("tapDepth") or 0.0),
             "tapFeed": float(profile.get("tapFeed") or 1500.0),
         }
@@ -2747,8 +2856,11 @@ class DaemonArmDriver(ArmDriver):
                                         ("z", "hoverZ")))
         self.action_log.append({"action": "park", "result": {"mpos": mpos,
                                                               "arrived": arrived}})
+        from runtime.parking import calibration_safe_park_record
+
         return {"ok": arrived, "position": {k: mpos[k] for k in ("x", "y", "z")
                                             if k in mpos},
+                **calibration_safe_park_record(park), "tap_executed": False,
                 "park": True, "arrived": arrived, "phases": phases}
 
     async def _move_only(self, target_id: str, *, expected_layout=_LAYOUT_UNSET) -> dict:

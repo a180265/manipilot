@@ -236,9 +236,11 @@ def mapping_error_bound(bundle: dict, *, allow_legacy_defaults: bool = False) ->
     Qualification remains the caller's responsibility. Old physical-edge callers
     may retain their missing-field defaults and 1px arm floor; malformed present
     measurements never fall back. Independent camera-to-touch gaps describe arm
-    error, so camera reprojection error is added before comparing with nominal
-    target error. Training residuals and independent summaries cannot shrink the
-    envelope recorded by individual holdout points.
+    error, so camera reprojection error is added. Fully verified region trials
+    may aim anywhere inside their target: distance from the nominal center stays
+    a validated diagnostic, not a mapping error. Legacy pixel trials retain that
+    conservative nominal envelope. Training residuals and independent summaries
+    cannot shrink the envelope recorded by individual holdout points.
     """
     def finite(value):
         if type(value) not in (int, float) or value < 0 or not math.isfinite(value):
@@ -300,6 +302,8 @@ def mapping_error_bound(bundle: dict, *, allow_legacy_defaults: bool = False) ->
                 if summary.get("passed") is False:
                     raise ValueError("独立验证汇总未通过")
                 values.append(finite(summary[key]))
+        if region_criterion:
+            return add(max(arm_errors), camera_error)
         return max([add(max(arm_errors), camera_error), *nominal_errors])
     except (AttributeError, TypeError, ValueError, OverflowError):
         return None

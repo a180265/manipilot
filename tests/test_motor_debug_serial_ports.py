@@ -388,6 +388,11 @@ def test_arm_anchor_verify_bounded_and_deviation(tmp_path, monkeypatch):
     import numpy as np
     import cv2
     from drivers import screen_edge as _se, screen_pose as _sp
+    from runtime import recovery
+    from types import SimpleNamespace
+    monkeypatch.setattr(debug, "daemon_for", lambda device: SimpleNamespace(
+        status=lambda: {"session": "same-session"},
+        mpos=lambda: {"x": 0., "y": 0., "z": 2., "state": "Idle"}))
     # 相机链全替身：decode→纯色帧、四边定位→档案角、姿态→单位阵
     monkeypatch.setattr(cv2, "imdecode",
                         lambda *a, **k: np.zeros((720, 1280, 3), np.uint8))
@@ -417,26 +422,31 @@ def test_arm_anchor_verify_bounded_and_deviation(tmp_path, monkeypatch):
                         lambda device, rx, ry, *, tap, hover_z, feed_xy,
                         tap_depth, tap_feed: anchor_calls.append((rx, ry))
                         or {"targetRobot": [rx, ry]})
+    sequences = iter(range(100))
     monkeypatch.setattr(debug, "fetch_camera_frame",
-                        lambda device: (b"jpg", 1))
-    monkeypatch.setattr(debug, "detect_tip_with_frame",
-                        lambda jpg: (tip_px[0], tip_px[1], 1280, 720))
+                        lambda device, **kwargs: (b"jpg", next(sequences)))
+    monkeypatch.setattr(recovery, "observe_recovery_probe",
+                        lambda *args: tip_px)
     monkeypatch.setattr(debug, "log_op", lambda *a, **k: None)
 
     # H 逆投影：屏幕 (768,820) → 相机 (368,220)；预测=自身（姿态矩阵取单位）
     assert debug._arm_anchor_verify("arm-01") is True
-    assert anchor_calls == [(30.0, 0.0)], "锚点走位一次（悬停不点击）"
+    assert anchor_calls == [(30.0, 0.0), (0., 0.)], "一次悬停核对后返回原起点"
 
     tip_px = (500.0, 400.0)  # 偏差 ~225px 超限
     assert debug._arm_anchor_verify("arm-01") is False
 
-    monkeypatch.setattr(debug, "detect_tip_with_frame", lambda jpg: None)
-    with pytest.raises(RuntimeError, match="探头尖不可见"):
+    def invisible(*args):
+        raise RuntimeError("移动探头无法唯一识别")
+    monkeypatch.setattr(recovery, "observe_recovery_probe", invisible)
+    with pytest.raises(RuntimeError, match="无法唯一识别"):
         debug._arm_anchor_verify("arm-01")
 
     monkeypatch.setattr(debug.calibration_bundle, "load_bundle",
                         lambda device, root: {"xy": {"validation": []}})
-    with pytest.raises(RuntimeError, match="验证点"):
+    assert anchor_calls[-1] == (0., 0.), "识别失败也必须返回起点"
+
+    with pytest.raises(RuntimeError, match="已实测"):
         debug._arm_anchor_verify("arm-01")
 
 

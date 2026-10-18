@@ -32,7 +32,7 @@
         "session": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
         "template": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/template"},
         "region": {"$ref": "urn:wx:design:layout-reuse:region#/definitions/record"},
-        "captures": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/capture"}},
+        "captures": {"type": "array", "minItems": 4, "maxItems": 12, "items": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/capture"}},
         "current_capture": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/capture"},
         "preview": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/preview_record"},
         "accepted_items": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/item_keys"},
@@ -58,7 +58,7 @@
       "properties": {
         "before": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
         "after": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
-        "states": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/page_state"}},
+        "states": {"type": "array", "minItems": 1, "maxItems": 12, "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/page_state"}},
         "now": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
         "server_instance_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"}
       }

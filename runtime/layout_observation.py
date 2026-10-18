@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import math
+import os
 
 import cv2
 import numpy as np
@@ -10,12 +12,13 @@ import numpy as np
 from drivers import screen_pose, screen_proof
 from runtime.layout_geometry import LayoutGeometryError, mapping_error_bound, matrix_and_size
 from runtime.layout_matching import (
-    apply_target_safety, compute_page_check, PASS_MARGIN, PASS_SCORE, _pixel_rect,
+    compute_page_check, resolve_page_check, PASS_MARGIN, PASS_SCORE, _pixel_rect,
 )
 from runtime.layout_state import content_sha
+from runtime.layout_pages import LEGACY_STATES, is_text_page, page_states, page_ui
 
 
-STATES = ("wechat_list", "chat_ime_hidden", "chat_ime_empty", "chat_ime_text")
+STATES = LEGACY_STATES
 BINDING_KEYS = ("camera_id", "camera_device_unique_id", "camera_binding_id",
                 "daemon_binding_id", "arm_binding_id", "ime_device_id",
                 "source_geometry_id", "binding_revision")
@@ -153,9 +156,16 @@ class SelectedLayout:
         self.pages = {p["state"]: copy.deepcopy(p) for p in template["pages"]}
         self.checks = {p["state"]: p for p in adaptation["page_checks"]}
         self.colors = {p["state"]: p for p in adaptation["color_samples"]}
-        _require(all(len(rows) == 4 and set(rows) == set(STATES)
-                     for rows in (self.pages, self.checks, self.colors)),
-                 "布局四态定义不完整或重复")
+        try:
+            states = page_states(template)
+        except ValueError as exc:
+            raise LayoutObservationError(str(exc)) from exc
+        _require(all(len(original) == len(rows) == len(states)
+                     and set(rows) == set(states)
+                     for original, rows in ((template["pages"], self.pages),
+                         (adaptation["page_checks"], self.checks),
+                         (adaptation["color_samples"], self.colors))),
+                 "布局页面、复核结果或颜色记录不完整或重复")
         self._apply_overrides()
 
     def _apply_overrides(self):
@@ -173,6 +183,18 @@ class SelectedLayout:
                                               for a in page["anchors"]), "局部覆盖依赖不存在")
             item.update(anchor_id=override["anchor_id"],
                         relative_rect=copy.deepcopy(override["relative_rect"]))
+            if "tapDepth" in override:
+                from drivers.daemon_protocol import check_tap
+                _require(override["kind"] == "target" and item.get("mode") == "tap",
+                         "接触深度覆盖只允许点击目标")
+                check_tap(override["tapDepth"])
+                item["tapDepth"] = override["tapDepth"]
+            if "tapDwellMs" in override:
+                dwell = override["tapDwellMs"]
+                _require(override["kind"] == "target" and item.get("mode") == "tap"
+                         and type(dwell) is int and 0 <= dwell <= 2000,
+                         "接触停留仅允许点击目标，且须为 0-2000 毫秒整数")
+                item["tapDwellMs"] = dwell
 
     def ensure_current(self):
         parts = self.service._services()
@@ -232,7 +254,7 @@ class SelectedLayout:
                 item["status"] == "passed"
                 for item in check["anchor_results"] + check["item_results"]),
                 "页面总体通过与逐项安全核验结果矛盾")
-            self._verify_target_safety(page, check, bundle, width, height)
+            self._verify_target_safety(page, check, width, height)
         return matrix, width, height
 
     def _verify_page_evidence(self, state, width, height):
@@ -240,14 +262,16 @@ class SelectedLayout:
         purposes = [item["purpose"] for item in page["regions"]]
         # List pages may derive their palette from the two verified anchors.
         # Message bubbles still require explicit foreground/background regions.
-        required = ({"unread", "content"}
-                    if state == "wechat_list" else
+        required = ({"input", "content"} if is_text_page(page) else
+                    {"unread", "content"} if state == "wechat_list" else
                     {"title", "input", "content", "foreground", "background"})
         _require(required <= set(purposes) and len(purposes) == len(set(purposes)),
                  "页面缺少明确用途区域或用途重复，请重新登记")
         for item in page["regions"]:
             _require(self.item_passed(state, "region", item["id"], check),
                      "当前页面的观察区域尚未通过复核")
+        if is_text_page(page):
+            return
         sample = self.colors[state]
         _require(np.linalg.norm(np.array(sample["foreground_rgb"], dtype=float)
                                - sample["background_rgb"]) >= 60,
@@ -282,7 +306,12 @@ class SelectedLayout:
                 and all(results.get(key, {}).get("status") == "passed" for key in required))
 
     @staticmethod
-    def _verify_target_safety(page, check, bundle, width, height):
+    def _verify_target_safety(page, check, width, height):
+        """Check archived evidence structure without substituting a newer calibration.
+
+        Archived boxes describe the calibration used at publication. They never
+        authorize a current click; prepare() resolves that box with today's bound.
+        """
         anchor_definitions = {item["id"]: item for item in page["anchors"]}
         anchors = {item["id"]: item for item in check["anchor_results"]}
         _require(len(anchor_definitions) == len(page["anchors"])
@@ -304,35 +333,53 @@ class SelectedLayout:
                      for item in targets), "已发布目标缺少安全定位结果")
         _require(all(definition["anchor_id"] in anchors for definition in definitions.values()),
                  "已发布目标缺少安全定位依赖")
-        recalculated = apply_target_safety(
-            copy.deepcopy(check), page, (width, height), mapping_error_bound(bundle))
-        expected = {item["id"]: item for item in recalculated["item_results"]
-                    if item["kind"] == "target"}
         for item in targets:
             if item["status"] != "passed":
                 continue
             dependency = anchors[definitions[item["id"]]["anchor_id"]]
             _require(dependency["status"] == "passed" and dependency["matched_rect"] is not None,
                      "已发布目标与所属锚点的通过状态矛盾")
-            safe = expected[item["id"]]["safe_rect"]
             actual = item["safe_rect"]
-            _require(expected[item["id"]]["status"] == "passed",
-                     "已发布目标无法根据当前误差生成安全区")
             if definitions[item["id"]]["mode"] == "tap":
-                _require(safe is not None and actual is not None
-                         and all(abs(actual[key] - safe[key]) <= 1e-12 for key in safe),
-                         "已发布点击目标的安全区缺失或与当前误差不符")
+                resolved = item["resolved_rect"]
+                _require(actual is not None, "已发布点击目标的安全区缺失")
+                for rect in (resolved, actual):
+                    _require(all(math.isfinite(rect[key]) for key in
+                                 ("x", "y", "width", "height"))
+                             and rect["x"] >= 0 and rect["y"] >= 0
+                             and rect["width"] > 0 and rect["height"] > 0
+                             and rect["x"] + rect["width"] <= 1 + 1e-12
+                             and rect["y"] + rect["height"] <= 1 + 1e-12,
+                             "已发布点击目标的安全区或定位范围无效")
+                margins = (
+                    (actual["x"] - resolved["x"]) * width,
+                    (resolved["x"] + resolved["width"]
+                     - actual["x"] - actual["width"]) * width,
+                    (actual["y"] - resolved["y"]) * height,
+                    (resolved["y"] + resolved["height"]
+                     - actual["y"] - actual["height"]) * height,
+                )
+                anchor_error = dependency.get("localization_error_bound_px")
+                _require(type(anchor_error) in (int, float)
+                         and math.isfinite(anchor_error) and anchor_error >= 0,
+                         "已发布点击目标的锚点安全误差无效")
+                minimum = max(2, math.ceil(anchor_error))
+                _require(all(abs(margin - margins[0]) <= 1e-7
+                             and abs(margin - round(margin)) <= 1e-7
+                             and margin >= minimum - 1e-7 for margin in margins),
+                         "已发布点击目标的安全区不是有效的等距内缩范围")
             else:
                 _require(actual is None, "悬停目标不能携带点击安全区")
 
     def metadata(self, bundle):
         _, width, height = self.verify_saved_binding(bundle)
-        for state in STATES:
+        for state in self.pages:
             _require(self._page_anchors_passed(state, self.checks[state]),
                      "部分页面的识别锚点尚未通过复核")
             self._verify_page_evidence(state, width, height)
         return {"registered": True, "usable": True,
-                "reference_states": ["conversation", "wechat_main"],
+                "reference_states": sorted({page_ui(page)[0]
+                                            for page in self.pages.values()}),
                 "regions_registered": True, "revision": self.pointer["revision"],
                 "blocking_reasons": [], **self.references}
 
@@ -369,8 +416,8 @@ class SelectedLayout:
             return "chat_ime_text", ocr
         raise LayoutObservationError("输入区域像素与文字证据不一致或不充分，无法判断页面", "wrong_page")
 
-    def prepare(self, image, frame, bundle, pose, calibration_binding, *, ocr_engine=None):
-        """Use raw full-resolution v3 warp only, after the existing pose gate."""
+    def _prepare_geometry(self, image, frame, bundle, pose):
+        """Validate the saved geometry and source without asserting a UI page."""
         matrix, width, height = self.verify_saved_binding(bundle)
         inverse = np.linalg.inv(matrix)
         expected = self.region["installation_binding"]
@@ -392,46 +439,66 @@ class SelectedLayout:
             screen = warp_root_from_raw(image, bundle, pose, self.region)
         except LayoutGeometryError as exc:
             raise LayoutObservationError(str(exc), "item_outside_screen") from exc
-        encoded = cv2.imencode(".png", screen)[1].tobytes()
-        matches = []
-        page_scores = {}
-        input_reads = {}
+        self.ensure_current()
+        return screen, inverse, width, height
+
+    def prepare_text(self, image, frame, bundle, pose, calibration_binding):
+        """Exact OCR geometry; deliberately has no page or fixed-target authority."""
+        screen, inverse, _, _ = self._prepare_geometry(image, frame, bundle, pose)
+        return LayoutTextFrame(self, frame, screen, inverse, content_sha(bundle), pose)
+
+    def prepare(self, image, frame, bundle, pose, calibration_binding, *, ocr_engine=None, observed_state=None):
+        """Use raw full-resolution v3 warp only, after the existing pose gate."""
+        screen, inverse, width, height = self._prepare_geometry(image, frame, bundle, pose)
         selected_input = {}
-        contradicted_states = set()
-        for state, page in self.pages.items():
-            check = compute_page_check(page, encoded,
-                {a["id"]: self.assets.get(a["asset_id"]) for a in page["anchors"]}, [],
+        if os.environ.get("ARMFLEET_RUNTIME_VISION_MODE") == "calibrated" and observed_state:
+            _require(observed_state in self.pages, "观察页面未登记", "wrong_page")
+            state, score = observed_state, 1.0
+            saved = self.checks[state]
+            check = resolve_page_check(self.pages[state], copy.deepcopy(saved["anchor_results"]),
+                saved["evidence_ids"], (width, height),
                 mapping_error_bound_px=mapping_error_bound(bundle))
-            required_ids = {a["id"] for a in page["anchors"] if a["required"]}
-            page_scores[state] = min((a["best_score"] or 0 for a in check["anchor_results"]
-                                      if a["id"] in required_ids), default=0)
-            if (self._page_anchors_passed(state, self.checks[state])
-                    and self._page_anchors_passed(state, check)):
-                if state in ("chat_ime_empty", "chat_ime_text"):
-                    observed_state, input_ocr = self._input_state(
-                        state, check, screen, ocr_engine, input_reads)
-                    if state != observed_state:
-                        contradicted_states.add(state)
-                        continue
-                    if state == "chat_ime_text":
-                        _require(any(anchor["id"] == "send_button_feature"
-                                     and anchor["status"] == "passed"
-                                     for anchor in check["anchor_results"]),
-                                 "有字页面缺少当次发送按钮特征", "wrong_page")
-                    selected_input[state] = input_ocr
-                score = page_scores[state]
-                matches.append((score, state, check))
-        matches.sort(key=lambda row: row[0], reverse=True)
-        _require(matches, "当前画面未通过已选模板匹配", "score_below_threshold")
-        _require(not contradicted_states or any(
-            candidate[1] in ("chat_ime_empty", "chat_ime_text") for candidate in matches),
-            "当前键盘状态未完整核验，禁止回退其他页面", "wrong_page")
-        _require(len(matches) == 1 and matches[0][0] - max(
-            (score for state, score in page_scores.items()
-             if state != matches[0][1] and state not in contradicted_states), default=0
-        ) >= PASS_MARGIN,
-                 "当前页面匹配存在歧义", "anchor_ambiguous")
-        score, state, check = matches[0]
+        else:
+            encoded = cv2.imencode(".png", screen)[1].tobytes()
+            matches = []
+            page_scores = {}
+            input_reads = {}
+            selected_input = {}
+            contradicted_states = set()
+            for state, page in self.pages.items():
+                check = compute_page_check(page, encoded,
+                    {a["id"]: self.assets.get(a["asset_id"]) for a in page["anchors"]}, [],
+                    mapping_error_bound_px=mapping_error_bound(bundle))
+                required_ids = {a["id"] for a in page["anchors"] if a["required"]}
+                page_scores[state] = min((a["best_score"] or 0 for a in check["anchor_results"]
+                                          if a["id"] in required_ids), default=0)
+                if (self._page_anchors_passed(state, self.checks[state])
+                        and self._page_anchors_passed(state, check)):
+                    if state in ("chat_ime_empty", "chat_ime_text"):
+                        observed_state, input_ocr = self._input_state(
+                            state, check, screen, ocr_engine, input_reads)
+                        if state != observed_state:
+                            contradicted_states.add(state)
+                            continue
+                        if state == "chat_ime_text":
+                            _require(any(anchor["id"] == "send_button_feature"
+                                         and anchor["status"] == "passed"
+                                         for anchor in check["anchor_results"]),
+                                     "有字页面缺少当次发送按钮特征", "wrong_page")
+                        selected_input[state] = input_ocr
+                    score = page_scores[state]
+                    matches.append((score, state, check))
+            matches.sort(key=lambda row: row[0], reverse=True)
+            _require(matches, "当前画面未通过已选模板匹配", "score_below_threshold")
+            _require(not contradicted_states or any(
+                candidate[1] in ("chat_ime_empty", "chat_ime_text") for candidate in matches),
+                "当前键盘状态未完整核验，禁止回退其他页面", "wrong_page")
+            _require(len(matches) == 1 and matches[0][0] - max(
+                (score for state, score in page_scores.items()
+                 if state != matches[0][1] and state not in contradicted_states), default=0
+            ) >= PASS_MARGIN,
+                     "当前页面匹配存在歧义", "anchor_ambiguous")
+            score, state, check = matches[0]
         from drivers.click_points import policy_from_bundle
 
         click_policy = policy_from_bundle(bundle)
@@ -452,11 +519,11 @@ class SelectedLayout:
                 purpose = definitions[item["id"]]["purpose"]
                 _require(purpose not in profile["regions"], "同用途区域重复，不能选取首项")
                 profile["regions"][purpose] = _pixel_region(item["resolved_rect"], width, height)
-        ui_state = "wechat_main" if state == "wechat_list" else "conversation"
+        ui_state, ui_display = page_ui(page)
         self.ensure_current()
         return LayoutFrame(self, frame, screen, inverse, profile, state, content_sha(bundle),
                            {"ui_state": ui_state, "ui_state_display":
-                            "微信主界面" if state == "wechat_list" else "聊天界面",
+                            ui_display,
                             "confidence": round(score, 3), "profile_revision": profile["revision"]},
                            input_ocr=selected_input.get(state), check=check, pose=pose,
                            click_policy=click_policy)
@@ -525,7 +592,8 @@ class LayoutFrame:
         cx, cy = point[:2] / point[2]
         _require(0 <= cx < self.source["width"] and 0 <= cy < self.source["height"],
                  "目标中心超出相机范围", "item_outside_screen")
-        return {"nx": float(cx / self.source["width"]), "ny": float(cy / self.source["height"]),
+        return {**{key: definition[key] for key in ("tapDepth", "tapDwellMs") if key in definition},
+                "nx": float(cx / self.source["width"]), "ny": float(cy / self.source["height"]),
                 "targetMode": definition["mode"], "target_source": "shared_layout",
                 "coordinate_version": "calibrated_camera.v1",
                 "frame_seq": self.source["source_frame_seq"],
@@ -571,7 +639,7 @@ class LayoutFrame:
         height, width = self.image.shape[:2]
         self.selected._verify_page_evidence(self.state, width, height)
         profile = self.profile
-        if self.state == "wechat_list":
+        if self.state == "wechat_list" or is_text_page(self.selected.pages[self.state]):
             return profile
         regions = profile["regions"]
         _require({"title", "input", "content", "foreground", "background"} <= regions.keys(),
@@ -619,3 +687,17 @@ class LayoutFrame:
         right, bottom = points.max(axis=0)
         return {"x": float(left), "y": float(top),
                 "width": float(right - left), "height": float(bottom - top)}
+
+
+class LayoutTextFrame:
+    """Calibrated screen geometry with no page state or fixed click targets."""
+
+    localization_mode = "screen_text"
+
+    def __init__(self, selected, source, image, inverse, calibration_sha, pose):
+        self.selected, self.source, self.image = selected, source, image
+        self.inverse, self.calibration_sha, self.pose = inverse, calibration_sha, pose
+
+    ensure_current = LayoutFrame.ensure_current
+    camera_point = LayoutFrame.camera_point
+    camera_rect = LayoutFrame.camera_rect

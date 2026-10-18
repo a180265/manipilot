@@ -34,11 +34,91 @@ def serial_identity_unchanged(expected: dict | None, current: dict | None) -> bo
                for k in keys)
 
 
+def locate_recovery_screen(frame, corners: list) -> dict:
+    """Use measured boundaries in either lighting, within the recovery search bound."""
+    from drivers.screen_edge import (ScreenEdgeError, locate_screen_quad,
+                                     locate_quad_by_gradient_lines, quad_deviation_px)
+    from drivers.screen_pose import fit_pose
+
+    try:
+        return locate_screen_quad(frame, corners, tolerance_px=32,
+                                  require_fittable=True)
+    except ScreenEdgeError:
+        # Match the camera quality check's existing bright-desk/dim-display
+        # fallback. Recovery keeps its own stricter 32px search bound, including
+        # after gradient iteration, and still requires a near-rigid observed fit.
+        located = locate_quad_by_gradient_lines(frame, corners, tolerance_px=32)
+        if quad_deviation_px(corners, located["corners"]) > 32:
+            raise ScreenEdgeError("恢复复核的屏幕四角超出32px定位范围")
+        fit_pose(corners, located["corners"], max_movement=32)
+        return located
+
+
+def recovery_anchor(bundle: dict) -> tuple[list[float], list[float]]:
+    """Select a measured robot/touch pair; automatic validations omit robot XY."""
+    import math
+
+    def pair(value):
+        return (isinstance(value, (list, tuple)) and len(value) == 2
+                and all(type(v) in (int, float) and math.isfinite(v) for v in value))
+
+    xy = bundle.get("xy") or {}
+    for points, key in ((xy.get("validation") or [], "targetScreen"),
+                        (xy.get("samples") or [], "actualTouch")):
+        candidates = [(p["effectiveRobotXY"], p[key]) for p in points
+                      if isinstance(p, dict) and pair(p.get("effectiveRobotXY"))
+                      and pair(p.get(key))]
+        if candidates:
+            screen = bundle.get("screen") or {}
+            center = [float(screen.get("screenWidth") or 0) / 2,
+                      float(screen.get("screenHeight") or 0) / 2]
+            robot, touch = min(candidates, key=lambda p: math.dist(p[1], center))
+            return [float(v) for v in robot], [float(v) for v in touch]
+    raise RuntimeError("档案缺少已实测的机械坐标与屏幕触点配对，无法臂侧核对")
+
+
+def observe_recovery_probe(before, after, corners) -> tuple[float, float]:
+    """Observe a unique moved round probe, independently of its expected location.
+
+    The unmarked metal head has a dark central bore. Screen content and supports
+    must not stand in for it: require a strong circular boundary inside the
+    observed phone, the bore, and a changed disk between the two hover frames.
+    """
+    import cv2
+    import numpy as np
+
+    if before is None or after is None or before.shape != after.shape:
+        raise RuntimeError("探头复核帧缺失或尺寸不一致")
+    gray = cv2.cvtColor(after, cv2.COLOR_BGR2GRAY)
+    size = min(gray.shape)
+    circles = cv2.HoughCircles(
+        cv2.GaussianBlur(gray, (5, 5), 1), cv2.HOUGH_GRADIENT,
+        1, size * .07, param1=100, param2=45,
+        minRadius=max(8, round(size * .025)), maxRadius=round(size * .07))
+    contour = np.asarray(corners, np.float32)
+    changed = np.max(cv2.absdiff(before, after), axis=2) > 28
+    yy, xx = np.ogrid[:gray.shape[0], :gray.shape[1]]
+    candidates = []
+    for x, y, radius in ([] if circles is None else circles[0]):
+        x, y, radius = float(x), float(y), float(radius)
+        if cv2.pointPolygonTest(contour, (x, y), True) < radius:
+            continue
+        distance = (xx - x) ** 2 + (yy - y) ** 2
+        disk = distance < (radius * .95) ** 2
+        bore = distance < (radius * .13) ** 2
+        ring = (distance > (radius * .3) ** 2) & (distance < (radius * .75) ** 2)
+        if (float(np.mean(changed[disk])) >= .65
+                and float(np.mean(gray[ring])) - float(np.mean(gray[bore])) >= 25):
+            candidates.append((x, y))
+    if len(candidates) != 1:
+        raise RuntimeError("移动探头无法唯一识别，拒绝恢复旧坐标")
+    return candidates[0]
+
+
 def verify_phone_unchanged(bundle: dict, frame_provider: Callable[[], Any]) -> dict:
     """手机侧复核：live 帧四边与档案 edgeModel 比对（不移动机械臂）。"""
     import cv2
     import numpy as np
-    from drivers.screen_edge import locate_screen_quad
 
     corners = ((bundle.get("screen") or {}).get("edgeModel") or {}).get("corners")
     if not corners:
@@ -55,8 +135,7 @@ def verify_phone_unchanged(bundle: dict, frame_provider: Callable[[], Any]) -> d
     if decoded is None:
         return {"ok": False, "reason": "相机帧解码失败"}
     try:
-        located = locate_screen_quad(decoded, corners, tolerance_px=32,
-                                     require_fittable=True)
+        located = locate_recovery_screen(decoded, corners)
     except Exception as exc:
         return {"ok": False, "reason": f"手机四边无法定位（可能已移动）：{exc}"}
     deviation = float(np.max(np.linalg.norm(
@@ -106,11 +185,14 @@ def attempt_recovery(device_id: str, *, bundle: dict | None, new_session: str,
                      "转人工（把臂移回停车位并重新归零，或重新校准）")
     if not arm_anchor_verifier(device_id):
         return _fail("anchor_mismatch",
-                     "锚点核对失败：复位前机械臂已移动，旧坐标系无效，必须重新校准")
+                     "锚点核对未通过，无法确认旧坐标系有效，请检查探头识别与机械位置，必要时重新校准")
     # ---- 全部通过：转正 + 证书直恢复 + 目标重绑 ----
     restored = deepcopy(bundle)
     restored["status"] = cb.MOTION_READY_STATUS
     restored["daemonSession"] = new_session
+    park = restored.get("safePark") or {}
+    if park.get("confirmed") and park.get("daemonSession") == bundle.get("daemonSession"):
+        park["daemonSession"] = new_session
     # F2（第七轮复审）：写入恢复时几何哈希，激活下次 attempt_recovery 的
     # geometry_changed 守卫（此前无人写入=守卫死代码）。键集剔除会话/
     # 状态派生字段——daemonSession/status 本身就是被恢复的对象。
@@ -122,6 +204,24 @@ def attempt_recovery(device_id: str, *, bundle: dict | None, new_session: str,
         # 下次 attempt 的期望身份来源（同适配器换口不变，跨适配器变化=拒绝）
         restored["recoverySerialIdentity"] = deepcopy(serial_identity)
     cb.save_bundle(restored, data_root)
+    # The Android origin is measured during calibration, not during reconnect.
+    # Rebuild its derived binding from that same run's recorded metadata so
+    # input clicks do not retain the previous daemon session after recovery.
+    metadata = (restored.get("screen") or {}).get("displayCoordinateMetadata")
+    if metadata is not None:
+        try:
+            from drivers.calibration_wizard import build_gesture_coordinate_frame
+            from drivers import gesture_program as gp
+            phone_session = ((restored.get("autoCalibration") or {}).get("phoneSessionId")
+                             or restored.get("imeSessionId"))
+            rebuilt = build_gesture_coordinate_frame(
+                restored, metadata, ime_device_id=restored.get("imeDeviceId"),
+                session_id=phone_session)
+            gp.save_coordinate_frame(device_id, rebuilt, data_root)
+        except Exception as exc:
+            # Missing/mismatched evidence keeps the original frame rejected;
+            # it never licenses guessing a display origin or weakening checks.
+            logger.warning("设备 %s 恢复后输入法坐标桥未更新：%s", device_id, exc)
     # OCR 审查 P2：向导/ui_targets 清偿不依赖证书成功——certificates_failed
     # 早退也必须已执行，否则 _sync_bundle 会把旧会话写回档案冲掉恢复成果。
     if rebind_targets is not None:

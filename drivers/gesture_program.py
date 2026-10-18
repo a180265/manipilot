@@ -254,7 +254,7 @@ def normalized_to_calibration_px(x: float, y: float, frame: dict) -> tuple[float
 
 
 def coordinate_frame_path(device_id: str, data_root: Path | None = None) -> Path:
-    base = Path(data_root) if data_root else cb.data_dir(device_id)
+    base = Path(data_root) if data_root else cb.default_data_root()
     return base / "devices" / device_id / COORDINATE_FRAME_FILENAME
 
 

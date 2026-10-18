@@ -1003,56 +1003,116 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         走位事实保留，不被伪装为"完全未运动"；也不立即重取新坐标续点。
         闭包只做本地读，不持输入短锁、不等网络。
         """
-        from runtime.ime_geometry import ImeGeometryError
+        from runtime.ime_geometry import ImeGeometryError, NONCE_TTL_S
         planned_ref = deepcopy(target_ref)
+        expected_view = (planned_ref or {}).get("viewInstanceId")
+        state_lock = threading.Lock()
+        state = {"nonce": nonce, "refresh_started": False,
+                 "refresh_ready": False, "contact_attempted": False}
 
-        def gate() -> None:
+        def _require_planned_ref() -> None:
             if target_ref != planned_ref:
                 raise _DriverError("ime_geometry_unavailable",
                                    "最终接触核验：目标范围或落点参数被修改，禁止 TAP")
-            def _credential_and_binding_guard() -> None:
-                # 配对部署须有有效凭据；IP 直连仍走下方唯一绑定复核。
-                identity_ok = self.ime_pairing_trust is None
-                pairing = getattr(self, "ime_pairing", None)
-                if not identity_ok and pairing is not None:
-                    identity_ok = pairing.phone_has_active_credential(ime_device)
-                if not identity_ok:
-                    with self._phone_credentials_lock:
-                        identity_ok = any(
-                            phone == ime_device
-                            for phone in self._phone_credentials.values())
-                if not identity_ok:
-                    raise _DriverError(
-                        "ime_geometry_unavailable",
-                        "最终接触核验：手机几何凭据已撤销/未配对，禁止 TAP")
-                bound = str((self.devices.input_binding(device_id) or {})
-                            .get("ime_device_id") or "")
-                if bound != ime_device:
-                    raise _DriverError(
-                        "ime_geometry_unavailable",
-                        f"最终接触核验：设备当前绑定手机 {bound or '空'} 与"
-                        f"规划手机 {ime_device} 不一致，禁止 TAP")
-                if self._ime_geometry_bound_arm(ime_device) != device_id:
+
+        def _credential_and_binding_guard() -> None:
+            # 配对部署须有有效凭据；IP 直连仍走下方唯一绑定复核。
+            identity_ok = self.ime_pairing_trust is None
+            pairing = getattr(self, "ime_pairing", None)
+            if not identity_ok and pairing is not None:
+                identity_ok = pairing.phone_has_active_credential(ime_device)
+            if not identity_ok:
+                with self._phone_credentials_lock:
+                    identity_ok = any(
+                        phone == ime_device
+                        for phone in self._phone_credentials.values())
+            if not identity_ok:
+                raise _DriverError(
+                    "ime_geometry_unavailable",
+                    "最终接触核验：手机几何凭据已撤销/未配对，禁止 TAP")
+            bound = str((self.devices.input_binding(device_id) or {})
+                        .get("ime_device_id") or "")
+            if bound != ime_device:
+                raise _DriverError(
+                    "ime_geometry_unavailable",
+                    f"最终接触核验：设备当前绑定手机 {bound or '空'} 与"
+                    f"规划手机 {ime_device} 不一致，禁止 TAP")
+            if self._ime_geometry_bound_arm(ime_device) != device_id:
+                raise _DriverError("ime_geometry_unavailable",
+                                   "最终接触核验：手机唯一绑定已变化，禁止 TAP")
+
+        def _require_planned_geometry(snapshot: dict) -> None:
+            if (snapshot.get("runtime_session_id") != expected_session
+                    or (expected_view is not None
+                        and snapshot.get("view_instance_id") != expected_view)
+                    or snapshot.get("display") != expected_display
+                    or snapshot.get("current_task_id") != expected_task):
+                raise _DriverError("ime_geometry_unavailable",
+                                   "最终接触核验：会话、视图、显示器或输入任务已变化，禁止 TAP")
+            current_target = next((item for item in snapshot.get("targets", [])
+                                   if item.get("id") == target_id), {})
+            if (not current_target.get("visible") or not current_target.get("clickable")
+                    or (expected_bounds is not None
+                        and current_target.get("bounds") != expected_bounds)):
+                raise _DriverError("ime_geometry_unavailable",
+                                   "最终接触核验：目标可点击范围已变化，禁止按旧范围点击")
+
+        async def refresh_before_contact() -> None:
+            # Travel and camera/session checks may outlast the 1s snapshot age.
+            # Renew evidence once, outside transport/input locks; never replan XY.
+            with state_lock:
+                if state["refresh_started"] or state["contact_attempted"]:
                     raise _DriverError("ime_geometry_unavailable",
-                                       "最终接触核验：手机唯一绑定已变化，禁止 TAP")
+                                       "最终接触核验：同一 nonce 门不授权第二次点击")
+                state["refresh_started"] = True
+            _require_planned_ref()
+            _credential_and_binding_guard()
+            try:
+                contact_nonce = self.ime_geometry.create_nonce_request(
+                    ime_device, purpose="click_contact")
+                ok, reason, snapshot = await asyncio.to_thread(
+                    self.ime_geometry.wait_checked_snapshot, ime_device,
+                    contact_nonce, NONCE_TTL_S, target_id)
+                if not ok or snapshot is None:
+                    raise _DriverError(
+                        "ime_geometry_unavailable",
+                        f"最终接触核验：新鲜几何不可用（{reason}），禁止 TAP")
+                _require_planned_ref()
+                _require_planned_geometry(snapshot)
+            except ImeGeometryError as exc:
+                raise _DriverError("ime_geometry_unavailable",
+                                   f"最终接触核验失败（{exc.code}）：{exc.message}") from exc
+            with state_lock:
+                if state["contact_attempted"]:
+                    raise _DriverError("ime_geometry_unavailable",
+                                       "最终接触核验：nonce 门已使用，禁止 TAP")
+                state["nonce"] = contact_nonce
+                state["refresh_ready"] = True
+
+        def gate() -> None:
+            _require_planned_ref()
+            with state_lock:
+                if (state["contact_attempted"]
+                        or (state["refresh_started"] and not state["refresh_ready"])):
+                    raise _DriverError("ime_geometry_unavailable",
+                                       "最终接触核验：nonce 门已使用或未完成刷新，禁止 TAP")
+                state["contact_attempted"] = True
+                contact_nonce = state["nonce"]
             try:
                 snapshot = self.ime_geometry.consume_for_click(
-                    ime_device, nonce, target_id=target_id,
+                    ime_device, contact_nonce, target_id=target_id,
                     expected_task=expected_task,
                     expected_session=expected_session,
                     expected_display=expected_display,
                     guard=_credential_and_binding_guard)
-                if expected_bounds is not None:
-                    current_target = next((item for item in snapshot.get("targets", [])
-                                           if item.get("id") == target_id), {})
-                    if current_target.get("bounds") != expected_bounds:
-                        raise _DriverError("ime_geometry_unavailable",
-                                           "最终接触核验：目标可点击范围已变化，禁止按旧范围点击")
+                _require_planned_geometry(snapshot)
             except ImeGeometryError as exc:
                 raise _DriverError(
                     "ime_geometry_unavailable",
                     f"最终接触核验失败（{exc.code}）：{exc.message}；"
                     "TAP 已停止，不按旧路径补点") from exc
+
+        gate.refresh_before_contact = refresh_before_contact
 
         return gate
 
@@ -1430,6 +1490,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                 device_id, require_input=True,
                 ime_device_id=payload_body.get("ime_device_id") if isinstance(payload_body, dict) else None,
                 require_keyboard_active=input_entry.get("requires_keyboard_active", True),
+                require_ime_ready=input_entry.get("focuses_input_before_typing") is not True,
             )
             if not eligibility["can_accept_task"]:
                 raise ApiError("device_not_eligible", f"设备 {device_id} 不具备输入任务资格：{'、'.join(eligibility['blocking_checks'])}")

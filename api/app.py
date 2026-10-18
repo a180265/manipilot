@@ -2134,15 +2134,13 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
             return _layout_ok(request, "session_create", correlation,
                               {"operation_id": new_correlation_id(),
                                "session": result,
-                               "required_states": list(PAGE_STATES_ORDER),
+                               "required_states": [page["state"] for page in result["pages"]],
                                "replayed": False})
         except LayoutHttpError:
             raise
         except Exception as exc:
             return _layout_fail(request, exc)
 
-    PAGE_STATES_ORDER = ("wechat_list", "chat_ime_hidden", "chat_ime_empty",
-                         "chat_ime_text")
 
     def _session_view_frozen(request: Request, record: dict) -> dict:
         """D1 会话记录 → 冻结 layout:session 形状（补区域指针/绑定快照/兼容）。"""
@@ -2175,7 +2173,8 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         template = _adaptation_svc(request)._resolve_template(
             record["template_id"], record["template_version"])
         pages = []
-        for state in PAGE_STATES_ORDER:
+        from runtime.layout_pages import page_states
+        for state in page_states(template):
             entry = (record.get("pages") or {}).get(state)
             pages.append({"state": state,
                           "capture": _page_capture_frozen(entry, record)
@@ -2358,8 +2357,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
                     "item_results", "reason_codes") if key in check}
 
             page_checks = [_frozen_check(record["page_checks"][state])
-                           for state in PAGE_STATES_ORDER
-                           if state in record.get("page_checks", {})]
+                           for state in record.get("page_checks", {})]
             return _layout_ok(request, "adaptation_preview", correlation, {
                 "preview_id": record["preview_id"],
                 "page_checks": page_checks,
@@ -2415,8 +2413,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
                 if isinstance(raw, list):
                     page_checks = raw
                 else:
-                    page_checks = [raw[state] for state in PAGE_STATES_ORDER
-                                   if state in raw]
+                    page_checks = list(raw.values())
             failed = _failed_keys(page_checks)
             facts = _binding_facts(rt(request), device_id)
             calibration_ok = _calibration_facts(rt(request), device_id) \

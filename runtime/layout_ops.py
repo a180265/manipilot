@@ -1247,8 +1247,6 @@ class LayoutOpsService:
 
     # ================ 回滚（R3-16：kind 显式路由） ================
     # 四态闭集（冻结顺序；与 layout_adaptation.PAGE_STATES 一致）
-    _FOUR_STATES = ("wechat_list", "chat_ime_hidden", "chat_ime_empty",
-                    "chat_ime_text")
     ROLLBACK_TTL_SECONDS = 120
 
     def attach_adaptation_rollback_env(self, *, session_loader=None,
@@ -1413,7 +1411,13 @@ class LayoutOpsService:
         pages = session.get("pages") or {}
         session_summary = {}
         now = self._now()
-        for state in self._FOUR_STATES:
+        from runtime.layout_pages import page_states
+        template = self.resolve_template(template_ref["id"], template_ref["version"])
+        try:
+            required_states = page_states(template)
+        except (TypeError, ValueError) as exc:
+            raise LayoutOpsError(503, "layout_archive_invalid", "回滚模板页面定义损坏") from exc
+        for state in required_states:
             page = pages.get(state)
             capture = (page or {}).get("capture") or {}
             check = capture.get("check") or {}

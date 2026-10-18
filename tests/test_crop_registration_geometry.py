@@ -20,6 +20,7 @@ from runtime.layout_adaptation import AdaptationError, LayoutAdaptationService
 from runtime.layout_region import LayoutRegionStore
 from runtime.layout_state import LayoutStateStore, content_sha, state_key
 from runtime.layout_template import LayoutTemplateStore
+from runtime.layout_pages import LEGACY_STATES
 
 
 DEVICE = "arm-test"
@@ -37,6 +38,10 @@ def png(image):
     ok, encoded = cv2.imencode(".png", image)
     assert ok
     return encoded.tobytes()
+
+
+def four_state_geometry_pages(page):
+    return [{**copy.deepcopy(page), "state": state} for state in LEGACY_STATES]
 
 
 @pytest.fixture(autouse=True)
@@ -126,8 +131,11 @@ class Rig:
         }
         self.save_region(self.region)
         self.regions.cas_pointer(DEVICE, 0, 1, self.region["sha256"], str(uuid.uuid4()))
+        # Session capture now resolves all declared pages.  Keep this geometry
+        # fixture a four-state template; only wechat_list is exercised below.
+        template_pages = four_state_geometry_pages(self.page)
         self.templates.save_template("template-test", 1, {
-            "template_id": "template-test", "version": 1, "pages": [self.page]})
+            "template_id": "template-test", "version": 1, "pages": template_pages})
         for name, image in self.assets.items():
             self.templates.save_asset("template-test", name, png(image))
         self.adaptation = LayoutAdaptationService(
@@ -765,7 +773,7 @@ def test_fractional_input_crop_produced_by_write_page_has_covering_dimensions(ri
     ]
     template_id = "fractional-input"
     rig.templates.save_template(template_id, 1, {
-        "template_id": template_id, "version": 1, "pages": [page]})
+        "template_id": template_id, "version": 1, "pages": four_state_geometry_pages(page)})
     for name, image in rig.assets.items():
         rig.templates.save_asset(template_id, name, png(image))
     sid = rig.adaptation.start_session(DEVICE, {
@@ -872,7 +880,7 @@ def test_write_page_color_purposes_not_region_order_or_id(rig):
     rig.draft()
     template_id = "purpose-samples"
     rig.templates.save_template(template_id, 1, {
-        "template_id": template_id, "version": 1, "pages": [page]})
+        "template_id": template_id, "version": 1, "pages": four_state_geometry_pages(page)})
     for name, image in rig.assets.items():
         rig.templates.save_asset(template_id, name, png(image))
     sid = rig.adaptation.start_session(DEVICE, {

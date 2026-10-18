@@ -29,6 +29,24 @@ def _disallowed_result(*, staged: bool = False) -> dict:
     }
 
 
+def _motion_completed(receipt) -> bool:
+    """Preserve explicit uncertainty; frame difference may be observation only."""
+    if not isinstance(receipt, dict) or any(receipt.get(key) is False
+            for key in ("ok", "controller_completed", "arrived")):
+        return False
+    if any(receipt.get(key) in {"unknown", "failed", "cancelled", "stopped"}
+           for key in ("outcome", "outcome_hint", "status")):
+        return False
+    if any(receipt.get(key) is True for key in ("unknown", "failed", "cancelled", "stopped")):
+        return False
+    observed_completion = (receipt.get("controller_completed") is True
+                           and receipt.get("motion_observation_only") is True
+                           and receipt.get("outcome_hint") == "success")
+    if receipt.get("motion_verified") is False and not observed_completion:
+        return False
+    return receipt.get("ok") is True or observed_completion
+
+
 async def insert_bound_text(ctx) -> dict:
     if _input_disallowed(ctx):
         return _disallowed_result()
@@ -42,7 +60,7 @@ async def insert_bound_text(ctx) -> dict:
     while True:
         device = next((row for row in service.tasks.list_devices()
                        if row["deviceId"] == ime_id), None)
-        if not device or not device["online"] or device["keyboardActive"]:
+        if device and device["online"] and device["keyboardActive"]:
             break
         if asyncio.get_running_loop().time() >= deadline:
             break
@@ -65,6 +83,9 @@ async def insert_bound_text(ctx) -> dict:
         await service.tasks.cancel(task_id)
         return {"outcome": "failed", "error_category": "text_hash_mismatch",
                 "message": "输入法返回的正文与人工原文不一致，已取消且未点击"}
+    # Input contexts can carry an operation body absent from the parent task.
+    # Bind the verified body to this active IME task without altering its payload.
+    ctx.state_set("active_ime_text_hash", sha256_text(text))
 
     def _closed_probe() -> bool:
         # FIX-02：关闭唤醒等待——等待期间开关关闭立即中止长等（§4.8.6-7）
@@ -85,7 +106,12 @@ async def insert_bound_text(ctx) -> dict:
         if displayed["status"] != "displayed":
             await service.tasks.cancel(task_id)
             return {"outcome": "unknown", "message": "输入法候选状态未确认，已请求取消；请核对手机，不自动重发"}
-        await ctx.call_capability("arm.click", {"target_id": "ime_candidate_bar"})
+        clicked = await ctx.call_capability("arm.click", {"target_id": "ime_candidate_bar"})
+        if not _motion_completed(clicked):
+            await service.tasks.cancel(task_id)
+            return {"outcome": "unknown", "error_category": "ime_candidate_click_unknown",
+                    "message": "候选栏点击结果未知，已请求取消；停止输入与发送，不自动重试",
+                    "detail": {"ime_task_id": task_id}}
         result = await service.tasks.wait_for_status(
             task_id, {"inserted", "typing_failed", "cancelled"}, 60,
             probe=_closed_probe)
@@ -101,7 +127,17 @@ async def insert_bound_text(ctx) -> dict:
         await service.tasks.cancel(task_id)
         return {"outcome": "unknown", "message": "输入法未确认完整输入，可能残留部分文字；停止发送，等待人工核对",
                 "detail": {"ime_task_id": task_id, "ime_status": result["status"]}}
+    try:
+        parked = await ctx.call_capability("arm.park", {})
+    except Exception:
+        parked = None
+    if not _motion_completed(parked):
+        await service.tasks.cancel(task_id)
+        return {"outcome": "unknown", "error_category": "ime_input_park_unknown",
+                "message": "输入法已确认输入，但机械臂停车未确认；停止发送，不自动重试",
+                "detail": {"ime_task_id": task_id, "ime_status": result["status"]}}
     ctx.state_set("active_ime_task_id", None)
+    ctx.state_set("active_ime_text_hash", None)
     return {"outcome": "success", "message": "机械臂侧输入法已确认完整输入原文",
             "detail": {"ime_task_id": task_id, "text_hash": sha256_text(text)}}
 

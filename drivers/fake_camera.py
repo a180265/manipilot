@@ -355,8 +355,12 @@ class FakeCameraDriver(CameraDriver):
 
     async def locate_text(self, text: str, *, region: str = "messages",
                           min_confidence: float = 0.75, exact: bool = False,
-                          roi: dict | None = None) -> dict:
+                          roi: dict | None = None, localization_mode: str = "layout") -> dict:
         """仿真 OCR：返回稳定的全帧中心框，让业务走与真机相同的动态目标协议。"""
+        if localization_mode not in {"layout", "screen_text"}:
+            raise ValueError("未知的文字定位模式")
+        if localization_mode == "screen_text" and exact is not True:
+            raise ValueError("screen_text 只允许 exact=True 的精确文字定位")
         if not str(text or "").strip():
             raise RuntimeError("OCR 目标文字不能为空")
         width, height = self._width, self._height
@@ -379,6 +383,7 @@ class FakeCameraDriver(CameraDriver):
             "bbox": [x1, y1, x1 + box_w, y1 + box_h],
             "confidence": max(float(min_confidence), self._confidence),
             "engine": "fake-ocr", "frameW": width, "frameH": height,
+            **({"localizationMode": "screen_text"} if localization_mode == "screen_text" else {}),
         }
 
     async def confirm_main_view(self, expected_ui_state: str = "wechat_main") -> dict:

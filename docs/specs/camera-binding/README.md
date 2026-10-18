@@ -188,6 +188,7 @@ before_sha256/after_sha256是严格解析文件后的规范化JSON摘要，比�
 | HTTP 头 | 规范字段 |
 | --- | --- |
 | `X-Camera-Binding-Contract` | 固定 `camera-binding.v2` |
+| `X-Frame-Source` | 必需，固定 `camera_helper`；缺失或其他来源拒绝，不自动补标 |
 | `X-Camera-Id` / `X-Device-Id` / `X-Camera-Unique-Id` | 逻辑相机 / 机械臂 / 物理相机 |
 | `X-Camera-Binding-Id` | camera_binding_id |
 | `X-Source-Geometry-Id` | source_geometry_id |

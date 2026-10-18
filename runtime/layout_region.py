@@ -352,12 +352,16 @@ class LayoutRegionStore:
 
 # ---------------- 检测（真实 OpenCV 运行，不指定结果） ----------------
 
-def _screen_candidates(crop_bgr: np.ndarray) -> list[np.ndarray]:
+def _screen_candidates(crop_bgr: np.ndarray, *, limit: int | None = 2) -> list[np.ndarray]:
     """粗框内屏幕候选（独立外轮廓、可测尺寸、可近似四边形）。
 
     同时检查亮/暗极性，按空间重合去重同一屏幕的内外环。
     不按主导极性丢弃另一侧，否则亮屏旁的暗屏会被忽略。
+    默认找到两个即可判歧义；需要后续筛选的调用者必须用 limit=None 完整枚举，
+    不能先截断再过滤，否则两个小候选可能藏住后续真正的暗屏。
     """
+    from drivers.screen_edge import _quad_from_observed_edges
+
     gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape[:2]
     unique: list[np.ndarray] = []
@@ -365,7 +369,7 @@ def _screen_candidates(crop_bgr: np.ndarray) -> list[np.ndarray]:
         _, binary = cv2.threshold(image, 0, 255,
                                   cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL,
-                                       cv2.CHAIN_APPROX_SIMPLE)
+                                       cv2.CHAIN_APPROX_NONE)
         # Otsu and its inverse can put a small dark screen in the background.
         # A border-relative contrast mask preserves that independent candidate.
         border = np.concatenate((image[0], image[-1], image[:, 0], image[:, -1]))
@@ -373,7 +377,7 @@ def _screen_candidates(crop_bgr: np.ndarray) -> list[np.ndarray]:
             image, min(255, float(np.median(border)) + 8), 255,
             cv2.THRESH_BINARY)[1]
         contrast_contours, _ = cv2.findContours(
-            contrast, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contrast, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         contours = list(contours) + list(contrast_contours)
         for contour in sorted(contours, key=cv2.contourArea, reverse=True):
             area = float(cv2.contourArea(contour))
@@ -383,12 +387,13 @@ def _screen_candidates(crop_bgr: np.ndarray) -> list[np.ndarray]:
             short, long = sorted(cv2.minAreaRect(contour)[1])
             if short < 24 or long <= 0 or short / long < .25:
                 continue
-            hull = cv2.convexHull(contour)
-            approx = cv2.approxPolyDP(hull, 0.02 *
-                                      cv2.arcLength(hull, True), True)
-            if len(approx) < 4:
+            # A convex hull with >=4 vertices also describes irregular support
+            # reflections. Require four measured sides, as the actual screen
+            # locator does; never manufacture a display from its bounding box.
+            observed = _quad_from_observed_edges(contour)
+            if observed is None:
                 continue
-            quad = approx.reshape(-1, 2).astype(np.float32)
+            quad = np.asarray(observed, dtype=np.float32)
             # The inverse-polarity outer background is not another screen.
             if np.any(quad < 1) or np.any(quad[:, 0] >= width - 1) \
                     or np.any(quad[:, 1] >= height - 1):
@@ -403,7 +408,7 @@ def _screen_candidates(crop_bgr: np.ndarray) -> list[np.ndarray]:
             if any(_same_screen_quad(quad, other) for other in unique):
                 continue
             unique.append(quad)
-            if len(unique) >= 2:
+            if limit is not None and len(unique) >= limit:
                 return unique
     return unique
 

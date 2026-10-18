@@ -85,6 +85,26 @@ def _start(svc, device="arm-01", principal="operator"):
         "installation_binding": DEFAULT_BINDING})
 
 
+def test_page_check_resolves_device_override_instead_of_template_rect(bundle):
+    svc = bundle.adaptation_svc
+    sid = _start(svc)["session_id"]
+    captured = _capture(svc, "arm-01", sid, 1, "wechat_list")
+    override = {"state": "wechat_list", "kind": "region", "item_id": "content",
+                "anchor_id": "wechat_chats_tab",
+                "relative_rect": {"dx": .4, "dy": .05, "width": .3, "height": .05},
+                "source_evidence_ids": captured["source_evidence_ids"],
+                "reason": "本台内容范围与共享模板不同"}
+    result = svc.write_page("arm-01", sid, "wechat_list", {
+        "client_request_id": str(uuid.uuid4()), "expected_session_revision": 1,
+        "source_evidence_ids": captured["source_evidence_ids"],
+        "local_overrides": [override]})
+    check = result["check"]
+    anchor = next(a for a in check["anchor_results"] if a["id"] == "wechat_chats_tab")
+    item = next(i for i in check["item_results"] if i["id"] == "content")
+    assert item["resolved_rect"]["x"] == pytest.approx(anchor["matched_rect"]["x"] + .4)
+    assert item["resolved_rect"]["width"] == .3
+
+
 # ---------------- 会话 ----------------
 def test_start_session_fixes_device_author_template(bundle):
     svc = bundle.adaptation_svc

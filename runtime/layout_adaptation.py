@@ -23,6 +23,7 @@ session/preview 失效；已发布适配版本/指针从持久资料恢复，不
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import threading
@@ -44,7 +45,9 @@ from runtime.layout_state import (
 from runtime.util import iso, parse_iso, utc_now
 
 # 四态闭集与固定顺序（schema page_state）
-PAGE_STATES = ("wechat_list", "chat_ime_hidden", "chat_ime_empty", "chat_ime_text")
+from runtime.layout_pages import LEGACY_STATES, page_states, valid_page_state
+
+PAGE_STATES = LEGACY_STATES
 SESSION_TTL_SECONDS = 30 * 60          # session 30 分钟
 PAGE_EVIDENCE_TTL_SECONDS = 15 * 60    # 页证据自首次接纳 15 分钟
 PREVIEW_TTL_SECONDS = 120              # preview 120 秒
@@ -334,9 +337,7 @@ class LayoutAdaptationService:
     @staticmethod
     def _session_view(session: dict) -> dict:
         view = dict(session)
-        view["pages"] = {state: session["pages"].get(state)
-                         for state in PAGE_STATES
-                         if state in session["pages"]}
+        view["pages"] = dict(session["pages"])
         view["session_id"] = session["capture_session_id"]
         return view
 
@@ -361,7 +362,7 @@ class LayoutAdaptationService:
         expected_owner_revision = int(request.get("expected_owner_revision") or 0)
         session = None
         if owner_kind == "session":
-            if not owner_id or page_state not in PAGE_STATES:
+            if not owner_id or not valid_page_state(page_state):
                 raise AdaptationError(
                     "invalid_request",
                     "session 采集必须携带会话 UUID 与四态 page_state")
@@ -369,6 +370,8 @@ class LayoutAdaptationService:
                 raise AdaptationError("invalid_request",
                                       "expected_owner_revision 必须为正整数")
             session = self._get_session_checked(device_id, str(owner_id))
+            if page_state not in self._session_states(session):
+                raise AdaptationError("invalid_request", "页面未在会话固定模板中声明")
             # 作者身份在会话创建时固定：采集沿用会话作者（服务端事实），
             # 请求中的 principal 只能与之相符或省略
             supplied = request.get("principal_id")
@@ -389,7 +392,7 @@ class LayoutAdaptationService:
                         "invalid_request",
                         "search_region 采集 owner_id/page_state 必须为 null")
             else:
-                if not owner_id or page_state not in PAGE_STATES:
+                if not owner_id or not valid_page_state(page_state):
                     raise AdaptationError(
                         "invalid_request",
                         "draft 采集必须携带 owner UUID 与四态 page_state")
@@ -650,10 +653,8 @@ class LayoutAdaptationService:
     def write_page(self, device_id: str, session_id: str, state: str,
                    page: dict) -> dict:
         self._require_open()
-        if state not in PAGE_STATES:
-            raise AdaptationError(
-                "invalid_request",
-                f"page_state 必须属于 {list(PAGE_STATES)} 固定顺序四态")
+        if not valid_page_state(state):
+            raise AdaptationError("invalid_request", "page_state 页面状态无效")
         if not isinstance(page, dict):
             raise AdaptationError("invalid_request", "page 必须为对象")
         unknown = [key for key in page if key not in self._PAGE_FIELDS]
@@ -687,6 +688,8 @@ class LayoutAdaptationService:
         self._check_overrides(overrides)
         with self._device_lock(device_id):
             session = self._get_session_checked(device_id, session_id)
+            if state not in self._session_states(session):
+                raise AdaptationError("invalid_request", "页面未在会话固定模板中声明")
             if int(session.get("revision") or 1) != expected_revision:
                 raise AdaptationError(
                     "revision_conflict",
@@ -724,7 +727,7 @@ class LayoutAdaptationService:
             rectified = self._rectify_evidence_to_screen(device_id, session,
                                                          capture)
             check = self._match_page(session, state, capture,
-                                     rectified=rectified)
+                                     rectified=rectified, overrides=overrides)
             accepted_at = capture["created_at"]  # 首次接纳=采集归档时间，不可变
             # 颜色样本：摆正图逐通道中位 RGB（§6；区域缺失回退前两个已通过
             # 必需锚点矩形并集；不足/低纹理拒绝，不猜 RGB）
@@ -783,18 +786,36 @@ class LayoutAdaptationService:
             raise AdaptationError("invalid_request", "local_overrides 必须为数组")
         for override in overrides:
             if not isinstance(override, dict) \
-                    or not override.get("item_kind") or not override.get("item_id"):
+                    or not (override.get("kind") or override.get("item_kind")) \
+                    or not override.get("item_id"):
                 raise AdaptationError(
                     "invalid_request",
-                    "local_overrides 项必须含 item_kind/item_id")
-            if override.get("item_kind") == "target" \
+                    "local_overrides 项必须含 kind/item_id")
+            kind = override.get("kind") or override.get("item_kind")
+            if override.get("kind") and override.get("item_kind") \
+                    and override["kind"] != override["item_kind"]:
+                raise AdaptationError("invalid_request", "局部覆盖类型声明冲突")
+            if "tapDepth" in override:
+                from drivers.daemon_protocol import check_tap
+                try:
+                    if kind != "target":
+                        raise ValueError("接触深度仅允许覆盖点击目标")
+                    check_tap(override["tapDepth"])
+                except (TypeError, ValueError) as exc:
+                    raise AdaptationError("invalid_request", str(exc)) from exc
+            if "tapDwellMs" in override:
+                dwell = override["tapDwellMs"]
+                if kind != "target" or type(dwell) is not int or not 0 <= dwell <= 2000:
+                    raise AdaptationError(
+                        "invalid_request", "接触停留仅允许点击目标，且须为 0-2000 毫秒整数")
+            if kind == "target" \
                     and str(override.get("item_id", "")).startswith("ime_"):
                 raise AdaptationError(
                     "invalid_request",
                     "live 模式 IME 目标不允许 local_overrides 修改")
 
     def _match_page(self, session: dict, state: str, capture: dict,
-                    rectified: dict | None = None) -> dict:
+                    rectified: dict | None = None, overrides=()) -> dict:
         """服务端真实匹配：读模板定义 + 真实图像逐锚点匹配（不经客户端）。
 
         R3-12：模板区域是**屏幕域**定义；匹配只用会话固定原图经本台当前
@@ -817,6 +838,19 @@ class LayoutAdaptationService:
         if page_def is None:
             raise AdaptationError("template_invalid",
                                   f"模板缺少 {state} 页定义", status=503)
+        page_def = copy.deepcopy(page_def)
+        seen = set()
+        for override in overrides:
+            kind = override.get("kind") or override.get("item_kind")
+            key = kind, override["item_id"]
+            items = page_def.get(kind + "s", []) if kind in {"target", "region"} else []
+            item = next((i for i in items if i["id"] == override["item_id"]), None)
+            if (override.get("state", state) != state or key in seen or item is None
+                    or not any(a["id"] == override.get("anchor_id") for a in page_def["anchors"])):
+                raise AdaptationError("invalid_request", "局部覆盖页面、类型、目标或锚点无效或重复")
+            seen.add(key)
+            item.update(anchor_id=override["anchor_id"],
+                        relative_rect=copy.deepcopy(override["relative_rect"]))
         evidence_ids = [e["evidence_id"] for e in capture["evidence"]]
         if rectified is None:
             rectified = self._rectify_evidence_to_screen(
@@ -1166,6 +1200,15 @@ class LayoutAdaptationService:
             "installation_region_ref": region_ref,
         })
 
+    def _session_states(self, session: dict) -> tuple:
+        template = self._resolve_template(session["template_id"], session["template_version"])
+        if template is None:
+            raise AdaptationError("template_not_found", "会话固定模板不存在", status=404)
+        try:
+            return page_states(template)
+        except ValueError as exc:
+            raise AdaptationError("invalid_request", str(exc)) from exc
+
     def _checked_page_region_ref(self, session: dict) -> dict:
         """Never relabel saved checks with a newer selected region."""
         provider = self._region_ref_provider
@@ -1177,7 +1220,7 @@ class LayoutAdaptationService:
             raise AdaptationError(
                 "items_unverified", "缺少有效的当前生效粗框，须重新核验", status=409)
         current = dict(current)
-        for state in PAGE_STATES:
+        for state in self._session_states(session):
             page = session["pages"].get(state)
             if page is None:
                 continue  # The completeness gate reports uncaptured pages.
@@ -1197,7 +1240,7 @@ class LayoutAdaptationService:
         accepted: list[dict] = []
         failed: list[dict] = []
         blocking: list[dict] = []
-        for state in PAGE_STATES:
+        for state in self._session_states(session):
             page = session["pages"].get(state)
             if page is None:
                 raise AdaptationError(
@@ -1248,7 +1291,7 @@ class LayoutAdaptationService:
                                    "reason_code": result.get("reason_code")})
                     blocking.append(keyed)
         state_order = {state: index for index, state
-                       in enumerate(PAGE_STATES)}
+                       in enumerate(self._session_states(session))}
         accepted.sort(key=lambda k: (state_order[k["page_state"]],
                                      k["item_kind"], k["item_id"]))
         failed.sort(key=lambda k: (state_order[k["page_state"]],
@@ -1347,7 +1390,7 @@ class LayoutAdaptationService:
             supplied = request.get("accepted_items")
             if supplied is not None:
                 state_order = {state: index for index, state
-                               in enumerate(PAGE_STATES)}
+                               in enumerate(self._session_states(session))}
                 normalized = sorted(
                     [{"page_state": i.get("page_state"),
                       "item_kind": i.get("item_kind"),
@@ -1390,10 +1433,10 @@ class LayoutAdaptationService:
                     "items_unverified", "预览配置与匹配粗框不一致，须重新核验",
                     status=409)
             page_checks = [session["pages"][state]["capture"]["check"]
-                           for state in PAGE_STATES]
+                           for state in self._session_states(session)]
             local_overrides = []
             color_samples = []
-            for state in PAGE_STATES:
+            for state in self._session_states(session):
                 local_overrides.extend(
                     session["pages"][state].get("local_overrides") or [])
                 if session["pages"][state].get("color_sample"):

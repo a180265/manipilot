@@ -1,0 +1,20 @@
+{
+  "scope": "已双向；contact候选资格最小修复，仅离线验证",
+  "files": {
+    "runtime/layout_geometry.py": "22b74850b31a684bc7a4ebc8f6bc9d76510d9790d22fe1f8f7a3243e49c6d6a6",
+    "runtime/layout_region.py": "f830f6188be408899b44b99acd58c4ef4f430657fd8bc1c46e6d0907fd44d363",
+    "tests/test_contact_candidate_qualification.py": "cbdde8c62e3be937142377676fbaa7b2f87664be225e02511bb85ff606aa8070",
+    "tests/test_contact_reference_gate.py": "cb26985319928d528cd7a1decfca7f0d770d7a40cc3cf86c3a49d8bf5eee462e",
+    "docs/2026-10-18-contact-candidate-qualification.md": "327e5d68ba99682a0ae246ca21bc61f8f4d550b7583f0cc8455f41fb447b0f91",
+    "docs/实施目标与验收总表.md": "480f4336f4c3333a15eaa2914ef1a9ca3c20339e7df757fc7e379bbe3727addb"
+  },
+  "validation": {
+    "wx_focused": "67 passed",
+    "sdk_focused": "71 passed / 1 skipped",
+    "adjacent_current_each": "39 passed / 2 failed",
+    "adjacent_inverse_overlay_each": "39 passed / 2 failed",
+    "real_v12_gate": "pre_checks=[]; contact_checks=[]",
+    "hardware": "not operated by this subtask"
+  },
+  "sync": "two production files identical; four pre-existing parent-owned drifts recorded in report"
+}

@@ -91,6 +91,20 @@ def _tap_count(env):
     return len([line for line in env.daemon.commands if line.startswith("TAP")])
 
 
+def _delay_final_contact(env, monkeypatch, age):
+    """Age the fresh contact response only at the final transport boundary."""
+    import runtime.ime_geometry as geom_mod
+    real_now = geom_mod._now
+    original_cmd = env.driver._json_cmd
+
+    def delayed(command, **kwargs):
+        if command.startswith("TAP"):
+            monkeypatch.setattr(geom_mod, "_now", lambda: real_now() + age)
+        return original_cmd(command, **kwargs)
+
+    monkeypatch.setattr(env.driver, "_json_cmd", delayed)
+
+
 # ---------------------------------------------------------------- A 合法链
 
 def test_r3_02_a_candidate_with_task_binding_and_delete_null_task(live_env):
@@ -102,8 +116,11 @@ def test_r3_02_a_candidate_with_task_binding_and_delete_null_task(live_env):
         assert ref["currentTaskId"] == "t-r3-2-ime", "规划快照必须携带原任务引用"
         gate = env.runtime._geometry_gates.get(ref["nonce"])
         assert callable(gate), "规划必须寄存 TAP 边界最终几何门（R3-02-3）"
+        # The driver asks again after travel; planning and contact have distinct nonces.
+        contact_phone = _start_phone(env, task_id="t-r3-2-ime")
         ref = dict(ref, finalGeometryGate=gate)
         result = await env.driver.click(_click_params(dict(ref), "ime_candidate_bar"))
+        contact_phone.join(timeout=5)
         expected = _expected_robot(CANDIDATE_CENTER)
         assert result["resolved_robot_xy"] == pytest.approx(list(expected))
         assert _tap_count(env) == 1
@@ -183,14 +200,14 @@ def test_r3_02_b_snapshot_age_over_1s(live_env, monkeypatch):
         phone = _start_phone(env)
         ref = await _plan(env)
         phone.join(timeout=5)
-        # 可控时钟：TAP 边界的"当前时间"推后 1.5 秒（快照年龄超 1 秒）
-        import runtime.ime_geometry as geom_mod
-        real_now = geom_mod._now
-        monkeypatch.setattr(geom_mod, "_now",
-                            lambda: real_now() + 1.5)
+        # Travel may refresh evidence; the final fresh snapshot still expires at 1s.
+        _delay_final_contact(env, monkeypatch, 1.5)
+        contact_phone = _start_phone(env)
         ref = dict(ref, finalGeometryGate=env.runtime._geometry_gates[ref["nonce"]])
         with pytest.raises(DriverError) as caught:
             await env.driver.click(_click_params(dict(ref), "ime_candidate_bar"))
+        contact_phone.join(timeout=5)
+        assert "snapshot_stale" in caught.value.message
         _assert_zero_tap_walk_preserved(env, caught.value)
 
     asyncio.run(scenario())
@@ -202,13 +219,13 @@ def test_r3_02_b_nonce_expired_over_2s(live_env, monkeypatch):
         phone = _start_phone(env)
         ref = await _plan(env)
         phone.join(timeout=5)
-        import runtime.ime_geometry as geom_mod
-        real_now = geom_mod._now
-        monkeypatch.setattr(geom_mod, "_now",
-                            lambda: real_now() + 2.5)
+        _delay_final_contact(env, monkeypatch, 2.5)
+        contact_phone = _start_phone(env)
         ref = dict(ref, finalGeometryGate=env.runtime._geometry_gates[ref["nonce"]])
         with pytest.raises(DriverError) as caught:
             await env.driver.click(_click_params(dict(ref), "ime_candidate_bar"))
+        contact_phone.join(timeout=5)
+        assert "nonce_expired" in caught.value.message
         _assert_zero_tap_walk_preserved(env, caught.value)
 
     asyncio.run(scenario())
@@ -253,8 +270,10 @@ def test_r3_02_c_same_nonce_never_authorizes_second_click(live_env):
         ref = await _plan(env)
         phone.join(timeout=5)
         gate = env.runtime._geometry_gates[ref["nonce"]]
+        contact_phone = _start_phone(env)
         await env.driver.click(
             _click_params(dict(ref, finalGeometryGate=gate), "ime_candidate_bar"))
+        contact_phone.join(timeout=5)
         assert _tap_count(env) == 1
         # 同 nonce 重放（同 seq 回执不续鲜）：第二次点击必须拒绝
         with pytest.raises(DriverError):

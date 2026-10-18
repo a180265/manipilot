@@ -9,7 +9,8 @@ INPUT_TASK_TYPES = frozenset({"chat_send", "wx_session_send", "screen_input", "s
 
 
 def compute_device_eligibility(device: dict, *, ime_status: dict | None = None,
-                               require_input: bool = False, require_keyboard_active: bool = True) -> dict:
+                               require_input: bool = False, require_keyboard_active: bool = True,
+                               require_ime_ready: bool = True) -> dict:
     blocking: list[str] = []
     status = device.get("status")
     if device.get("presence_state") == "removed":
@@ -38,7 +39,12 @@ def compute_device_eligibility(device: dict, *, ime_status: dict | None = None,
         data_root = device.get("_settings_data_root")
         if not is_enabled(device.get("device_id", ""), data_root):
             blocking.append("input_switch_disabled")
-        if ime_status is not None:
+        if not require_ime_ready and not require_keyboard_active:
+            # Focus-only navigation may wake a hidden IME. Input effects still
+            # use the strict default at their final claim boundary.
+            if not device.get("ime_device_id"):
+                blocking.append("ime_not_bound")
+        elif ime_status is not None:
             if not ime_status.get("online"):
                 blocking.append("ime_offline")
             if require_keyboard_active and not ime_status.get("keyboardActive", ime_status.get("keyboard_active", True)):

@@ -2994,14 +2994,6 @@ class AutoRunner:
         if all(str(promoted.get(key) or "").strip()
                for key in cb.V3_REQUIRED_IDENTITY_FIELDS):
             promoted["schemaVersion"] = cb.BUNDLE_SCHEMA_VERSION_V3
-        # 第七轮 OCR 审查 F2：PROMOTE 时写入恢复几何哈希（键集剔除
-        # daemonSession/status——会话重置正是恢复的场景，哈希必须跨会话
-        # 稳定），否则 attempt_recovery 的 geometry_changed 守卫是死代码，
-        # 且重标定后旧哈希残留会把一键恢复永久锁死。
-        promoted["recoveryGeometryHash"] = cb.profile_hash(
-            promoted,
-            keys=tuple(k for k in AUTO_PROMOTE_GUARD_KEYS
-                       if k not in ("daemonSession", "status")))
         screen = dict(promoted.get("screen") or {})
         screen.update(run.get("screen") or {})
         # 屏幕边缘基准以本轮 run 实测为准（2026-09-04 修复：原来只在档案
@@ -3159,6 +3151,15 @@ class AutoRunner:
                 raise AutoRunError("promote_motion_invalid",
                                    "机械独立资格未通过：" +
                                    "；".join(item["message"] for item in checks))
+        # Seal the final screen, XY, camera and display geometry after assembly.
+        # 第七轮 OCR 审查 F2：PROMOTE 时写入恢复几何哈希（键集剔除
+        # daemonSession/status——会话重置正是恢复的场景，哈希必须跨会话
+        # 稳定），否则 attempt_recovery 的 geometry_changed 守卫是死代码，
+        # 且重标定后旧哈希残留会把一键恢复永久锁死。
+        promoted["recoveryGeometryHash"] = cb.profile_hash(
+            promoted,
+            keys=tuple(k for k in AUTO_PROMOTE_GUARD_KEYS
+                       if k not in ("daemonSession", "status")))
         # P08：候选原子提升——以读取时的档案字节摘要为并发条件，主档
         # 在 run 期间/校验后被其他写入改动即拒绝覆盖，绝不混合字段。
         try:

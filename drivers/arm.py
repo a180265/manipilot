@@ -86,6 +86,12 @@ class ArmDriver(ABC):
     async def go_home(self) -> dict:
         """回到安全位置() -> 运动结果和证据"""
 
+    async def park(self) -> dict:
+        """回到当前会话已确认的校准安全停车位；不支持的驱动明确拒绝。"""
+        error = DriverError("driver_policy_rejected", "当前驱动不支持校准安全停车")
+        error.motion_not_started = True
+        raise error
+
     @abstractmethod
     async def move_preset(self, position_id: str) -> dict:
         """移动到预设位置(位置编号) -> 运动结果和证据"""

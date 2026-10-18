@@ -352,6 +352,7 @@ def test_v2_frame_bridge_receipts_and_rejections(tmp_path, monkeypatch):
     auth = {"Authorization": f"Bearer {token}",
             "Content-Type": "image/jpeg",
             "X-Camera-Binding-Contract": "camera-binding.v2",
+            "X-Frame-Source": "camera_helper",
             "X-Camera-Id": "cam-01",
             "X-Camera-Unique-Id": "uvc-01",
             "X-Source-Geometry-Id": "geom-1",

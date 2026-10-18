@@ -450,7 +450,9 @@ def unique(values, key, code):
 
 
 def four(values):
-    require([value["state"] for value in values] == list(STATES), "layout:four_states_order")
+    states = [value["state"] for value in values]
+    require(states[:4] == list(STATES) and len(states) == len(set(states))
+            and 4 <= len(states) <= 12, "layout:four_states_order")
 
 
 def inside(inner, outer):
@@ -512,12 +514,16 @@ def page(value):
             resolved[field, item["id"]] = box
     target_ids = {item["id"] for item in value["targets"]}
     purposes = {item["purpose"] for item in value["regions"]}
-    required_targets = {"wechat_chats_tab"} if value["state"] == "wechat_list" else {"back_button", "input_box"}
+    text_page = value.get("observation_kind") == "text_regions.v1"
+    required_targets = (set() if text_page else {"wechat_chats_tab"}
+                        if value["state"] == "wechat_list" else {"back_button", "input_box"})
     if value["state"] == "chat_ime_text":
         required_targets.add("send_button")
         require("send_button_feature" in anchors, "layout:send_feature_missing")
     require(required_targets <= target_ids, "layout:required_target_missing")
-    required_purposes = {"unread", "content"} if value["state"] == "wechat_list" else {"title", "input", "content"}
+    require(len(purposes) == len(value["regions"]), "layout:duplicate_region_purpose")
+    required_purposes = ({"input", "content"} if text_page else {"unread", "content"}
+                         if value["state"] == "wechat_list" else {"title", "input", "content"})
     require(required_purposes <= purposes, "layout:required_region_missing")
     if value["state"] in ("chat_ime_empty", "chat_ime_text"):
         require("keyboard_boundary" in anchors, "layout:keyboard_boundary_missing")
@@ -584,7 +590,8 @@ def passed_keys(checks):
         for item in check["item_results"]:
             if item["status"] == "passed":
                 keys.append({"page_state": check["state"], "item_kind": item["kind"], "item_id": item["id"]})
-    return sorted(keys, key=lambda item: (STATES.index(item["page_state"]), item["item_kind"], item["item_id"]))
+    order = {check["state"]: index for index, check in enumerate(checks)}
+    return sorted(keys, key=lambda item: (order[item["page_state"]], item["item_kind"], item["item_id"]))
 
 
 def configuration(session):
@@ -642,6 +649,9 @@ def layout_semantic(definition, value):
         page_check(value)
     elif definition in ("page_checks", "colors"):
         four(value)
+    elif definition == "override":
+        require(not {"tapDepth", "tapDwellMs"}.intersection(value)
+                or value["kind"] == "target", "layout:contact_target_only")
     elif definition == "overrides":
         unique(value, lambda item: (item["state"], item["kind"], item["item_id"]), "layout:duplicate_override")
     elif definition == "color_sample":
@@ -664,7 +674,7 @@ def layout_semantic(definition, value):
     elif definition == "draft_page":
         if value["definition"] is None:
             require(value["page_check"] is None and value["updated_at"] is None and not value["source_evidence_ids"], "draft:uncaptured_fields")
-            require(bool(value["missing_items"]), "draft:missing_items")
+            require(bool(value["missing_items"]) or value["state"].startswith("app_"), "draft:missing_items")
         else:
             require(value["definition"]["state"] == value["state"], "draft:page_state")
             require(value["updated_at"] is not None, "draft:updated_at")
@@ -760,7 +770,7 @@ def session_case(value):
     require(session["installation_region_ref"] == identity(value["region"], "region"), "session:region_changed")
     require(value["current_calibration"]["geometry_hash"] == session["binding_snapshot"]["screen_descriptor"]["calibration_geometry_hash"], "session:calibration_changed")
     captures = {item["capture_id"]: item for item in value["captures"]}
-    require(len(captures) == 4, "session:duplicate_capture")
+    require(len(captures) == len(value["captures"]) == len(session["pages"]), "session:duplicate_capture")
     for entry in session["pages"]:
         accepted = entry["capture"]
         require(accepted is not None, "session:page_missing")

@@ -511,7 +511,7 @@ def _require_fleet_device_safe(device_id: str) -> None:
             "CAMERA_FLEET_SAFETY_KEYS_FILE 或 ARMFLEET_WX_NAV_KEYS_FILE）："
             "拒绝换绑，请完成部署配置后重试")
     base, keys_file, key_id = config
-    path = f"/v1/devices/{quote(device_id, safe='')}/wx-navigation-safety"
+    path = f"/v1/devices/{quote(device_id, safe='')}/safety-view"
     try:
         from runtime import service_signing as wna
         keys = wna.load_keys(str(keys_file))
@@ -551,7 +551,7 @@ def _assert_safety_confirmed(device_id: str, view) -> None:
 
     if not isinstance(view, dict):
         reject("安全视图不是对象")
-    if view.get("contract_version") != "wx-navigation-device-safety.v1":
+    if view.get("contract_version") != "device-safety-view.v1":
         reject(f"契约版本未知：{view.get('contract_version')!r}")
     if str(view.get("device_id") or "") != device_id:
         reject("设备身份不匹配")
@@ -1138,6 +1138,7 @@ def _accept_frame_v2(handler, camera_id: str) -> None:
     """
     headers = handler.headers
     required = {
+        "X-Frame-Source": "frame_source",
         "X-Camera-Binding-Id": "camera_binding_id",
         "X-Source-Geometry-Id": "source_geometry_id",
         "X-Source-Generation-Id": "source_generation_id",
@@ -1154,6 +1155,12 @@ def _accept_frame_v2(handler, camera_id: str) -> None:
         return
     for header, field in required.items():
         meta[field] = headers.get(header)
+    # v2 正式来源须由受控 Helper 显式声明，且仍须通过下方会话/时钟核验；
+    # 不将缺失或兼容来源补成 Helper，重传也不得绕过来源检查。
+    if str(meta["frame_source"]).strip().lower() != "camera_helper":
+        handler._error(422, "camera_request_invalid",
+                       "v2 帧来源必须为 camera_helper")
+        return
     meta["timing_provenance"] = headers.get("X-Source-Timing-Provenance")
     data = handler._read_body(MAX_FRAME_BYTES)
     if data is None:
@@ -1288,6 +1295,7 @@ def _accept_frame_v2(handler, camera_id: str) -> None:
                 evidence_id = saved.get("evidence_id")
         channel.update({
             "frame": data, "seq": bridge_seq,
+            "source": "camera_helper",
             "v2_last_seq": seq,
             "v2_last_captured_ns": captured_monotonic_ns,
             "v2_generation": meta["source_generation_id"],

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import math
+import os
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -23,7 +24,7 @@ import numpy as np
 
 from drivers.camera import CameraDriver
 from drivers.camera_broker import (
-    SOURCE_TIMING_PROVENANCE, quality_diagnostics, quality_failure_diagnostics,
+    SOURCE_TIMING_PROVENANCE, frame_chain_identity, quality_diagnostics, quality_failure_diagnostics,
 )
 from adapters.vision.ocr import (
     AppleVisionOcrEngine, OcrEngineError, OcrResult, OcrWord, find_text_bbox, ocr_roi_bounds,
@@ -36,6 +37,73 @@ class ScreenRoiNotFound(RuntimeError):
     """No phone-shaped region can be verified in the current frame."""
 
     reason_code = "screen_roi_not_found"
+
+
+class _TextTargetAction:
+    """One admitted motion; a fresh independent OCR proof guards every boundary."""
+
+    def __init__(self, camera, ref, record):
+        self.camera = camera
+        self.ref = ref
+        self.record = {key: (value if key == "layout" else copy.deepcopy(value))
+                       for key, value in record.items()}
+        self.active = True
+        self.latest_ref = None
+        self.latest_layout = None
+        self.verified_at = None
+
+    def close(self):
+        self.active = False
+
+    def _check_context(self):
+        if not self.active:
+            raise ValueError("文字动作已结束，禁止复用已受理动作")
+        # Admission has already checked age.  This frozen intent is not a new
+        # location: only the independently issued latest_ref may guard contact.
+        self.camera._validate_text_record(self.ref, self.record, require_fresh=False)
+
+    async def current_frame(self):
+        self._check_context()
+        frame = await self.camera._selected_text_frame()
+        self._check_context()
+        return frame
+
+    async def verify(self, layout):
+        from runtime.calibration_gate import _fresh_source_seq
+
+        self._check_context()
+        if os.environ.get("ARMFLEET_RUNTIME_VISION_MODE", "live") == "calibrated":
+            # The admitted original location is the intent; Nano checks its effect.
+            return self._check_context
+        if self.latest_layout is not None:
+            previous = self.latest_layout.source
+            _fresh_source_seq(layout.source, previous["source_frame_seq"])
+            if (previous.get("source_capture_seq") is not None
+                    and (type(layout.source.get("source_capture_seq")) is not int
+                         or layout.source["source_capture_seq"] <= previous["source_capture_seq"])):
+                raise ValueError("文字动作采样序号未推进，禁止复用上次复核")
+        try:
+            observed, source = await self.camera._observe_text_record(self.record, layout)
+        except OcrEngineError as exc:
+            raise ValueError(f"动态文字目标无法唯一复核：{exc}") from exc
+        self._check_context()
+        fresh = self.camera._remember_text_location(
+            observed, self.record["query"], source, layout,
+            self.record["context"], self.record["bundle"])
+        self.latest_ref = fresh
+        self.latest_layout = layout
+        self.verified_at = time.monotonic()
+        self()
+        return self
+
+    def __call__(self):
+        self._check_context()
+        if self.latest_ref is None or self.verified_at is None:
+            raise ValueError("文字动作尚无独立新定位凭据，禁止动作")
+        self.camera._text_location_record(self.latest_ref)
+        if time.monotonic() - self.verified_at > 1.0:
+            raise ValueError("文字行接触前复核已过期")
+        self.camera._ensure_layout_current(self.latest_layout)
 
 
 class RealCameraDriver(CameraDriver):
@@ -110,70 +178,60 @@ class RealCameraDriver(CameraDriver):
         }
         return result
 
-    async def verify_text_target(self, ref, layout=None):
-        """Re-observe the original point, never return replacement coordinates."""
-        from drivers import calibration_bundle as cb
-        from runtime.calibration_gate import _fresh_source_seq
-
+    def _text_location_record(self, ref):
+        """Validate the immutable original credential before observing a new frame."""
         record = self._text_locations.get(ref.get("locationId"))
         if record is None:
             raise ValueError("动态文字目标缺少本摄像头的有效定位凭据，请重新定位")
+        self._validate_text_record(ref, record)
+        return record
+
+    def _validate_text_record(self, ref, record, *, require_fresh=True):
+        from drivers import calibration_bundle as cb
+        from runtime.calibration_gate import _fresh_source_seq
+
         original = record["result"]
 
-        def check_original():
-            if any(ref.get(key) != value for key, value in original.items()):
-                raise ValueError("动态文字定位结果被改写，禁止沿用原落点")
-            if ref.get("cameraPolygon") != original.get("cameraPolygon"):
-                raise ValueError("动态文字四角被改写，禁止添加未经定位的安全区")
-            if time.monotonic() - record["created"] > 2.0:
-                raise ValueError("原文字定位已过期，请重新定位，不能由新帧续鲜")
+        if any(ref.get(key) != value for key, value in original.items()):
+            raise ValueError("动态文字定位结果被改写，禁止沿用原落点")
+        for key in ("cameraPolygon", "localizationMode"):
+            if ref.get(key) != original.get(key):
+                raise ValueError("动态文字定位模式或四角被改写，禁止添加未经定位的权限")
+        if require_fresh and time.monotonic() - record["created"] > 2.0:
+            raise ValueError("原文字定位已过期，请重新定位，不能由新帧续鲜")
+        if require_fresh:
             _fresh_source_seq(record["source"], None)
-            if self._target_context() != record["context"]:
-                raise ValueError("文字定位后的设备绑定或粗框已变化")
-            if self.screen_device_id:
-                if cb.load_bundle(self.screen_device_id, self.data_root) != record["bundle"]:
-                    raise ValueError("文字定位后的校准已变化")
-            if record["layout"] is not None:
-                self._ensure_layout_current(record["layout"])
+        if self._target_context() != record["context"]:
+            raise ValueError("文字定位后的设备绑定或粗框已变化")
+        if self.screen_device_id:
+            if cb.load_bundle(self.screen_device_id, self.data_root) != record["bundle"]:
+                raise ValueError("文字定位后的校准已变化")
+        if record["layout"] is not None:
+            self._ensure_layout_current(record["layout"])
+        return record
+
+    async def current_text_frame(self, ref):
+        """Observe geometry only for an existing, unchanged screen-text proof."""
+        record = self._text_location_record(ref)
+        if record["result"].get("localizationMode") != "screen_text":
+            raise ValueError("文字几何观测仅接受原始 screen_text 定位凭据")
+        frame = await self._selected_text_frame()
+        self._text_location_record(ref)
+        return frame
+
+    async def verify_text_target(self, ref, layout=None):
+        """Re-observe the original point, never return replacement coordinates."""
+        from runtime.calibration_gate import _fresh_source_seq
+
+        record = self._text_location_record(ref)
+
+        def check_original():
+            self._text_location_record(ref)
 
         check_original()
-        if record["layout"] is not None:
-            if layout is None or layout.state != record["layout"].state:
-                raise ValueError("动态文字所在页面已变化")
-            _fresh_source_seq(layout.source, record["source"]["source_frame_seq"])
-            observed = await self._locate_layout_text(layout, **record["query"])
-            latest_source = layout.source
-        else:
-            if layout is not None:
-                raise ValueError("文字定位后已选模板发生变化")
-            observed = await self.locate_text(**record["query"])
-            fresh = self._text_locations.get(observed.get("locationId"))
-            if fresh is None:
-                raise ValueError("原文字目标已消失或不能唯一确认")
-            latest_source = fresh["source"]
-            _fresh_source_seq(latest_source, record["source"]["source_frame_seq"])
-        for key in ("device_id", "camera_id", "device_unique_id", "binding_revision",
-                    "source_generation_id", "source_clock_id", "broker_generation_id",
-                    "camera_binding_id", "source_geometry_id", "width", "height"):
-            if latest_source.get(key) != record["source"].get(key):
-                raise ValueError("文字定位的画面来源或几何已变化")
-        if (not observed.get("found") or observed.get("text") != original.get("text")
-                or not np.allclose(observed.get("bbox"), original.get("bbox"), rtol=0, atol=2.0)):
-            raise ValueError("原文字行已移动、消失或不能唯一确认，禁止点击旧落点")
-        if original.get("cameraPolygon") is not None:
-            try:
-                previous = np.asarray(original["cameraPolygon"], dtype=float)
-                current = np.asarray(observed.get("cameraPolygon"), dtype=float)
-                if (previous.shape != (4, 2) or current.shape != (4, 2)
-                        or not np.isfinite(previous).all() or not np.isfinite(current).all()):
-                    raise ValueError("文字四角形状无效")
-                homography = record["bundle"]["camera"]["cameraToScreen"]["homography"]
-                previous = np.asarray([cb.apply_homography(homography, *p) for p in previous])
-                current = np.asarray([cb.apply_homography(homography, *p) for p in current])
-                if float(np.max(np.linalg.norm(current - previous, axis=1))) > 2.0:
-                    raise ValueError("文字四角已移动")
-            except (ValueError, TypeError, KeyError, OverflowError) as exc:
-                raise ValueError("原文字四角已变化或无法复核，禁止点击旧落点") from exc
+        if os.environ.get("ARMFLEET_RUNTIME_VISION_MODE", "live") == "calibrated":
+            return check_original
+        _, latest_source = await self._observe_text_record(record, layout)
         verified_at = time.monotonic()
 
         def final_check():
@@ -187,6 +245,64 @@ class RealCameraDriver(CameraDriver):
         final_check()
         return final_check
 
+    def begin_text_action(self, ref):
+        """Admit one click from a fresh proof; later observations issue new proofs."""
+        record = self._text_location_record(ref)
+        if record["result"].get("localizationMode") != "screen_text":
+            raise ValueError("文字动作仅接受原始 screen_text 定位凭据")
+        return _TextTargetAction(self, ref, record)
+
+    async def _observe_text_record(self, record, layout):
+        from runtime.calibration_gate import _fresh_source_seq
+
+        if record["layout"] is not None:
+            original_mode = getattr(record["layout"], "localization_mode", "layout")
+            if (layout is None or getattr(layout, "localization_mode", "layout") != original_mode
+                    or (original_mode == "layout" and layout.state != record["layout"].state)):
+                raise ValueError("动态文字所在页面已变化")
+            _fresh_source_seq(layout.source, record["source"]["source_frame_seq"])
+            observed = await self._locate_layout_text(layout, **record["query"])
+            latest_source = layout.source
+        else:
+            if layout is not None:
+                raise ValueError("文字定位后已选模板发生变化")
+            observed = await self.locate_text(**record["query"])
+            fresh = self._text_locations.get(observed.get("locationId"))
+            if fresh is None:
+                raise ValueError("原文字目标已消失或不能唯一确认")
+            latest_source = fresh["source"]
+            _fresh_source_seq(latest_source, record["source"]["source_frame_seq"])
+        self._check_text_observation(record, observed, latest_source)
+        return observed, latest_source
+
+    def _check_text_observation(self, record, observed, latest_source):
+        from runtime.calibration_gate import _fresh_source_seq
+
+        original = record["result"]
+        _fresh_source_seq(latest_source, record["source"]["source_frame_seq"])
+        previous_capture = record["source"].get("source_capture_seq")
+        if (previous_capture is not None
+                and (type(latest_source.get("source_capture_seq")) is not int
+                     or latest_source["source_capture_seq"] <= previous_capture)):
+            raise ValueError("文字定位采样序号未推进，禁止复用旧帧")
+        for key in ("device_id", "camera_id", "device_unique_id", "binding_revision",
+                    "source_generation_id", "source_clock_id", "broker_generation_id",
+                    "camera_binding_id", "source_geometry_id", "width", "height"):
+            if latest_source.get(key) != record["source"].get(key):
+                raise ValueError("文字定位的画面来源或几何已变化")
+        if not observed.get("found") or observed.get("text") != original.get("text"):
+            raise ValueError("原文字行已移动、消失或不能唯一确认，禁止点击旧落点")
+        if original.get("cameraPolygon") is not None:
+            try:
+                from drivers.click_points import verify_ocr_region
+
+                verify_ocr_region(original, observed.get("cameraPolygon"), record["bundle"])
+            except (ValueError, TypeError, KeyError, OverflowError, np.linalg.LinAlgError) as exc:
+                raise ValueError(f"原文字四角已变化或无法复核，禁止点击旧落点：{exc}") from exc
+        elif not np.allclose(observed.get("bbox"), original.get("bbox"), rtol=0, atol=2.0):
+            # Legacy locations without true corners cannot establish an area.
+            raise ValueError("原文字行已移动、消失或不能唯一确认，禁止点击旧落点")
+
     def attach_layout_provider(self, provider) -> None:
         """Runtime owns layout storage; the camera only consumes its resolver."""
         self._layout_provider = provider
@@ -199,22 +315,38 @@ class RealCameraDriver(CameraDriver):
         """
         self._region_context_provider = provider
 
-    async def _selected_layout_frame(self, frame=None):
+    async def _selected_layout_frame(self, frame=None, *, observed_state=None):
+        return await self._selected_frame(frame, observed_state=observed_state)
+
+    async def _selected_text_frame(self, frame=None):
+        return await self._selected_frame(frame, screen_text=True)
+
+    async def _selected_frame(self, frame=None, *, screen_text=False, observed_state=None):
         if self._layout_provider is None or not self.screen_device_id:
+            if screen_text:
+                raise ValueError("screen_text 需要已选适配和设备屏幕校准")
             return None
         selected = await asyncio.to_thread(self._layout_provider, self.screen_device_id)
         if selected is None:
+            if screen_text:
+                raise ValueError("screen_text 需要已选适配，禁止回退旧坐标")
             return None
         from drivers import screen_proof
         fingerprint, bundle = screen_proof.binding(
             self.screen_device_id, self.data_root, allow_motion_ready=True)
         if frame is None:
             frame = await self._capture_for_operation()
-        aligned, pose = self._aligned_screen_frame(
-            frame, bundle, return_pose=True, search_region=selected.region)
         raw = screen_proof.decode(frame.get("image") or frame.get("image_bytes"))
+        pose = self._aligned_screen_frame(
+            frame, bundle, pose_only=True, decoded_image=raw, search_region=selected.region)
+        if screen_text:
+            return await asyncio.to_thread(selected.prepare_text, raw, frame, bundle, pose, fingerprint)
+        options = {"ocr_engine": self.ocr_engine}
+        if (observed_state is not None
+                and os.environ.get("ARMFLEET_RUNTIME_VISION_MODE", "live") == "calibrated"):
+            options["observed_state"] = observed_state
         return await asyncio.to_thread(selected.prepare, raw, frame, bundle, pose, fingerprint,
-                                       ocr_engine=self.ocr_engine)
+                                       **options)
 
     def _ensure_layout_current(self, layout):
         from drivers import screen_proof
@@ -572,7 +704,7 @@ class RealCameraDriver(CameraDriver):
 
     def _aligned_screen_frame(self, frame: dict, bundle: dict,
                               *, profile: dict | None = None, return_pose=False,
-                              search_region=None):
+                              search_region=None, pose_only=False, decoded_image=None):
         """Accept only a fresh, bound phone observation in calibrated coordinates."""
         from drivers import screen_pose, screen_proof
         from runtime.calibration_gate import _fresh_source_seq, _quad_of
@@ -593,10 +725,19 @@ class RealCameraDriver(CameraDriver):
             raise ValueError("手机画面冻结，等待推流恢复")
         image_bytes = frame.get("image") or frame.get("image_bytes")
         saved = bundle["screen"]["edgeModel"]["corners"]
-        if search_region is not None:
+        decoded = decoded_image if decoded_image is not None else screen_proof.decode(image_bytes)
+        if os.environ.get("ARMFLEET_RUNTIME_VISION_MODE", "live") == "calibrated":
+            if decoded.shape[:2] != (frame["height"], frame["width"]):
+                raise ValueError("手机画面尺寸与校准档案不一致")
+            # Identity is an explicit fixed-mount assumption, not a live measurement.
+            pose = {"matrix": np.eye(3).tolist(),
+                    "corners": screen_pose.validate_corners(saved).tolist(),
+                    "movementPx": 0.0, "fitErrorPx": 0.0,
+                    "geometry_source": "saved_calibration"}
+        elif search_region is not None:
             from runtime.layout_geometry import LayoutGeometryError, locate_in_region
             try:
-                pose = locate_in_region(screen_proof.decode(image_bytes), search_region, saved)
+                pose = locate_in_region(decoded, search_region, saved)
             except LayoutGeometryError as exc:
                 raise ValueError(str(exc)) from exc
         else:
@@ -614,7 +755,9 @@ class RealCameraDriver(CameraDriver):
                 if any(cv2.pointPolygonTest(polygon, (float(x), float(y)), False) < 0
                        for x in (x1, x2) for y in (y1, y2)):
                     raise ValueError("页面登记区域超出手机屏幕，请重新登记")
-        aligned = screen_pose.align_screen(screen_proof.decode(image_bytes), saved, pose)
+        if pose_only:
+            return pose
+        aligned = screen_pose.align_screen(decoded, saved, pose)
         return (aligned, pose) if return_pose else aligned
 
     @classmethod
@@ -813,8 +956,21 @@ class RealCameraDriver(CameraDriver):
 
     async def locate_text(self, text: str, *, region: str = "messages",
                           min_confidence: float = 0.75, exact: bool = False,
-                          roi: dict | None = None) -> dict:
+                          roi: dict | None = None, localization_mode: str = "layout",
+                          previous_location_id: str | None = None) -> dict:
         """定位当前帧文字；精确模式未命中仍返回帧信息，异常不猜坐标。"""
+        if localization_mode not in {"layout", "screen_text"}:
+            raise ValueError("未知的文字定位模式")
+        if localization_mode == "screen_text" and exact is not True:
+            raise ValueError("screen_text 只允许 exact=True 的精确文字定位")
+        previous = None
+        if previous_location_id is not None:
+            if localization_mode != "screen_text" or exact is not True:
+                raise ValueError("文字范围连续复核仅接受 screen_text 精确定位")
+            previous = self._text_locations.get(previous_location_id)
+            if previous is None:
+                raise ValueError("前次文字定位凭据不存在，禁止推断连续范围")
+            self._validate_text_record(previous["result"], previous, require_fresh=False)
         context = self._target_context()
         bundle = None
         if self.screen_device_id:
@@ -823,9 +979,19 @@ class RealCameraDriver(CameraDriver):
         frame = await self._capture_for_operation()
         query = {"text": text, "region": region, "min_confidence": min_confidence,
                  "exact": exact, "roi": copy.deepcopy(roi)}
-        layout = await self._selected_layout_frame(frame)
+        if localization_mode == "screen_text":
+            query["localization_mode"] = localization_mode
+            layout = await self._selected_text_frame(frame)
+        else:
+            layout = await self._selected_layout_frame(frame)
         if layout is not None:
+            if previous is not None and query != previous["query"]:
+                raise ValueError("前后文字定位查询或允许范围不同，禁止连续复核")
             located = await self._locate_layout_text(layout, **query)
+            if previous is not None:
+                self._validate_text_record(previous["result"], previous, require_fresh=False)
+                self._check_text_observation(previous, located, frame)
+                located["previousLocationId"] = previous_location_id
             return self._remember_text_location(located, query, frame, layout, context, bundle)
         aligned = False
         if self.screen_device_id:
@@ -876,16 +1042,21 @@ class RealCameraDriver(CameraDriver):
         return self._remember_text_location(
             {"found": True, **located, **metadata}, query, frame, None, context, bundle)
 
-    async def _locate_layout_text(self, layout, text, *, region, min_confidence, exact, roi):
+    async def _locate_layout_text(self, layout, text, *, region, min_confidence, exact, roi,
+                                  localization_mode="layout"):
         from drivers import screen_proof
 
         frame = layout.source
-        if region == "account" and layout.state != "wechat_list":
+        screen_text = localization_mode == "screen_text"
+        if (getattr(layout, "localization_mode", "layout") != localization_mode
+                or (screen_text and exact is not True)):
+            raise ValueError("文字定位模式与当次观测不一致")
+        if not screen_text and region == "account" and layout.state != "wechat_list":
             raise OcrEngineError("当前不是已确认的联系人列表", reason="ocr_roi_invalid")
         roi_bounds = (ocr_roi_bounds(roi, frame_width=frame["width"],
                                     frame_height=frame["height"]) if roi is not None else None)
         height, width = layout.image.shape[:2]
-        if region == "full":
+        if screen_text or region == "full":
             left, top, right, bottom = 0, 0, width, height
         else:
             purpose = {"messages": "content", "account": "content",
@@ -921,6 +1092,8 @@ class RealCameraDriver(CameraDriver):
             "frameSeq": frame.get("source_frame_seq"), "frameSha256": frame.get("sha256"),
             "coordinateVersion": "calibrated_camera.v1", **layout.selected.references,
         }
+        if screen_text:
+            metadata["localizationMode"] = "screen_text"
         if located is not None:
             x1, y1, x2, y2 = located["bbox"]
             box = layout.camera_rect(x1, y1, x2 - x1, y2 - y1)
@@ -941,12 +1114,13 @@ class RealCameraDriver(CameraDriver):
             raise OcrEngineError(f"未找到文字：{text}", reason="ocr_text_not_found")
         return {"found": True, **located, **metadata}
 
-    async def observe_regions(self, *, include_image=False) -> dict:
+    async def observe_regions(self, *, include_image=False, layout_state=None) -> dict:
         """Observe one frame using persisted device regions; never infer delivery."""
         from drivers import screen_proof
         if not self.screen_device_id:
             raise ValueError("当前摄像头没有设备级页面档案")
-        layout = await self._selected_layout_frame()
+        layout = (await self._selected_layout_frame(observed_state=layout_state)
+                  if layout_state is not None else await self._selected_layout_frame())
         if layout is not None:
             profile = layout.evidence_profile()
             frame, image, ui = layout.source, layout.image, layout.ui
@@ -962,7 +1136,10 @@ class RealCameraDriver(CameraDriver):
         def recognize(patch, region):
             return screen_proof.recognize_patch(self.ocr_engine, patch, region)
 
-        conversation = layout is None or layout.state != "wechat_list"
+        from runtime.layout_pages import is_text_page
+
+        text_page = layout is not None and is_text_page(layout.selected.pages[layout.state])
+        conversation = layout is None or (layout.state != "wechat_list" and not text_page)
         if conversation:
             title = await asyncio.to_thread(
                 recognize, screen_proof.crop(image, profile["regions"]["title"]), "conversation")
@@ -973,6 +1150,34 @@ class RealCameraDriver(CameraDriver):
         else:
             title = {"text": "", "confidence": 0.0, "words": [], "truncated": False}
             input_ocr = {"text": "", "confidence": 0.0}
+        text_regions = {}
+        if text_page:
+            # All crops and geometries belong to the selected, already gated
+            # frame. Business plugins interpret these generic region purposes.
+            for purpose, rect in profile["regions"].items():
+                observed = await asyncio.to_thread(
+                    recognize, screen_proof.crop(image, rect),
+                    "input" if purpose == "input" else "messages")
+                x, y = rect["x1"], rect["y1"]
+                width, height = rect["x2"] - x, rect["y2"] - y
+                mapped = layout.camera_rect(x, y, width, height)
+                words = []
+                for word in observed.get("words", []):
+                    root_word = {**word, "x": x + word["x"], "y": y + word["y"]}
+                    camera_word = layout.camera_rect(
+                        root_word["x"], root_word["y"], word["width"], word["height"])
+                    root_word["camera_bbox"] = [camera_word["x"], camera_word["y"],
+                        camera_word["x"] + camera_word["width"],
+                        camera_word["y"] + camera_word["height"]]
+                    words.append(root_word)
+                text_regions[purpose] = {
+                    **observed, "words": words,
+                    "screen_bbox": [x, y, x + width, y + height],
+                    "bbox": [mapped["x"], mapped["y"],
+                             mapped["x"] + mapped["width"], mapped["y"] + mapped["height"]],
+                }
+            input_ocr = text_regions["input"]
+            title = text_regions.get("title", title)
         # 业务 列表导航需要整帧文字框来识别“应用/WeChat”标题和底部四个导航
         # 标签。标题区域/内容色块只能证明会话页内容，不能推导主页列表 ROI。
         navigation_ocr = await asyncio.to_thread(recognize, image, "messages")
@@ -1042,6 +1247,11 @@ class RealCameraDriver(CameraDriver):
             })
             result["click_target_frame_size"] = {
                 "width": int(layout.image.shape[1]), "height": int(layout.image.shape[0])}
+        if text_page:
+            result.update(text_regions=text_regions,
+                observation_kind="text_regions.v1",
+                text_region_frame_size={"width": int(image.shape[1]), "height": int(image.shape[0])},
+                text_region_coordinate_version="calibrated_screen.v1")
         return result
 
     async def _capture_for_operation(self) -> dict:
@@ -1097,6 +1307,7 @@ class _BridgeJpeg:
     source_capture_uncertainty_ms: float | None
     source_timing_provenance: str | None
     frame_source: str | None
+    sequence_generation: str | None
 
 
 class HttpFrameSource:
@@ -1133,6 +1344,8 @@ class HttpFrameSource:
         self.allow_legacy = bool(allow_legacy)
         self.max_age_seconds = float(max_age_seconds)
         self._last_seq: int | None = None
+        self._last_seq_generation: str | None = None
+        self._retired_seq_generations: set[str] = set()
         self._last_seq_at: float | None = None
         self.stream_alive: bool = True
         # seq 推进的活性窗口：静态场景下取流桥可能连续数秒无新帧推送
@@ -1274,16 +1487,34 @@ class HttpFrameSource:
                 age = (datetime.now(timezone.utc) - received_time.astimezone(timezone.utc)).total_seconds()
                 if not proven_sample_time and age > self.max_age_seconds:
                     raise RuntimeError(f"取流桥返回过期帧：帧年龄 {age:.3f}s")
-            if seq is not None and self._last_seq is not None and seq < self._last_seq:
+            camera_binding_id = (headers.get("X-Camera-Binding-Id") or "").strip() or None
+            source_clock_id = (headers.get("X-Source-Clock-Id") or "").strip() or None
+            frame_source = (headers.get("X-Frame-Source") or "").strip().lower() or None
+            # 桥服务重启可重置 channel seq；只有完整正式 v2 采样身份的新代际
+            # 才能重建序号基线。缺失证明/兼容来源不能借改 generation 绕过倒退门。
+            sample_identity = frame_chain_identity({
+                "source_generation_id": source_generation,
+                "source_capture_seq": source_capture_seq,
+                "source_captured_monotonic_ns": captured_monotonic_ns,
+                "source_capture_uncertainty_ms": capture_uncertainty_ms,
+                "source_timing_provenance": source_provenance,
+            })
+            sequence_generation = source_generation if (
+                not legacy and frame_source == "camera_helper" and sample_identity
+                and camera_binding_id and source_geometry_id and source_clock_id) else None
+            if source_generation in self._retired_seq_generations:
+                raise RuntimeError(f"取流桥返回旧采集代际：{source_generation}")
+            generation_changed = bool(
+                sequence_generation and self._last_seq_generation
+                and sequence_generation != self._last_seq_generation)
+            if seq is not None and self._last_seq is not None \
+                    and seq < self._last_seq and not generation_changed:
                 raise RuntimeError(f"取流桥帧序号倒退：{self._last_seq} -> {seq}")
-            if seq is not None and seq != self._last_seq:
+            if seq is not None and (seq != self._last_seq or generation_changed):
                 self._last_seq_at = time.monotonic()
             self.stream_alive = bool(
                 seq is not None and self._last_seq_at is not None
                 and time.monotonic() - self._last_seq_at <= self.seq_staleness_seconds)
-            camera_binding_id = (headers.get("X-Camera-Binding-Id") or "").strip() or None
-            source_clock_id = (headers.get("X-Source-Clock-Id") or "").strip() or None
-            frame_source = (headers.get("X-Frame-Source") or "").strip().lower() or None
         return _BridgeJpeg(
             data=data, seq=seq, camera_id=camera_id, device_id=device_id,
             device_unique_id=unique_id, legacy=legacy,
@@ -1299,6 +1530,7 @@ class HttpFrameSource:
             source_capture_uncertainty_ms=capture_uncertainty_ms,
             source_timing_provenance=source_provenance,
             frame_source=frame_source,
+            sequence_generation=sequence_generation,
         )
 
     def fetch_bytes(self) -> tuple[bytes, int | None]:
@@ -1310,7 +1542,20 @@ class HttpFrameSource:
         图像解码与分辨率核对）。
         """
         fetched = self._fetch_validated()
+        self._record_source_timing(fetched)
         return fetched.data, fetched.seq
+
+    def _record_source_timing(self, fetched: _BridgeJpeg) -> None:
+        """暴露本次已校验采样证明，不提前提交解码后的序号/分辨率基线。"""
+        # R2-08：冻结帧包 v2 采样时序逐层透传（缺失保持 None，不补默认值）
+        self.last_camera_binding_id = fetched.camera_binding_id
+        self.last_source_geometry_id = fetched.source_geometry_id
+        self.last_source_generation_id = fetched.source_generation_id
+        self.last_source_capture_seq = fetched.source_capture_seq
+        self.last_source_clock_id = fetched.source_clock_id
+        self.last_source_captured_monotonic_ns = fetched.source_captured_monotonic_ns
+        self.last_source_capture_uncertainty_ms = fetched.source_capture_uncertainty_ms
+        self.last_source_timing_provenance = fetched.source_timing_provenance
 
     def __call__(self) -> np.ndarray:
         fetched = self._fetch_validated()
@@ -1331,6 +1576,10 @@ class HttpFrameSource:
                 f"实际 {resolution[0]}x{resolution[1]}"
             )
         self.resolution_changed = self.last_resolution is not None and resolution != self.last_resolution
+        if fetched.sequence_generation and self._last_seq_generation \
+                and fetched.sequence_generation != self._last_seq_generation:
+            self._retired_seq_generations.add(self._last_seq_generation)
+        self._last_seq_generation = fetched.sequence_generation
         self._last_seq = fetched.seq
         self.last_camera_id = fetched.camera_id
         self.last_device_id = fetched.device_id
@@ -1340,15 +1589,7 @@ class HttpFrameSource:
         self.last_captured_at = fetched.captured_at
         self.last_received_at = fetched.received_at
         self.last_resolution = resolution
-        # R2-08：冻结帧包 v2 采样时序逐层透传（缺失保持 None，不补默认值）
-        self.last_camera_binding_id = fetched.camera_binding_id
-        self.last_source_geometry_id = fetched.source_geometry_id
-        self.last_source_generation_id = fetched.source_generation_id
-        self.last_source_capture_seq = fetched.source_capture_seq
-        self.last_source_clock_id = fetched.source_clock_id
-        self.last_source_captured_monotonic_ns = fetched.source_captured_monotonic_ns
-        self.last_source_capture_uncertainty_ms = fetched.source_capture_uncertainty_ms
-        self.last_source_timing_provenance = fetched.source_timing_provenance
+        self._record_source_timing(fetched)
         # 帧来源标记（camera_helper 正式采集 / chrome_compat 兼容降级桥 / legacy 旧单路）
         self.last_frame_source = fetched.frame_source
         self.legacy_mode = fetched.legacy
@@ -1364,6 +1605,7 @@ class CameraMotionVerifier:
     """
 
     measurement_kind = "frame_change"
+    observation_only = True
 
     def __init__(
         self,

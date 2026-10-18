@@ -70,7 +70,7 @@
       "properties": {"id": {"$ref": "#/definitions/id"}, "version": {"$ref": "#/definitions/positive"}, "sha256": {"$ref": "#/definitions/sha"}}
     },
     "nullable_ref": {"anyOf": [{"$ref": "#/definitions/ref"}, {"type": "null"}]},
-    "page_state": {"type": "string", "enum": ["wechat_list", "chat_ime_hidden", "chat_ime_empty", "chat_ime_text"]},
+    "page_state": {"type": "string", "pattern": "^(wechat_list|chat_ime_hidden|chat_ime_empty|chat_ime_text|app_[a-z][a-z0-9_]{0,47})$"},
     "keyboard_geometry_mode": {"type": "string", "enum": ["legacy_registered", "live_ime_v1"]},
     "reason_codes": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/definitions/id"}},
     "asset": {

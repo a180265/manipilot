@@ -35,11 +35,12 @@ BASE_CAPABILITIES: list[dict] = [
     {
         "capability_id": "camera.observe_regions",
         "name_display": "读取已登记区域视觉证据",
-        "version": "1.0.0", "device_type": "camera", "risk_level": "低",
+        "version": "1.1.0", "device_type": "camera", "risk_level": "低",
         "data_scope": "当前设备页面区域文字、色块、帧号和截图证据；不解释业务结果",
         "interruptible": False, "cleanup_action": "无需清理",
         "test_fixture": "fake-camera", "source": "platform",
-        "input_schema": {"type": "object", "additionalProperties": False},
+        "input_schema": {"type": "object", "additionalProperties": False,
+                         "properties": {"layout_state": {"type": "string", "minLength": 1, "maxLength": 64}}},
         "output_schema": {"type": "object"},
     },
     {
@@ -67,6 +68,15 @@ BASE_CAPABILITIES: list[dict] = [
         "cleanup_action": "停止运动",
         "test_fixture": "fake-arm",
         "source": "platform",
+        "input_schema": {"type": "object", "additionalProperties": False},
+        "output_schema": {"type": "object"},
+    },
+    {
+        "capability_id": "arm.park",
+        "name_display": "机械臂回到已确认安全停车位",
+        "version": "1.0.0", "device_type": "arm", "risk_level": "高",
+        "data_scope": "本设备校准安全停车位", "interruptible": True,
+        "cleanup_action": "停止运动", "test_fixture": "fake-arm", "source": "platform",
         "input_schema": {"type": "object", "additionalProperties": False},
         "output_schema": {"type": "object"},
     },
@@ -281,7 +291,7 @@ BASE_CAPABILITIES: list[dict] = [
     {
         "capability_id": "camera.locate_text",
         "name_display": "摄像头 OCR 定位文字",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "device_type": "camera",
         "risk_level": "低",
         "data_scope": "界面文字及摄像头像素框",
@@ -295,6 +305,9 @@ BASE_CAPABILITIES: list[dict] = [
                 "text": {"type": "string"}, "region": {"type": "string"},
                 "min_confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 "exact": {"type": "boolean", "default": False},
+                "localization_mode": {"type": "string", "enum": ["layout", "screen_text"],
+                                      "default": "layout"},
+                "previous_location_id": {"type": "string", "minLength": 1},
                 "roi": {
                     "type": "object",
                     "required": ["x1", "y1", "x2", "y2", "frameW", "frameH"],
@@ -309,6 +322,16 @@ BASE_CAPABILITIES: list[dict] = [
                     "additionalProperties": False,
                 },
             },
+            "allOf": [{
+                "if": {"properties": {"localization_mode": {"const": "screen_text"}},
+                       "required": ["localization_mode"]},
+                "then": {"properties": {"exact": {"const": True}}, "required": ["exact"]},
+            }, {
+                "if": {"required": ["previous_location_id"]},
+                "then": {"properties": {"exact": {"const": True},
+                                        "localization_mode": {"const": "screen_text"}},
+                         "required": ["exact", "localization_mode"]},
+            }],
         },
         "output_schema": {"type": "object"},
     },
@@ -406,6 +429,7 @@ DEFAULT_DEVICE_CAPABILITIES: list[str] = [
     "camera.observe_regions",
     "device.gesture_profile",
     "arm.home",
+    "arm.park",
     "arm.move_preset",
     "arm.move_target",
     "arm.click",
@@ -439,7 +463,9 @@ class CapabilityRegistry:
             existing = self._store.get_capability(capability["capability_id"])
             platform_upgrade = (
                 existing is not None and existing.get("source") == "platform"
-                and capability["capability_id"] in {"arm.click", "arm.double_tap", "arm.swipe"}
+                and capability["capability_id"] in {
+                    "arm.click", "arm.double_tap", "arm.swipe", "camera.locate_text",
+                    "camera.observe_regions"}
                 and existing.get("version") == "1.0.0" and capability["version"] == "1.1.0")
             if existing is None or platform_upgrade:
                 self._store.save_capability(dict(capability))

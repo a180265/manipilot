@@ -192,7 +192,7 @@
         "expected_revision": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
         "keyboard_geometry_mode": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/keyboard_geometry_mode"},
         "inherit_session_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_uuid"},
-        "inherit_states": {"type": "array", "maxItems": 4, "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/page_state"}}
+        "inherit_states": {"type": "array", "maxItems": 12, "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/page_state"}}
       }
     },
     "session_created": {
@@ -200,7 +200,7 @@
       "properties": {
         "operation_id": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uuid"},
         "session": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
-        "required_states": {"type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/page_state"}},
+        "required_states": {"type": "array", "minItems": 4, "maxItems": 12, "uniqueItems": true, "items": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/page_state"}},
         "replayed": {"type": "boolean"}
       }
     },
@@ -218,7 +218,7 @@
       "properties": {
         "session": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/session"},
         "evaluated_at": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/time"},
-        "page_status": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "#/definitions/page_projection"}}
+        "page_status": {"type": "array", "minItems": 4, "maxItems": 12, "items": {"$ref": "#/definitions/page_projection"}}
       }
     },
     "session_page_write": {
@@ -291,7 +291,7 @@
         "revision": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/uint"},
         "selected_ref": {"$ref": "urn:wx:design:layout-reuse:common#/definitions/nullable_ref"},
         "status": {"enum": ["unregistered", "draft", "verified", "needs_review", "invalid"]},
-        "page_checks": {"type": "array", "maxItems": 4, "items": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/page_check"}},
+        "page_checks": {"type": "array", "maxItems": 12, "items": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/page_check"}},
         "blocking_reasons": {"$ref": "urn:wx:design:layout-reuse:layout#/definitions/reasons"},
         "execution_blocked": {"type": "boolean"},
         "execution_blocking_reasons": {"type": "array", "uniqueItems": true, "maxItems": 6, "items": {"enum": ["calibration_unavailable", "calibration_legacy_v2", "pose_unavailable", "source_unavailable", "layout_unverified", "device_offline"]}}

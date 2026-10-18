@@ -30,10 +30,12 @@ from runtime.layout_state import (
     state_key,
 )
 from runtime.layout_template import LayoutTemplateStore
+from runtime.layout_pages import (LEGACY_STATES, MAX_PAGES, page_states,
+                                  valid_page_state, validate_page_extension)
 from runtime.util import iso, parse_iso, utc_now
 
 DRAFT_CONTRACT = "ui-layout-edit.v1"
-PAGE_STATES = ("wechat_list", "chat_ime_hidden", "chat_ime_empty", "chat_ime_text")
+PAGE_STATES = LEGACY_STATES
 
 # §5 最低项（missing_items 闭集）
 MINIMUM_ITEMS = {
@@ -72,7 +74,7 @@ def _now(clock) -> datetime:
 
 def _missing_items(state: str) -> list[dict]:
     return [{"page_state": state, "item_kind": kind, "item_id": item}
-            for kind, item in MINIMUM_ITEMS[state]]
+            for kind, item in MINIMUM_ITEMS.get(state, ())]
 
 
 class LayoutDraftService:
@@ -144,7 +146,33 @@ class LayoutDraftService:
         if draft.get("principal_id") != principal:
             raise LayoutDraftError("layout_permission_denied",
                                    "草稿属于其他身份", 403)
+        # Earlier base-template drafts persisted template assets directly.  Read
+        # them as draft records without changing revision or inheriting checks.
+        if draft.get("base_template_ref") is not None:
+            draft["assets"] = self._draft_asset_records(
+                draft.get("assets") or [], draft_id,
+                draft["principal_id"], draft["created_at"])
         return draft
+
+    def _draft_asset_records(self, assets: list[dict], owner_id: str,
+                             principal: str, reviewed_at: str) -> list[dict]:
+        from runtime.layout_ops import sha256_bytes
+        records = []
+        for entry in assets:
+            if "asset" in entry:
+                records.append(entry)
+                continue
+            data = self._templates.get_asset(owner_id, entry["id"])
+            if data is None or sha256_bytes(data) != entry["sha256"]:
+                raise LayoutDraftError(
+                    "layout_archive_invalid",
+                    f"基础模板资产 {entry['id']} 原字节缺失或摘要不符", 503)
+            records.append({
+                "asset": dict(entry), "byte_size": len(data),
+                "privacy_reviewed_by": principal,
+                "privacy_reviewed_at": reviewed_at,
+                "source_evidence_ids": []})
+        return records
 
     # ================= 创建 =================
     def create(self, request: dict, principal: str) -> dict:
@@ -190,6 +218,7 @@ class LayoutDraftService:
                   "missing_items": _missing_items(state)}
                  for state in PAGE_STATES]
         assets: list[dict] = []
+        now = _now(self._clock)
         if base_ref is not None:
             base = self._templates.get_template(str(base_ref["id"]),
                                                 int(base_ref["version"]))
@@ -200,14 +229,12 @@ class LayoutDraftService:
             compatibility = dict(base.get("compatibility") or compatibility)
             descriptor = dict(base.get("reference_screen_descriptor") or {}) \
                 or None
-            base_pages = base.get("pages")
-            base_list = base_pages if isinstance(base_pages, list) else []
             pages = [{"state": state, "definition": None, "page_check": None,
                       "source_evidence_ids": [], "updated_at": None,
                       "missing_items": _missing_items(state)}
-                     for state in PAGE_STATES]
-            assets = list(base.get("assets") or [])
-        now = _now(self._clock)
+                     for state in page_states(base)]
+            assets = self._draft_asset_records(
+                base.get("assets") or [], str(base_ref["id"]), principal, iso(now))
         draft_id = str(uuid.uuid4())
         draft = {
             "draft_id": draft_id,
@@ -391,10 +418,8 @@ class LayoutDraftService:
     # ================= 单页完整替换 =================
     def write_page(self, draft_id: str, state: str, request: dict,
                    principal: str) -> dict:
-        if state not in PAGE_STATES:
-            raise LayoutDraftError(
-                "layout_request_invalid",
-                f"page_state 必须属于 {list(PAGE_STATES)} 固定顺序四态")
+        if not valid_page_state(state):
+            raise LayoutDraftError("layout_request_invalid", "页面状态无效")
         client_request_id = request["client_request_id"]
         replay = self._replay(client_request_id, self._draft_device(draft_id),
                               request)
@@ -407,6 +432,10 @@ class LayoutDraftService:
             raise LayoutDraftError(
                 "layout_request_invalid",
                 "page_definition.state 必须等于路径 state（单页完整替换）")
+        try:
+            validate_page_extension(definition)
+        except ValueError as exc:
+            raise LayoutDraftError("layout_request_invalid", str(exc)) from exc
         with self._state.transaction():
             draft = self._load(draft_id, principal)
             if int(draft["revision"]) != int(request["expected_revision"]):
@@ -414,6 +443,12 @@ class LayoutDraftService:
                     "layout_revision_conflict",
                     f"草稿修订冲突（当前 {draft['revision']}，期望 "
                     f"{request['expected_revision']}）", 409)
+            if not any(page["state"] == state for page in draft["pages"]):
+                if len(draft["pages"]) >= MAX_PAGES:
+                    raise LayoutDraftError("layout_request_invalid", "扩展页面超过上限")
+                draft["pages"].append({"state": state, "definition": None,
+                    "page_check": None, "source_evidence_ids": [],
+                    "updated_at": None, "missing_items": _missing_items(state)})
             check, accepted_at = self._verify_page_evidence(
                 draft, state, evidence_ids, definition)
             for page in draft["pages"]:
