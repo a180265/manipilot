@@ -1310,7 +1310,7 @@ class DaemonArmDriver(ArmDriver):
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise DriverError("driver_limit_exceeded", str(exc)) from exc
         z_profile = calibration.get("z") or {}
-        dwell_ms = entry.get("tapDwellMs", z_profile.get("tapDwellMs", 0))
+        dwell_ms = target.get("tapDwellMs", entry.get("tapDwellMs", z_profile.get("tapDwellMs", 0)))
         if dwell_ms is None:
             dwell_ms = 0
         dwell_ms = _finite(dwell_ms, "点击停留毫秒")

@@ -1503,6 +1503,53 @@ def test_tap_dwell_is_finite_bounded_and_forwarded(daemon_and_driver_ui):
     assert "TAP 3.000 F1500 P2.5" in daemon.commands
 
 
+@pytest.mark.parametrize("dynamic", [False, True])
+@pytest.mark.parametrize("dwell_ms,expected", [(250, " P0.25"), (0, "")])
+def test_click_dwell_override_reaches_motion_for_fixed_and_camera_targets(
+        daemon_and_driver_ui, dynamic, dwell_ms, expected):
+    from drivers import calibration_bundle as cb
+    from unittest.mock import AsyncMock
+
+    daemon, driver, root = daemon_and_driver_ui
+    bundle = cb.load_bundle("arm-01", root)
+    bundle["z"]["tapDwellMs"] = 120
+    cb.save_bundle(bundle, root)
+    if dynamic:
+        driver.attach_layout_provider(AsyncMock(return_value=None))
+        driver.attach_text_target_verifier(AsyncMock(return_value=lambda: None))
+        target = {"target_id": "conversation_item", "target_ref": {
+            "source": "camera_ocr", "cameraX": 320, "cameraY": 240,
+            "frameW": 640, "frameH": 480, "frameSha256": "a" * 64,
+            "coordinateVersion": "calibrated_camera.v1"}}
+    else:
+        enable_ui_target(root, "input_box", nx=0.5, ny=0.5)
+        target = {"target_id": "input_box"}
+    asyncio.run(driver.click({**target, "tapDwellMs": dwell_ms}))
+    assert [line for line in daemon.commands if line.startswith("TAP ")] == [
+        f"TAP 3.000 F1500{expected}"]
+    assert cb.load_bundle("arm-01", root)["z"]["tapDwellMs"] == 120
+
+
+@pytest.mark.parametrize("dwell_ms", [-1, 5001, float("nan"), float("inf"), True])
+def test_invalid_click_dwell_override_rejected_before_motion(daemon_and_driver_ui, dwell_ms):
+    daemon, driver, root = daemon_and_driver_ui
+    enable_ui_target(root, "input_box", nx=0.5, ny=0.5)
+    with pytest.raises(DriverError):
+        asyncio.run(driver.click({"target_id": "input_box", "tapDwellMs": dwell_ms}))
+    assert daemon.commands == []
+
+
+def test_click_without_dwell_override_keeps_calibration_default(daemon_and_driver_ui):
+    from drivers import calibration_bundle as cb
+    daemon, driver, root = daemon_and_driver_ui
+    bundle = cb.load_bundle("arm-01", root)
+    bundle["z"]["tapDwellMs"] = 120
+    cb.save_bundle(bundle, root)
+    enable_ui_target(root, "input_box", nx=0.5, ny=0.5)
+    asyncio.run(driver.click({"target_id": "input_box"}))
+    assert "TAP 3.000 F1500 P0.12" in daemon.commands
+
+
 @pytest.mark.parametrize("dwell_ms", [-1, 5001, float("nan"), float("inf")])
 def test_invalid_tap_dwell_rejected_before_motion(daemon_and_driver_ui, dwell_ms):
     from drivers import calibration_bundle as cb

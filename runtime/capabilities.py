@@ -119,7 +119,7 @@ BASE_CAPABILITIES: list[dict] = [
     {
         "capability_id": "arm.click",
         "name_display": "机械臂点击",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "device_type": "arm",
         "risk_level": "高",
         "data_scope": "无业务数据",
@@ -132,6 +132,11 @@ BASE_CAPABILITIES: list[dict] = [
             "required": ["target_id"],
             "properties": {
                 "target_id": {"type": "string"},
+                "tapDwellMs": {
+                    "type": "number", "minimum": 0, "maximum": 5000,
+                    "description": "本次点击的额外接触停留毫秒，覆盖布局和校准默认值；"
+                    "0 表示不额外等待，仍包含下压和抬起时间。越界或非有限数在运动前拒绝。",
+                },
                 "click_attempt": {
                     "type": "integer", "enum": [0, 1, 2], "default": 0,
                     "description": "0 默认点原中心，本台启用避边策略时在安全区选点；"
@@ -467,6 +472,11 @@ class CapabilityRegistry:
                     "arm.click", "arm.double_tap", "arm.swipe", "camera.locate_text",
                     "camera.observe_regions"}
                 and existing.get("version") == "1.0.0" and capability["version"] == "1.1.0")
+            if (existing is not None and existing.get("source") == "platform"
+                    and capability["capability_id"] == "arm.click"
+                    and existing.get("version") in {"1.0.0", "1.1.0"}
+                    and capability["version"] == "1.2.0"):
+                platform_upgrade = True
             if existing is None or platform_upgrade:
                 self._store.save_capability(dict(capability))
 

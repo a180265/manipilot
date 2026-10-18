@@ -209,18 +209,21 @@ def test_projective_ocr_alternatives_stay_inside_actual_inset_edges(attempt):
     assert 2 <= np.linalg.norm(screen - centre) <= 12.00000001
 
 
-def test_click_schema_upgrade_is_persisted_for_existing_installations(tmp_path):
+@pytest.mark.parametrize("old_version", ["1.0.0", "1.1.0"])
+def test_click_schema_upgrade_is_persisted_for_existing_installations(tmp_path, old_version):
     from runtime.capabilities import CapabilityRegistry
     from runtime.store import Store
 
     store = Store(tmp_path / "click-capabilities.sqlite3")
     try:
-        store.save_capability({"capability_id": "arm.click", "source": "platform", "version": "1.0.0"})
+        store.save_capability({"capability_id": "arm.click", "source": "platform", "version": old_version})
         registry = CapabilityRegistry(store)
         registry.bootstrap()
         registry.bootstrap()
         saved = store.get_capability("arm.click")
-        assert saved["version"] == "1.1.0"
+        assert saved["version"] == "1.2.0"
+        assert saved["input_schema"]["properties"]["tapDwellMs"]["minimum"] == 0
+        assert saved["input_schema"]["properties"]["tapDwellMs"]["maximum"] == 5000
         schema = saved["input_schema"]["properties"]["click_attempt"]
         assert schema["enum"] == [0, 1, 2] and schema["default"] == 0
     finally:
