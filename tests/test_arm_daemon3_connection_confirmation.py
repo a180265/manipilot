@@ -38,7 +38,7 @@ def test_connect_waits_for_delayed_banner_then_stable_position(rig, monkeypatch)
     result = json.loads(daemon.handle("CONNECT", 11))
     assert result["connected"]
     assert len(wire.writes) >= 4
-    assert all(item == b"?\n" for item in wire.writes)
+    assert all(item == b"?" for item in wire.writes)
     assert clock.now >= 3.0
     assert holder.arm._boot_banner_grace is False
     # 新连接完成后，真实运行期横幅仍立即使会话失效。
@@ -81,7 +81,7 @@ def test_resume_confirms_controller_state_and_sends_no_motion_replay(rig, state)
     result = json.loads(daemon.handle("RESUME", 11))
     assert result["resumed"] is True
     assert result["state"] == state
-    assert wire.writes == [b"~", b"?\n", b"?\n"]
+    assert wire.writes == [b"~", b"?", b"?"]
     assert clock.now < 2.0
 
 

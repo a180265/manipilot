@@ -6,8 +6,13 @@
 - 串口连接由人工触发：页面点「连接设备」→ CONNECT 指令 → 打开串口并生成
   会话锚点。打开串口必然复位 ESP32（DTR 复位怪癖、MPos 重新计数），所以
   绝不自动连接，什么时候复位由人决定。
-- 拔线感知：在位监听发现设备节点消失，或运动指令遇到串口异常，立即丢弃当前
+- 拔线感知：设备节点消失、真实串口读写异常或控制器复位横幅，立即丢弃当前
   会话；重新插上后需要再次人工「连接设备」，新连接生成新锚点。
+- 纯回包超时保留串口和会话、锁定运动并失效租约，等待人工复核；
+  只有已确认 Idle 后未下发普通 G-code/恢复指令时不发 !，其余情况立即进给保持。
+  GRBL 的 ! 即使在 Idle 也进入 Hold；保持状态只读提示需调试处理，不自动发 ~。
+  只读 $G 报告与 ACK 同步、连续空闲位置通过后可恢复当前会话，不恢复或重放旧动作。
+  普通指令 ACK 遗失可由新报告建立边界；未完成的旧 $G 必须先完整结束，防止串包。
 - 会话锚点：下游标定数据与锚点绑定。锚点不变 → 标定继续有效；锚点变了
   （断开重连/守护进程重启/换线）→ 标定失效，必须重新校准。
 - 运动租约（v1.2）：多客户端（调试台/业务桥）可同时连接，但 XY/Z/TAP 及点击
@@ -22,6 +27,8 @@
 指令（一行一条，响应一行 JSON 或 ERROR）：
   CONNECT / DISCONNECT                连接/断开串口（人工触发，生成/销毁会话锚点）
   STATUS                              连接、在位、会话、急停锁定、运动租约快照
+    communicationRecoveryRequired    通信超时待人工复核（串口仍保留，不代表可以运动）
+    communicationRecoveryId/Reason   本次通信故障编号/原因，人工确认须绑定编号与会话
   MPOS                                当前位置 {"x","y","z","state"}
   CLAIM <owner_type> <owner_id> [task_id]   申请运动租约（business|debug）
   RENEW                               续期本连接持有的租约
@@ -30,6 +37,7 @@
   END_MOTION                          结束动作事务（需租约）
   ESTOP_LOCK [reason...]              急停锁定（daemon 级，立即下发 !）
   RESET_ESTOP <operator>              人工复位急停锁定
+  RECOVER_COMMUNICATION <operator> <session> <fault_id>  人工确认后的只读通信复核
   Z <dz> [F<f>] / XY <dx> <dy> [F<f>] / TAP <depth> [F<f>] [P<sec>]   普通运动（需租约）
   TAP2 <depth> [F<f>] [P<sec>] [I<sec>] [R<mm>]  双击；I 抬起停顿，R 可选中途短抬距离
   SWIPE <dx> <dy> <depth> F<xy> Z<z>    连续按下、拖动、抬起，沿用校准深度与进给
@@ -105,6 +113,10 @@ EMERGENCY_COMMANDS = {"STATUS", "STOP", "ESTOP_LOCK"}
 MOTION_COMMANDS = {"Z", "XY", "TAP", "TAP2", "SWIPE", "PATH1", "RESUME"}
 
 
+class SerialResponseTimeout(RuntimeError):
+    """No complete response; keep the physical session, prohibit further motion."""
+
+
 class ArmSession:
     """一条串口会话：open 成功即生成新锚点。"""
 
@@ -116,6 +128,9 @@ class ArmSession:
         self._boot_banner_grace = True
         self._initializing_connection = True
         self._startup_banner_count = 0
+        # Unknown by default. Only a completed handshake/idle barrier can prove
+        # no motion has been queued since the last confirmed idle state.
+        self._idle_without_motion = False
         try:
             self.serial = self._open_serial()
             # 部分 macOS USB-串口驱动不支持 DTR/RTS 控制，会在设备已成功打开后
@@ -173,6 +188,7 @@ class ArmSession:
             elif time.monotonic() - stable_since >= CONNECT_STABLE_WINDOW_S:
                 self._boot_banner_grace = False
                 self._initializing_connection = False
+                self._idle_without_motion = state == "Idle"
                 return
             time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
         raise serial.serialutil.SerialException("连接状态握手未取得连续稳定位置，未宣布连接就绪")
@@ -258,16 +274,27 @@ class ArmSession:
     def _readline(self, deadline: float) -> bytes:
         # Serial.readline may return a partial line on timeout. Keep fragments
         # together, and enforce the command deadline even while bytes arrive.
-        pending = bytearray()
+        pending = getattr(self, "_rx_pending", None)
+        if pending is None:
+            pending = self._rx_pending = bytearray()
         original_timeout = self.serial.timeout
+        last_read_error = None
         while True:
+            if pending.endswith(b"\n"):
+                result = bytes(pending)
+                pending.clear()
+                return result
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise serial.serialutil.SerialException("串口控制器无响应或回包不完整")
+                if last_read_error is not None:
+                    raise serial.serialutil.SerialException(
+                        f"串口读取持续异常：{last_read_error}") from last_read_error
+                raise SerialResponseTimeout("串口控制器无响应或回包不完整")
             try:
                 self.serial.timeout = min(original_timeout or remaining, remaining)
                 raw = self.serial.read(1)
             except serial.serialutil.SerialException as exc:
+                last_read_error = exc
                 # CH340 偶发“无数据 readiness”异常可以短暂重试，但不能无限吞掉。
                 # 持续无响应意味着本物理会话已不可信，必须让 ArmHolder 丢弃它。
                 if time.monotonic() >= deadline:
@@ -278,14 +305,21 @@ class ArmSession:
                 continue
             finally:
                 self.serial.timeout = original_timeout
-            if time.monotonic() >= deadline:
-                raise serial.serialutil.SerialException("串口控制器无响应")
             if raw:
+                last_read_error = None
                 pending.extend(raw)
                 if len(pending) > 4096:
                     raise serial.serialutil.SerialException("串口控制器回包超长")
+            if time.monotonic() >= deadline:
+                if last_read_error is not None:
+                    raise serial.serialutil.SerialException(
+                        f"串口读取持续异常：{last_read_error}") from last_read_error
+                raise SerialResponseTimeout("串口控制器无响应或回包不完整")
+            if raw:
                 if pending.endswith(b"\n"):
-                    return bytes(pending)
+                    result = bytes(pending)
+                    pending.clear()
+                    return result
 
     def _send_raw(self, line: str, expect_ok: bool = True) -> list[str]:
         # Serialize only the write with STOP, never its blocking response read.
@@ -293,9 +327,14 @@ class ArmSession:
             guard = getattr(self, "_motion_guard", None)
             if guard is not None:
                 guard()
+            if getattr(self, "_awaiting_ack", False):
+                raise SerialResponseTimeout("上一条串口指令回包尚未完成")
             data = (line + "\n").encode()
+            self._idle_without_motion = False
             if self.serial.write(data) != len(data):
                 raise serial.serialutil.SerialException("串口指令写入不完整")
+            self._awaiting_ack = expect_ok
+            self._pending_response_kind = "command" if expect_ok else None
         if not expect_ok:
             return []
         out: list[str] = []
@@ -311,12 +350,16 @@ class ArmSession:
                 raise self._controller_reset_error(text)
             out.append(text)
             if text == "ok":
+                self._awaiting_ack = False
+                self._pending_response_kind = None
                 if not getattr(self, "_initializing_connection", False):
                     self._boot_banner_grace = False
                 return out
             if text.startswith("error"):
+                self._awaiting_ack = False
+                self._pending_response_kind = None
                 raise RuntimeError(f"控制器拒绝: {text}（{line}）")
-        raise serial.serialutil.SerialException(f"等待 ok 超时: {line}")
+        raise SerialResponseTimeout(f"等待 ok 超时: {line}")
 
     def send(self, line: str, expect_ok: bool = True) -> list[str]:
         return self._send_raw(line, expect_ok)
@@ -339,10 +382,11 @@ class ArmSession:
     def mpos(self, *, deadline: float | None = None) -> dict:
         deadline = min(deadline if deadline is not None else float("inf"),
                        time.monotonic() + MPOS_RESPONSE_TIMEOUT_S)
-        if self.serial.write(b"?\n") != 2:
+        if self.serial.write(b"?") != 1:
             raise serial.serialutil.SerialException("状态查询写入不完整")
         while time.monotonic() < deadline:
             text = self._readline(deadline).decode(errors="ignore").strip()
+            self._observe_pending_response(text)
             if self._is_controller_reset_banner(text):
                 if getattr(self, "_boot_banner_grace", False):
                     self._startup_banner_count = getattr(self, "_startup_banner_count", 0) + 1
@@ -362,10 +406,79 @@ class ArmSession:
             if len(values) != 3 or not all(math.isfinite(value) for value in values):
                 continue
             x, y, z = values
+            if parts[0] != "Idle":
+                # Observed motion/hold/alarm revokes any earlier idle proof;
+                # a later single Idle report still cannot establish a new one.
+                self._idle_without_motion = False
             if not getattr(self, "_initializing_connection", False):
                 self._boot_banner_grace = False
             return {"x": x, "y": y, "z": z, "state": parts[0]}
-        raise serial.serialutil.SerialException("状态查询无响应")
+        raise SerialResponseTimeout("状态查询无响应")
+
+    def _observe_pending_response(self, text: str) -> None:
+        """Diagnostic reads must retain the boundary of an unfinished $G probe."""
+        if not getattr(self, "_awaiting_ack", False):
+            return
+        if getattr(self, "_pending_response_kind", None) == "parser_probe":
+            if text.startswith("[GC:") and text.endswith("]"):
+                self._parser_probe_report_seen = True
+            if not getattr(self, "_parser_probe_report_seen", False):
+                return  # An old ordinary ACK before [GC:] is not this probe's ACK.
+        if text == "ok" or text.startswith("error"):
+            self._awaiting_ack = False
+            self._pending_response_kind = None
+
+    def confirm_communication(self) -> dict:
+        """Read-only resynchronization; never resume or cancel buffered G-code."""
+        deadline = time.monotonic() + CONNECT_HANDSHAKE_TIMEOUT_S
+        position = self.mpos(deadline=deadline)
+        if position["state"] != "Idle":
+            raise RuntimeError(
+                "通信复核未通过：控制器未处于空闲；保持状态可能留有未完成动作，"
+                "需调试处理，不能用恢复键继续旧动作（不会发送 ~）")
+        # A previous $G must finish first, otherwise its delayed [GC:]/ok could
+        # impersonate the new probe. Preserve report progress across MPOS/retries.
+        while (getattr(self, "_awaiting_ack", False)
+               and getattr(self, "_pending_response_kind", None) == "parser_probe"):
+            text = self._readline(deadline).decode(errors="ignore").strip()
+            if self._is_controller_reset_banner(text):
+                raise self._controller_reset_error(text)
+            self._observe_pending_response(text)
+        # $G is a read-only parser report. An old plain ACK must never stand in
+        # for this report; require the tagged report followed by its own ACK.
+        # Ordinary G-code's ACK may be permanently lost: the ordered parser's
+        # later tagged $G report establishes a fresh boundary without replaying
+        # that command. Real-time ?/! never add newline/empty-command ACKs.
+        if self.serial.write(b"$G\n") != 3:
+            raise serial.serialutil.SerialException("通信复核查询写入不完整")
+        self._awaiting_ack = True
+        self._pending_response_kind = "parser_probe"
+        self._parser_probe_report_seen = False
+        while True:
+            text = self._readline(deadline).decode(errors="ignore").strip()
+            if self._is_controller_reset_banner(text):
+                raise self._controller_reset_error(text)
+            self._observe_pending_response(text)
+            if not self._awaiting_ack:
+                if text == "ok":
+                    break
+                raise RuntimeError("控制器拒绝通信复核，保持锁定")
+        stable_position = None
+        stable_since = time.monotonic()
+        while time.monotonic() < deadline:
+            position = self.mpos(deadline=deadline)
+            if position["state"] != "Idle":
+                raise RuntimeError("通信复核未通过：控制器未处于空闲，可能仍有未执行动作；禁止恢复旧动作，请人工处理")
+            if stable_position is None:
+                stable_position = position
+                stable_since = time.monotonic()
+            elif position != stable_position:
+                raise RuntimeError("通信复核未通过：空闲位置仍在变化，请人工检查设备")
+            elif time.monotonic() - stable_since >= CONNECT_STABLE_WINDOW_S:
+                self._idle_without_motion = True
+                return position
+            time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+        raise SerialResponseTimeout("通信复核未取得连续稳定空闲位置")
 
     def resume(self) -> dict:
         """发送一次恢复字节，仅观察到退出保持状态后才报告成功。"""
@@ -374,6 +487,7 @@ class ArmSession:
             guard = getattr(self, "_motion_guard", None)
             if guard is not None:
                 guard()
+            self._idle_without_motion = False
             if self.serial.write(b"~") != 1:
                 raise serial.serialutil.SerialException("恢复指令写入不完整")
         while time.monotonic() < deadline:
@@ -397,9 +511,11 @@ class ArmSession:
                     guard()
             st = self.mpos()
             if st.get("state") == "Idle":
+                if not getattr(self, "_awaiting_ack", False):
+                    self._idle_without_motion = True
                 return st
             time.sleep(0.3)
-        raise serial.serialutil.SerialException("等待 Idle 超时，动作结果未知")
+        raise SerialResponseTimeout("等待 Idle 超时，动作结果未知")
 
 
 class LeaseManager:
@@ -521,6 +637,7 @@ class ArmHolder:
         self.lock = threading.Lock()
         self.cmd_lock = threading.Lock()
         self.estop_locked = False
+        self.communication_recovery: dict | None = None
         self.stop_generation = 0
         self.transactions: dict[int, str] = {}  # conn_id -> tx_id
         self.active_commands: dict[int, tuple[threading.Event, bool]] = {}
@@ -551,6 +668,7 @@ class ArmHolder:
             if self.arm is not arm:
                 return
             self.arm = None
+            self.communication_recovery = None
             self.leases.invalidate_all(reason)
             self.transactions.clear()
             arm.close()
@@ -560,7 +678,8 @@ class ArmHolder:
         with self.cmd_lock:  # 全程持锁：两路同时 CONNECT 不允许交错开串口
             if self.arm is not None:
                 return {"connected": True, "deviceId": DEVICE_ID,
-                        "session": self.arm.session, "already": True}
+                        "session": self.arm.session, "already": True,
+                        "communicationRecoveryRequired": bool(getattr(self, "communication_recovery", None))}
             try:
                 arm = ArmSession()
             except Exception as exc:
@@ -585,6 +704,8 @@ class ArmHolder:
     def _require_motion_allowed(self, conn_id: int) -> None:
         """普通运动前置校验：急停锁定 + 运动租约（在 cmd_lock 内调用，保证原子）。"""
         with self.lock:
+            if getattr(self, "communication_recovery", None):
+                raise ValueError("通信超时待人工复核：禁止运动或恢复旧动作")
             if self.estop_locked:
                 raise ValueError("急停锁定中（daemon 级）：人工 RESET_ESTOP 复位前拒绝一切普通运动")
         self.leases.require(conn_id)
@@ -604,7 +725,8 @@ class ArmHolder:
         if arm is None:
             return {"stopped": False, "connected": False}
         try:
-            data = b"!\n"
+            data = b"!"
+            arm._idle_without_motion = False
             if arm.serial.write(data) != len(data):
                 raise OSError("停止指令写入不完整")
             return {"stopped": True, "connected": True}
@@ -685,6 +807,9 @@ class ArmHolder:
                     with self.lock:
                         guard()
                 return result
+            except SerialResponseTimeout as exc:
+                self._latch_response_timeout(arm, str(exc))
+                raise RuntimeError(f"串口回包超时，连接已保留；动作结果未知，待人工复核：{exc}") from exc
             except (serial.serialutil.SerialException, OSError) as exc:
                 if entered_motion:
                     self._latch_failed_motion(arm, generation)
@@ -698,6 +823,62 @@ class ArmHolder:
                 arm._motion_guard = None
         finally:
             self.cmd_lock.release()
+
+    def _latch_response_timeout(self, arm: ArmSession, reason: str) -> None:
+        with self.lock:
+            if self.arm is not arm:
+                return
+            # Further diagnostic timeouts do not replace the confirmation token.
+            if getattr(self, "communication_recovery", None):
+                return
+            unlock_estop = not self.estop_locked
+            self.estop_locked = True
+            self.leases.invalidate_all("通信超时待人工复核")
+            self.transactions.clear()
+            self.communication_recovery = {
+                "id": uuid.uuid4().hex, "reason": reason,
+                "unlock_estop": unlock_estop,
+            }
+            try:
+                if getattr(arm, "_idle_without_motion", False):
+                    # GRBL enters Hold even when ! arrives in Idle. A query
+                    # timeout after proven idle with no intervening G-code is
+                    # locked in software; no queue exists to stop or resume.
+                    self.stop_generation = getattr(self, "stop_generation", 0) + 1
+                else:
+                    self._stop_locked()
+            except RuntimeError as exc:
+                # A failed stop write is a real transport failure, not a timeout.
+                self.communication_recovery["stop_error"] = str(exc)
+            self.communication_recovery["stop_generation"] = self.stop_generation
+        if "stop_error" in self.communication_recovery:
+            self._drop_locked(arm, reason=self.communication_recovery["stop_error"])
+            raise RuntimeError("停止指令写入失败，串口会话已撤销；动作结果未知")
+
+    def recover_communication(self, operator: str, expected_session: str,
+                              recovery_id: str, cancel_event=None) -> dict:
+        def recover(arm):
+            with self.lock:
+                fault = getattr(self, "communication_recovery", None)
+                if (arm.session != expected_session or not fault
+                        or fault["id"] != recovery_id):
+                    raise ValueError("通信复核状态已变化，请重新读取设备状态后人工确认")
+                if self.stop_generation != fault["stop_generation"]:
+                    raise ValueError("通信超时后另有停止或急停，不能用旧复核解除锁定")
+            position = arm.confirm_communication()
+            with self.lock:
+                _check_request_active(cancel_event)
+                if (self.arm is not arm or self.communication_recovery is not fault
+                        or self.stop_generation != fault["stop_generation"]):
+                    raise RuntimeError("通信复核期间发生停止或会话变化，保持锁定")
+                self.communication_recovery = None
+                if fault["unlock_estop"]:
+                    self.estop_locked = False
+                return {"recovered": True, "session": arm.session,
+                        "recovery_id": recovery_id, "recovered_by": operator,
+                        "estop_locked": self.estop_locked, "position": position,
+                        "outcome_hint": "unknown"}
+        return self.run(recover, cancel_event=cancel_event)
 
     def _latch_failed_motion(self, arm, generation: int) -> None:
         """A failed macro may leave queued motion or contact; never append recovery."""
@@ -716,11 +897,15 @@ class ArmHolder:
     def status(self) -> dict:
         with self.lock:
             arm = self.arm
+            recovery = getattr(self, "communication_recovery", None)
             return {"deviceId": DEVICE_ID,
                     "connected": arm is not None,
                     "devicePresent": self.device_present,
                     "session": arm.session if arm else None,
                     "estopLocked": self.estop_locked,
+                    "communicationRecoveryRequired": bool(recovery),
+                    "communicationRecoveryId": recovery["id"] if recovery else None,
+                    "communicationRecoveryReason": recovery["reason"] if recovery else None,
                     "motionFeatures": [DOUBLE_TAP_FEATURE, DOUBLE_TAP_SHORT_LIFT_FEATURE,
                                        DOUBLE_TAP_FAST_FEATURE, SWIPE_FEATURE,
                                        PATH1_FEATURE],
@@ -764,6 +949,11 @@ def handle(line: str, conn_id: int,
         return json.dumps(holder.disconnect(), ensure_ascii=False)
     if cmd == "STATUS":
         return json.dumps(holder.status(), ensure_ascii=False)
+    if cmd == "RECOVER_COMMUNICATION":
+        if len(parts) != 4:
+            raise ValueError("RECOVER_COMMUNICATION 需要操作者、预期会话和通信故障编号")
+        return json.dumps(holder.recover_communication(
+            parts[1], parts[2], parts[3], cancel_event), ensure_ascii=False)
 
     # ---- 急停（高优先级，不受租约阻塞） ----
     if cmd == "STOP":
@@ -790,6 +980,8 @@ def handle(line: str, conn_id: int,
                 raise RuntimeError("daemon 正忙：急停未复位，请人工确认后重新操作")
             try:
                 _check_request_active(cancel_event)
+                if getattr(holder, "communication_recovery", None):
+                    raise ValueError("通信超时待人工复核：不能通过 RESET_ESTOP 解除锁定")
                 holder.estop_locked = False
             finally:
                 holder.lock.release()

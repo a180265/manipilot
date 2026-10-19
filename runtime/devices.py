@@ -512,7 +512,7 @@ class DeviceManager:
             unknown_task_ids.insert(0, unknown_task_id)
         if unknown_task_ids:
             unknown_task_id = unknown_task_ids[0]
-        if (unknown_task_id or home_motion_review) and hold_status != "quarantined":
+        if (unknown_task_id or home_motion_review or previous.get("operator_recovery_pending")) and hold_status != "quarantined":
             hold_status = "paused"
         if hold_status:
             self._startup_holds[device_id] = hold_status
@@ -598,11 +598,12 @@ class DeviceManager:
             "camera_quality_note": None,
             "camera_quality_metrics": {},
             "lease_id": None,
-            "home_ok": False if unknown_task_ids or home_motion_review else previous.get("home_ok", True),
+            "home_ok": False if unknown_task_ids or home_motion_review or previous.get("operator_recovery_pending") else previous.get("home_ok", True),
             "home_checked_at": previous.get("home_checked_at"),
             "home_check_receipt": home_receipt,
             "home_motion_review_required": home_motion_review,
             "home_motion_unknown_at": previous.get("home_motion_unknown_at"),
+            "operator_recovery_pending": bool(previous.get("operator_recovery_pending")),
             "quarantine_reason": previous.get("quarantine_reason"),
             "pause_reason": (previous.get("pause_reason") or
                              ("安全检查动作回执未知，需人工确认" if home_motion_review else None)),
@@ -1428,7 +1429,13 @@ class DeviceManager:
     # ---------- 状态机 ----------
     def _set_status(self, device_id: str, status: str, reason: str | None = None, *, force: bool = False) -> None:
         device = self._devices[device_id]
+        if status == "ready":
+            from runtime.operator_recovery import pending_operator_recovery
+            if pending_operator_recovery(self._store, device_id):
+                raise ApiError("home_not_confirmed", "人工机械臂操作尚未核实，不能恢复设备")
         if status == "ready" and (device.get("unknown_hold_task_id")
+                                   or device.get("operator_recovery_pending")
+                                   or device.get("communication_recovery_required")
                                    or device.get("home_motion_review_required")
                                    or (device.get("home_check_receipt") or {}).get("state") in {"pending", "unknown"}
                                    or device.get("pause_reason")
@@ -1772,6 +1779,11 @@ class DeviceManager:
 
     def resume(self, device_id: str, reason: str) -> dict:
         device = self._devices[device_id]
+        from runtime.operator_recovery import pending_operator_recovery
+        if pending_operator_recovery(self._store, device_id):
+            raise ApiError("home_not_confirmed", "人工机械臂操作尚未核实，不能恢复设备")
+        if device.get("operator_recovery_pending") or device.get("communication_recovery_required"):
+            raise ApiError("home_not_confirmed", "机械臂通信或人工停车仍待核实，不能恢复设备")
         if (device.get("home_motion_review_required")
                 or (device.get("home_check_receipt") or {}).get("state") in {"pending", "unknown"}):
             raise ApiError("home_not_confirmed", "安全检查动作尚未人工确认，不能恢复设备")
@@ -2239,6 +2251,17 @@ class DeviceManager:
         device["last_heartbeat_at"] = iso(utc_now())
         device["estop_latched"] = bool(state.get("estop_latched")
                                       or state.get("daemon_estop_locked"))
+        device["communication_recovery_required"] = bool(state.get("communication_recovery_required"))
+        device["communication_recovery_id"] = state.get("recovery_id")
+        device["communication_recovery_reason"] = state.get("recovery_reason")
+        if device["communication_recovery_required"]:
+            device["home_ok"] = False
+            device["home_checked_at"] = None
+            reason = "串口回包超时，连接已保留；请人工检查机械臂后复核通信"
+            device["pause_reason"] = device.get("pause_reason") or reason
+            self.revoke_execution_mode(device_id, reason, calibration_due=False)
+            if device["status"] in {"ready", "busy", "degraded", "recovering"}:
+                self._set_status(device_id, "paused", reason)
         current_session = state.get("session")
         previous_session = device.get("daemon_session")
         if previous_session and previous_session != current_session:

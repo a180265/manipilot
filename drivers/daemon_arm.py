@@ -515,14 +515,37 @@ class DaemonArmDriver(ArmDriver):
 
     async def read_state(self) -> dict:
         if not self._connected or self._transport is None:
+            if self._daemon_session:
+                # A failed motion closes its TCP client, not necessarily the
+                # daemon's serial handle. Preserve a retained fault session.
+                state = await self.recovery_state()
+                if state.get("communication_recovery_required"):
+                    return state
+                if state.get("connected") and state.get("session") == self._daemon_session:
+                    if not self._estop_latched and not self._motion_lock.locked():
+                        generation = self._stop_generation
+                        try:
+                            await self.connect()
+                        except DriverError:
+                            if generation == self._stop_generation:
+                                self._daemon_session = state["session"]
+                            return state
+                        return await self.read_state()
+                    return state
             return {"connected": False, "position": None, "estop_latched": self._estop_latched,
                     "limit_ok": True, "error": "未连接"}
         try:
+            status = await self._call(self._status)
+            if status.get("communicationRecoveryRequired"):
+                return self._recovery_snapshot(status)
             mpos = await self._call(self._mpos)
             status = await self._call(self._status)
             if status.get("connected") is not True:
                 raise DriverError("driver_disconnected", "daemon 串口未连接")
         except DriverError as exc:
+            state = await self.recovery_state()
+            if state.get("connected") and state.get("session"):
+                return state
             return {"connected": False, "position": None, "estop_latched": self._estop_latched,
                     "limit_ok": True, "error": exc.message}
         return {
@@ -537,6 +560,127 @@ class DaemonArmDriver(ArmDriver):
             "limit_ok": True,
             "error": None,
         }
+
+    def _recovery_snapshot(self, status: dict, position: dict | None = None,
+                           error: str | None = None) -> dict:
+        required = status.get("communicationRecoveryRequired") is True
+        return {
+            "connected": status.get("connected") is True,
+            "session": status.get("session"),
+            "device_present": status.get("devicePresent"),
+            "communication_recovery_required": required,
+            "recovery_id": status.get("communicationRecoveryId"),
+            "recovery_reason": status.get("communicationRecoveryReason"),
+            "daemon_estop_locked": bool(status.get("estopLocked")),
+            "estop_latched": self._estop_latched,
+            "estop_locked": bool(status.get("estopLocked") or self._estop_latched),
+            "motion_lease": status.get("lease"),
+            "position": position,
+            "controller_state": (position or {}).get("state"),
+            "limit_ok": True,
+            "error": error or (status.get("communicationRecoveryReason") if required else None),
+        }
+
+    async def recovery_state(self) -> dict:
+        """Read the existing daemon session; never CONNECT, unlock or resume."""
+        def probe():
+            transport = DaemonTCPTransport(self.daemon_addr, timeout=CONTROL_TIMEOUT_S)
+            status = {}
+            try:
+                transport.open()
+                status = json_loads(transport.cmd("STATUS"))
+                self._check_identity(status)
+                if not status.get("connected") or status.get("communicationRecoveryRequired"):
+                    return self._recovery_snapshot(status)
+                # Do not queue a diagnostic position query behind live motion.
+                if status.get("lease"):
+                    return self._recovery_snapshot(status, error="机械臂仍有运动租约")
+                position = self._position(json_loads(transport.cmd("MPOS")))
+                final = json_loads(transport.cmd("STATUS"))
+                self._check_identity(final)
+                if (final.get("session") != status.get("session")
+                        or final.get("connected") is not True
+                        or final.get("communicationRecoveryRequired")):
+                    return self._recovery_snapshot(final, error="查询期间设备状态变化，请重新检查")
+                return self._recovery_snapshot(final, position)
+            except (DriverError, OSError) as exc:
+                # MPOS itself may have caused the daemon to retain a timeout.
+                try:
+                    final = json_loads(transport.cmd("STATUS", timeout=1.0))
+                    self._check_identity(final)
+                    return self._recovery_snapshot(final, error=str(exc))
+                except (DriverError, OSError):
+                    return self._recovery_snapshot({}, error=str(exc))
+            finally:
+                transport.close()
+
+        return await asyncio.to_thread(probe)
+
+    async def recover_communication(self, expected_session: str, operator_id: str,
+                                    recovery_id: str) -> dict:
+        """Explicit operator acknowledgement; no motion or serial reopening."""
+        values = (operator_id, expected_session, recovery_id)
+        if any(not isinstance(v, str) or not v or any(c.isspace() for c in v)
+               for v in values):
+            raise DriverError("driver_policy_rejected", "通信复核需要有效操作者、会话及故障编号")
+        if self._estop_latched:
+            raise DriverError("driver_estop_latched", "人工急停尚未复位，通信复核不能解除人工急停")
+        if self._motion_lock.locked():
+            raise DriverError("driver_policy_rejected", "动作尚未结束，禁止通信复核")
+        generation = self._stop_generation
+
+        transport = DaemonTCPTransport(self.daemon_addr, timeout=12.0)
+
+        def recover():
+            try:
+                transport.open()
+                status = json_loads(transport.cmd("STATUS"))
+                self._check_identity(status)
+                if (status.get("connected") is not True
+                        or status.get("session") != expected_session
+                        or status.get("communicationRecoveryId") != recovery_id
+                        or status.get("communicationRecoveryRequired") is not True):
+                    raise DriverError("driver_policy_rejected", "会话或通信故障已变化，请重新检查")
+                if generation != self._stop_generation or self._estop_latched:
+                    raise DriverError("driver_estop_latched", "检查期间设备已停止或急停")
+                result = json_loads(transport.cmd(
+                    f"RECOVER_COMMUNICATION {operator_id} {expected_session} {recovery_id}"))
+                if (result.get("recovered") is not True
+                        or result.get("session") != expected_session
+                        or result.get("recovery_id") != recovery_id
+                        or self._position(result.get("position") or {}).get("state") != "Idle"):
+                    raise DriverError("driver_policy_rejected", "通信恢复回执未确认，保持暂停")
+                final = json_loads(transport.cmd("STATUS"))
+                self._check_identity(final)
+                if (generation != self._stop_generation or self._estop_latched
+                        or final.get("session") != expected_session
+                        or final.get("connected") is not True
+                        or final.get("communicationRecoveryRequired")):
+                    raise DriverError("driver_policy_rejected", "复核期间状态变化，保持暂停")
+                result["estop_locked"] = bool(final.get("estopLocked"))
+                return result
+            finally:
+                transport.close()
+
+        try:
+            result = await asyncio.to_thread(recover)
+        except asyncio.CancelledError:
+            with self._safety_lock:
+                self._stop_generation += 1
+            transport.close()
+            raise
+        if not self.connected and not result["estop_locked"]:
+            # Reattach only the application TCP client. connect() never sends
+            # the daemon CONNECT command or opens the hardware serial port.
+            await self.connect()
+        final = await self.recovery_state()
+        if (generation != self._stop_generation or self._estop_latched
+                or final.get("session") != expected_session
+                or final.get("connected") is not True
+                or final.get("communication_recovery_required")):
+            raise DriverError("driver_policy_rejected", "恢复期间连接或停止状态变化，请重新核查")
+        result["estop_locked"] = final.get("estop_locked", True)
+        return result
 
     async def read_gesture_state(self) -> dict:
         """Feature discovery must not queue MPOS on the motion connection."""
@@ -2796,7 +2940,8 @@ class DaemonArmDriver(ArmDriver):
         """移动到设备目标并停在悬停高度（只移动，不执行 TAP）。"""
         return await self._move_only(target_id, expected_layout=expected_layout)
 
-    async def park(self) -> dict:
+    async def park(self, *, expected_session: str | None = None,
+                   execution_guard=None) -> dict:
         """驶回 SAFE PARK（校准档案确认的停止位）。
 
         走业务租约与现有运动链（预检/分段/会话锚点），不依赖调试台——
@@ -2808,6 +2953,10 @@ class DaemonArmDriver(ArmDriver):
         calibration = await self._call(self._ensure_located)
         park = calibration.get("safePark") or {}
         session = calibration.get("daemonSession", calibration.get("session"))
+        if expected_session is not None and session != expected_session:
+            error = DriverError("driver_uncalibrated", "人工确认后会话已变化，禁止沿用旧停车请求")
+            error.motion_not_started = True
+            raise error
         if (park.get("confirmed") is not True or not session
                 or park.get("daemonSession") != session):
             error = DriverError("driver_policy_rejected",
@@ -2831,6 +2980,10 @@ class DaemonArmDriver(ArmDriver):
         }
 
         def _build_park_steps(res: dict, current: dict) -> list[tuple[str, str]]:
+            if expected_session is not None and current.get("state") != "Idle":
+                error = DriverError("driver_policy_rejected", "控制器尚未静止，禁止人工回停车位")
+                error.motion_not_started = True
+                raise error
             steps = []
             dx = res["robotX"] - current["x"]
             dy = res["robotY"] - current["y"]
@@ -2849,6 +3002,7 @@ class DaemonArmDriver(ArmDriver):
             resolved, with_tap=False, generation=generation,
             session=calibration.get("daemonSession", calibration.get("session")),
             build_steps=_build_park_steps,
+            execution_guard=execution_guard,
             verifier=self.motion_verifier,
             validate_gesture_replies=False)
         arrived = all(abs(mpos.get(axis, 1e9) - resolved[key]) <= 0.5

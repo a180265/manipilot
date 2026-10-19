@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
 
 from drivers.fake_arm import FakeArmDriver
 from drivers.fake_camera import FakeCameraDriver
 from drivers.fake_input import FakeInputDriver
 from runtime import devices as devices_module
 from runtime.devices import DeviceManager
+from runtime.store import Store
 from runtime.util import iso, utc_now
 
 
@@ -22,17 +22,6 @@ FIELDS = (
     "pause_reason",
     "calibration_status",
 )
-
-
-class MemoryStore:
-    def __init__(self):
-        self.devices = {}
-
-    def get_device(self, device_id):
-        return deepcopy(self.devices.get(device_id))
-
-    def save_device(self, device):
-        self.devices[device["device_id"]] = deepcopy(device)
 
 
 class MemoryAudit:
@@ -93,8 +82,8 @@ def _state(device):
     return {field: device.get(field) for field in FIELDS}
 
 
-async def _reattach_during_camera_poll(monkeypatch, boundary):
-    store = MemoryStore()
+async def _reattach_during_camera_poll(monkeypatch, boundary, tmp_path):
+    store = Store(tmp_path / "fleet.db")
     manager = DeviceManager(
         store, MemoryAudit(), MemoryEvents(), hardware_mode="simulation"
     )
@@ -165,9 +154,9 @@ async def _reattach_during_camera_poll(monkeypatch, boundary):
         await asyncio.gather(poll, return_exceptions=True)
 
 
-def test_reattach_during_quality_cannot_overwrite_new_device(monkeypatch):
-    asyncio.run(_reattach_during_camera_poll(monkeypatch, "quality"))
+def test_reattach_during_quality_cannot_overwrite_new_device(monkeypatch, tmp_path):
+    asyncio.run(_reattach_during_camera_poll(monkeypatch, "quality", tmp_path))
 
 
-def test_reattach_during_ui_cannot_overwrite_new_persisted_device(monkeypatch):
-    asyncio.run(_reattach_during_camera_poll(monkeypatch, "ui"))
+def test_reattach_during_ui_cannot_overwrite_new_persisted_device(monkeypatch, tmp_path):
+    asyncio.run(_reattach_during_camera_poll(monkeypatch, "ui", tmp_path))

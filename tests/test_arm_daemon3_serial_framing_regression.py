@@ -123,7 +123,7 @@ def test_malformed_position_never_truncates_or_supersedes_complete_position(rig,
     wire.fragments.extend([invalid, b"<Idle|MPos:1.000,2.000,3.500>\n"])
     position = json.loads(daemon.handle("MPOS", 11))
     assert position == {"x": 1.0, "y": 2.0, "z": 3.5, "state": "Idle"}
-    assert wire.writes == [b"?\n"]
+    assert wire.writes == [b"?"]
     assert not wire.closed
     assert len(wire.writes) == 1
     assert wire.writes[0].startswith(b"?")
@@ -154,9 +154,10 @@ def test_unterminated_mpos_is_not_accepted_as_a_position(rig):
         daemon.handle("MPOS", 11)
 
     status = json.loads(daemon.handle("STATUS", 12))
-    assert status["connected"] is False
-    assert status["session"] is None
-    assert wire.closed
+    assert status["connected"] is True
+    assert status["session"] == "framing-test-session"
+    assert status["communicationRecoveryRequired"] is True
+    assert not wire.closed
 
 
 def test_mpos_deadline_covers_a_slow_drip_complete_line(rig):
@@ -173,23 +174,25 @@ def test_mpos_deadline_covers_a_slow_drip_complete_line(rig):
         daemon.handle("MPOS", 11)
 
     status = json.loads(daemon.handle("STATUS", 12))
-    assert status["connected"] is False
-    assert status["session"] is None
-    assert wire.closed
+    assert status["connected"] is True
+    assert status["session"] == "framing-test-session"
+    assert status["communicationRecoveryRequired"] is True
+    assert not wire.closed
 
 
-def test_actual_query_silence_still_invalidates_session_without_motion(rig):
+def test_actual_query_silence_preserves_session_and_requires_human_recovery(rig):
     holder, wire, _clock = rig
 
     with pytest.raises(RuntimeError):
         daemon.handle("MPOS", 11)
 
     status = json.loads(daemon.handle("STATUS", 12))
-    assert status["connected"] is False
-    assert status["session"] is None
-    assert status["estopLocked"] is False
-    assert wire.closed
-    assert len(wire.writes) == 1
+    assert status["connected"] is True
+    assert status["session"] == "framing-test-session"
+    assert status["communicationRecoveryRequired"] is True
+    assert status["estopLocked"] is True
+    assert not wire.closed
+    assert len(wire.writes) == 2
     assert wire.writes[0].startswith(b"?")
 
 
@@ -201,12 +204,13 @@ def test_missing_motion_ack_still_latches_and_never_replays(rig):
         daemon.handle("Z 1", 11)
 
     status = json.loads(daemon.handle("STATUS", 12))
-    assert status["connected"] is False
-    assert status["session"] is None
+    assert status["connected"] is True
+    assert status["session"] == "framing-test-session"
+    assert status["communicationRecoveryRequired"] is True
     assert status["estopLocked"] is True
     assert status["lease"] is None
-    assert wire.closed
-    assert wire.writes == [b"G91\n", b"!\n"]
+    assert not wire.closed
+    assert wire.writes == [b"G91\n", b"!"]
 
 
 def test_unrelated_complete_lines_do_not_break_mpos(rig):

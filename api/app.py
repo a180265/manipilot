@@ -2930,6 +2930,38 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         result = rt(request).op_unquarantine(device_id, op_context(body))
         return {"device_id": device_id, "status": result["status"], "status_display": result["status_display"]}
 
+    async def execute_operator_recovery(device_id, operation, request):
+        from runtime.operator_recovery import service
+        body = await request.json()
+        svc = service(rt(request))
+        try:
+            return await svc.execute(device_id, operation, body, op_context(body))
+        except ApiError as exc:
+            payload = exc.to_payload()
+            # 仅该编号从未认领时才允许客户端解除“待查回执”；忙碌/冲突保守查询。
+            if (not svc._get(body.get("client_request_id"))
+                    and exc.key not in {"device_busy", "idempotency_conflict", "request_conflict"}):
+                payload["not_submitted"] = True
+            return JSONResponse(payload, status_code=exc.http)
+
+    @app.get("/v1/devices/{device_id}/operator-recovery")
+    async def operator_recovery_state(device_id: str, request: Request,
+                                      client_request_id: str | None = None):
+        from runtime.operator_recovery import service
+        return await service(rt(request)).view(device_id, client_request_id=client_request_id)
+
+    @app.post("/v1/devices/{device_id}/recover-communication")
+    async def recover_device_communication(device_id: str, request: Request):
+        return await execute_operator_recovery(device_id, "recover_communication", request)
+
+    @app.post("/v1/devices/{device_id}/park")
+    async def operator_park_device(device_id: str, request: Request):
+        return await execute_operator_recovery(device_id, "park", request)
+
+    @app.post("/v1/devices/{device_id}/operator-recovery/review")
+    async def review_operator_recovery(device_id: str, request: Request):
+        return await execute_operator_recovery(device_id, "operator_recovery_review", request)
+
     @app.post("/v1/devices/{device_id}/home-check")
     async def home_check(device_id: str, request: Request):
         body = await request.json()

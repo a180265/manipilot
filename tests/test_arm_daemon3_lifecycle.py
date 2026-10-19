@@ -32,7 +32,7 @@ class _OpenableSerial:
 
     def write(self, data):
         self.writes.append(data)
-        if data == b"?\n":
+        if data == b"?":
             self.pending += b"<Idle|MPos:0,0,0>\n"
         return len(data)
 
@@ -171,9 +171,9 @@ def test_client_cancel_stops_active_motion_and_invalidates_generation(holder):
     assert event.is_set()
     assert holder.estop_locked
     assert holder.stop_generation == 1
-    assert holder.arm.serial.writes == [b"!\n"]
+    assert holder.arm.serial.writes == [b"!"]
     holder.cancel_client(1)
-    assert holder.arm.serial.writes == [b"!\n"]
+    assert holder.arm.serial.writes == [b"!"]
 
 
 def test_cancel_readonly_or_nonowner_never_stops_other_motion(holder):
@@ -244,7 +244,7 @@ def test_tcp_disconnect_stops_tap_before_remaining_serial_commands(holder):
 
     def write(data):
         result = original_write(data)
-        if data == b"!\n":
+        if data == b"!":
             stopped.set()
         return result
 
@@ -274,7 +274,7 @@ def test_tcp_disconnect_stops_tap_before_remaining_serial_commands(holder):
         client.close()
         worker.join(3)
     assert not worker.is_alive()
-    assert arm.serial.writes == [b"G91\n", b"!\n"]
+    assert arm.serial.writes == [b"G91\n", b"!"]
     assert holder.leases.snapshot() is None
     assert not holder.active_commands
 
@@ -398,7 +398,7 @@ def test_stop_bypasses_blocked_normal_command_lock():
         holder.cmd_lock.release()
 
     assert result == {"stopped": True, "connected": True}
-    assert holder.arm.serial.writes == [b"!\n"]
+    assert holder.arm.serial.writes == [b"!"]
 
 
 @pytest.fixture
@@ -515,7 +515,7 @@ def test_partial_macro_failure_stops_and_latches_without_recovery(holder, comman
     with pytest.raises(RuntimeError, match="controller rejected"):
         daemon_module.handle(command, 1)
     assert len(calls) == 3
-    assert holder.arm.serial.writes == [b"!\n"]
+    assert holder.arm.serial.writes == [b"!"]
     assert holder.estop_locked
     with pytest.raises(ValueError, match="急停"):
         daemon_module.handle("TAP 1 F1500", 1)
@@ -592,7 +592,7 @@ def test_contact_macro_cancellation_prevents_remaining_writes(holder, command):
     arm.serial.readline = readline
     with pytest.raises(RuntimeError, match="停止"):
         daemon_module.handle(command, 1, cancel)
-    assert arm.serial.writes == [b"G91\n", b"G1 Z1.000 F1500\n", b"!\n"]
+    assert arm.serial.writes == [b"G91\n", b"G1 Z1.000 F1500\n", b"!"]
     assert holder.estop_locked
 
 
