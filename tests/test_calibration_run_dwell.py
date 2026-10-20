@@ -174,7 +174,9 @@ def test_business_single_click_consumes_device_calibration_dwell(daemon_and_driv
     bundle["z"]["tapDwellMs"] = dwell
     cb.save_bundle(bundle, root)
     enable_ui_target(root, "send_button", nx=.5, ny=.5)
-    # The caller does not own a second WX timing setting.
-    asyncio.run(driver.click({"target_id": "send_button", "tapDwellMs": 999}))
+    # arm.click 1.2.0：省略 tapDwellMs 时消费档案停留；显式提交时按本次调用值执行。
+    asyncio.run(driver.click({"target_id": "send_button"}))
     assert [line for line in daemon.commands if line.startswith("TAP")] == [
         "TAP 3.000 F1500" + (f" P{dwell / 1000:g}" if dwell else "")]
+    asyncio.run(driver.click({"target_id": "send_button", "tapDwellMs": 250}))
+    assert [line for line in daemon.commands if line.startswith("TAP")][-1] == "TAP 3.000 F1500 P0.25"

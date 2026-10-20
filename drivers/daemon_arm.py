@@ -1454,7 +1454,9 @@ class DaemonArmDriver(ArmDriver):
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise DriverError("driver_limit_exceeded", str(exc)) from exc
         z_profile = calibration.get("z") or {}
-        dwell_ms = target.get("tapDwellMs", entry.get("tapDwellMs", z_profile.get("tapDwellMs", 0)))
+        # 已登记目标自身的接触停留（含人工核验覆盖）优先于本次调用值：
+        # 调用方不得缩短核验过的接触时长；调用值只覆盖校准档案默认值。
+        dwell_ms = entry.get("tapDwellMs", target.get("tapDwellMs", z_profile.get("tapDwellMs", 0)))
         if dwell_ms is None:
             dwell_ms = 0
         dwell_ms = _finite(dwell_ms, "点击停留毫秒")
