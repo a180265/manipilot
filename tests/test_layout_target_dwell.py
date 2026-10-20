@@ -6,6 +6,7 @@ import copy
 
 import pytest
 
+from drivers.arm import DriverError
 from runtime.layout_adaptation import AdaptationError, LayoutAdaptationService
 from tests.layout_d2_helpers import load_contract
 from tests.test_layout_target_driver import target_rig, motion  # noqa: F401
@@ -29,12 +30,32 @@ def test_target_dwell_overrides_device_default_without_affecting_other_targets(t
     record["version"] = 3
     record["local_overrides"] = [override(dwell)]
     rig.select(record)
-    asyncio.run(rig.arm.click({"target_id": "wechat_chats_tab", "tapDwellMs": 999}))
+    # arm.click 1.2.0：省略 tapDwellMs 时消费登记目标停留，不写回校准档案。
+    asyncio.run(rig.arm.click({"target_id": "wechat_chats_tab"}))
     suffix = f" P{dwell / 1000:g}" if dwell else ""
     assert [cmd for cmd in motion(rig) if cmd.startswith("TAP ")][-1].endswith("F1500" + suffix)
+    # 显式请求覆盖登记值与档案默认（0 与 250 两形，登记值与 z=50 同时在场）。
+    asyncio.run(rig.arm.click({"target_id": "wechat_chats_tab", "tapDwellMs": 0}))
+    assert [cmd for cmd in motion(rig) if cmd.startswith("TAP ")][-1].endswith("F1500")
+    asyncio.run(rig.arm.click({"target_id": "wechat_chats_tab", "tapDwellMs": 250}))
+    assert [cmd for cmd in motion(rig) if cmd.startswith("TAP ")][-1].endswith("F1500 P0.25")
+    # 目标隔离：未覆盖目标仍按档案默认，档案未被写回。
     rig.source.image = rig.frame("chat_ime_hidden")
     asyncio.run(rig.arm.click({"target_id": "back_button"}))
     assert [cmd for cmd in motion(rig) if cmd.startswith("TAP ")][-1].endswith("F1500 P0.05")
+    assert cb.load_bundle("arm-01", rig.data)["z"]["tapDwellMs"] == 50
+
+
+@pytest.mark.parametrize("dwell_ms", [-1, 5001, float("nan"), float("inf"), True, None, "bad", "250"])
+def test_invalid_request_dwell_rejected_even_when_target_dwell_registered(target_rig, dwell_ms):
+    rig = target_rig
+    record = copy.deepcopy(rig.parts["ops_svc"].resolve_adaptation("arm-01", 2))
+    record["version"] = 3
+    record["local_overrides"] = [override(120)]
+    rig.select(record)
+    with pytest.raises(DriverError):
+        asyncio.run(rig.arm.click({"target_id": "wechat_chats_tab", "tapDwellMs": dwell_ms}))
+    assert motion(rig) == []
 
 
 @pytest.mark.parametrize("dwell", [0, 120, 2000])

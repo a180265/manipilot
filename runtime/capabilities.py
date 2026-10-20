@@ -134,9 +134,9 @@ BASE_CAPABILITIES: list[dict] = [
                 "target_id": {"type": "string"},
                 "tapDwellMs": {
                     "type": "number", "minimum": 0, "maximum": 5000,
-                    "description": "本次点击的额外接触停留毫秒，覆盖校准档案默认值；"
-                    "已登记目标自身的接触停留优先，不被本次调用缩短。"
-                    "0 表示不额外等待，仍包含下压和抬起时间。越界或非有限数在运动前拒绝。",
+                    "description": "本次点击的额外接触停留毫秒，覆盖布局目标和校准档案的默认值；"
+                    "仅非布尔有限数值合法，数字字符串与空值在运动前拒绝。"
+                    "0 表示不额外等待，仍包含下压和抬起时间。",
                 },
                 "click_attempt": {
                     "type": "integer", "enum": [0, 1, 2], "default": 0,

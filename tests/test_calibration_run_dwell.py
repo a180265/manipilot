@@ -180,3 +180,4 @@ def test_business_single_click_consumes_device_calibration_dwell(daemon_and_driv
         "TAP 3.000 F1500" + (f" P{dwell / 1000:g}" if dwell else "")]
     asyncio.run(driver.click({"target_id": "send_button", "tapDwellMs": 250}))
     assert [line for line in daemon.commands if line.startswith("TAP")][-1] == "TAP 3.000 F1500 P0.25"
+    assert cb.load_bundle("arm-01", root)["z"]["tapDwellMs"] == dwell

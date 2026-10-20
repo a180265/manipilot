@@ -1504,7 +1504,8 @@ def test_tap_dwell_is_finite_bounded_and_forwarded(daemon_and_driver_ui):
 
 
 @pytest.mark.parametrize("dynamic", [False, True])
-@pytest.mark.parametrize("dwell_ms,expected", [(250, " P0.25"), (0, "")])
+@pytest.mark.parametrize("dwell_ms,expected",
+                         [(250, " P0.25"), (0, ""), (5000, " P5"), (250.5, " P0.2505")])
 def test_click_dwell_override_reaches_motion_for_fixed_and_camera_targets(
         daemon_and_driver_ui, dynamic, dwell_ms, expected):
     from drivers import calibration_bundle as cb
@@ -1530,9 +1531,23 @@ def test_click_dwell_override_reaches_motion_for_fixed_and_camera_targets(
     assert cb.load_bundle("arm-01", root)["z"]["tapDwellMs"] == 120
 
 
-@pytest.mark.parametrize("dwell_ms", [-1, 5001, float("nan"), float("inf"), True])
+@pytest.mark.parametrize("dwell_ms", [-1, 5001, float("nan"), float("inf"), True, None, "bad", "250"])
 def test_invalid_click_dwell_override_rejected_before_motion(daemon_and_driver_ui, dwell_ms):
     daemon, driver, root = daemon_and_driver_ui
+    enable_ui_target(root, "input_box", nx=0.5, ny=0.5)
+    with pytest.raises(DriverError):
+        asyncio.run(driver.click({"target_id": "input_box", "tapDwellMs": dwell_ms}))
+    assert daemon.commands == []
+
+
+@pytest.mark.parametrize("dwell_ms", [-1, 5001, float("nan"), float("inf"), True, None, "bad", "250"])
+def test_invalid_click_dwell_rejected_even_when_profile_has_default(
+        daemon_and_driver_ui, dwell_ms):
+    from drivers import calibration_bundle as cb
+    daemon, driver, root = daemon_and_driver_ui
+    bundle = cb.load_bundle("arm-01", root)
+    bundle["z"]["tapDwellMs"] = 120
+    cb.save_bundle(bundle, root)
     enable_ui_target(root, "input_box", nx=0.5, ny=0.5)
     with pytest.raises(DriverError):
         asyncio.run(driver.click({"target_id": "input_box", "tapDwellMs": dwell_ms}))
