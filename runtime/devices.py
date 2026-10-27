@@ -2375,9 +2375,10 @@ class DeviceManager:
 
         # daemon 的串口仍由人工 CONNECT 控制；这里仅在 daemon 已经可用时
         # 恢复业务驱动桥，避免拔出期间擅自打开串口或绕过人工连接。
+        # 启动时串口未连接也可能保留 paused/quarantined/maintenance；这些
+        # 运行限制不能阻止只读 TCP 会话同步，恢复连接本身不解除限制。
         if (
             not state.get("connected")
-            and device.get("status") == "offline"
             and device.get("presence_state") == "present"
             and device.get("driver_mode") == "daemon"
         ):
@@ -2385,7 +2386,7 @@ class DeviceManager:
                 await arm.connect()
                 state = await arm.read_state()
             except Exception:
-                # daemon 尚未人工 CONNECT 时保持 offline；下一轮心跳继续探测。
+                # daemon 尚未人工 CONNECT 时保持原状态；下一轮心跳继续探测。
                 pass
 
         if (self._arms.get(device_id) is not arm

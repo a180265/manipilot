@@ -61,6 +61,46 @@ def test_read_refreshes_completed_calibration_without_restoring_execution(tmp_pa
     assert cb.bundle_path("arm-01", tmp_path).read_bytes() == before
 
 
+@pytest.mark.parametrize("status", ["paused", "quarantined", "maintenance"])
+@pytest.mark.parametrize("serial_connected", [True, False])
+def test_heartbeat_reconnects_bridge_without_releasing_operator_hold(
+        tmp_path, status, serial_connected):
+    """Startup before manual CONNECT must not strand a newly calibrated held device."""
+    manager, device, bundle = _manager(tmp_path)
+    device.update(status=status, daemon_session=None, pause_reason="operator hold",
+                  calibration_marked_status="validated")
+    bridge = manager._arms["arm-01"]
+    bridge.connected = False
+    calls = []
+
+    async def read_state():
+        return {"connected": bridge.connected,
+                "session": bundle["daemonSession"] if bridge.connected else None,
+                "estop_latched": False}
+
+    async def connect():
+        calls.append("connect")
+        if not serial_connected:
+            raise RuntimeError("daemon serial is not connected")
+        bridge.connected = True
+        return {"connected": True, "session": bundle["daemonSession"]}
+
+    bridge.read_state, bridge.connect = read_state, connect
+    before = cb.bundle_path("arm-01", tmp_path).read_bytes()
+    assert manager.get("arm-01")["calibration_checks"][0]["code"] == "daemon_session_unavailable"
+
+    asyncio.run(manager._heartbeat_device("arm-01"))
+
+    current = manager.get("arm-01")
+    assert calls == ["connect"]
+    assert current["calibration_status"] == ("validated" if serial_connected else "due")
+    assert current["daemon_session"] == (bundle["daemonSession"] if serial_connected else None)
+    assert current["status"] == status
+    assert current["pause_reason"] == "operator hold"
+    assert current["device_mode"] == "unmanaged"
+    assert cb.bundle_path("arm-01", tmp_path).read_bytes() == before
+
+
 def test_heartbeat_uses_camera_binding_revision_like_registered_gate(tmp_path):
     manager, device, _bundle = _manager(tmp_path)
 
