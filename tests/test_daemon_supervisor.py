@@ -86,6 +86,7 @@ def test_supervisor_starts_one_process_per_real_daemon(tmp_path):
             assert kwargs["env"]["ARM_DAEMON_DEVICE_ID"] == "arm-01"
             assert kwargs["env"]["ARM_DAEMON_PORT"] == "19895"
             assert kwargs["env"]["ARM_DAEMON_SERIAL"] == "/dev/cu.test"
+            assert kwargs["env"]["ARM_DAEMON_CONFIG_FILE"] == str(tmp_path / "configs" / "devices.json")
         finally:
             await supervisor.stop_all()
 

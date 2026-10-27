@@ -256,6 +256,7 @@ class DaemonSupervisor:
             "ARM_DAEMON_DEVICE_ID": device_id,
             "ARM_DAEMON_PORT": str(port),
             "ARM_DAEMON_SERIAL": str(config.get("serial_port")),
+            "ARM_DAEMON_CONFIG_FILE": str((self.root / "configs" / "devices.json").resolve()),
         })
         if config.get("baud_rate") is not None:
             env["ARM_DAEMON_BAUD"] = str(config["baud_rate"])

@@ -6,8 +6,10 @@ const {test} = require('node:test');
 
 const html = fs.readFileSync(path.join(__dirname, '../scripts/motor_debug_page.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-const mapping = script.slice(script.indexOf('let cameraMappingPending'),
+const mapping = script.slice(script.indexOf('async function refreshCameraChannels'),
   script.indexOf('$("#deviceId").addEventListener("change"'));
+const pending = script.slice(script.indexOf('let serialActionPending'),
+  script.indexOf('$("#btnScanSerial").addEventListener'));
 const reuse = script.slice(script.indexOf('function renderLayoutReuse()'),
   script.indexOf('function renderWizard()'));
 
@@ -27,8 +29,8 @@ function harness({accept = true} = {}) {
     closeDeviceContext: async () => actions.push('close'),
     location: {reload: () => actions.push('reload')},
     api: (url, init) => new Promise((resolve, reject) => calls.push({url, init, resolve, reject})),
-    WZ: null};
-  vm.runInNewContext(mapping + reuse, context);
+    WZ: null, renderSerialAction() {}};
+  vm.runInNewContext(pending + mapping + reuse, context);
   return {node, handlers, calls, actions, context, switchDevice() {
     device = 'arm-02'; context.selectionGeneration++;
   }};

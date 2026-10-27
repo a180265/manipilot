@@ -945,23 +945,51 @@ async function refreshArmDevices() {
   } catch (e) {}
 }
 // ---------- 串口换口检测与重绑（用户拍板 2026-09-30） ----------
+function renderSerialAction() {
+  const opt = $("#serialPortSel").selectedOptions[0];
+  const own = opt?.dataset.bound === DEV_RAW();
+  const other = opt?.dataset.bound && !own;
+  const button = $("#btnBindSerial");
+  button.style.display = !opt?.value || other ? "none" : "";
+  button.textContent = own ? "连接此串口" : "绑定此串口";
+  button.disabled = serialActionPending || deviceConnectPending || cameraMappingPending || (own && $("#btnConnect").disabled);
+}
+let serialActionPending = false;
+let serialScanGeneration = 0;
+let deviceConnectPending = false;
+let cameraMappingPending = false;
+function renderDeviceWritePending() {
+  const pending = serialActionPending || deviceConnectPending || cameraMappingPending;
+  $("#deviceId").disabled = pending;
+  $("#btnScanSerial").disabled = pending;
+  if (pending) $("#btnConnect").disabled = true;
+  renderSerialAction();
+}
 $("#btnScanSerial").addEventListener("click", async e => {
   e.preventDefault();
+  if (serialActionPending || deviceConnectPending || cameraMappingPending) return;
+  const scanGeneration = ++serialScanGeneration;
   const msg = $("#serialPortMsg");
   const sel = $("#serialPortSel");
   msg.textContent = "扫描中…";
   sel.innerHTML = "";
+  renderSerialAction();
+  const device = DEV_RAW(), generation = selectionGeneration;
   try {
-    const data = await api(`/api/serial-ports?device=${DEV_RAW()}`);
+    const data = await api(`/api/serial-ports?device=${encodeURIComponent(device)}`);
+    if (device !== DEV_RAW() || generation !== selectionGeneration || scanGeneration !== serialScanGeneration) return;
     const ports = data.ports || [];
     for (const p of ports) {
       const opt = document.createElement("option");
       opt.value = p.path;
-      const bound = p.bound_device ? `（已绑定 ${p.bound_device}，${p.state}）` : "（未绑定）";
+      const bound = p.bound_device ? `（已绑定 ${p.bound_device}，${p.state === "present" ? "串口在场" : "串口不在场"}）` : "（未绑定）";
       opt.textContent = `${p.path} ${bound} [${(p.serial_number || "").slice(0, 12)}]`;
       opt.dataset.bound = p.bound_device || "";
       sel.appendChild(opt);
     }
+    const preferred = ports.find(p => p.bound_device === device) ||
+      ports.find(p => !p.bound_device && /usbserial|usbmodem/.test(p.path));
+    if (preferred) sel.value = preferred.path;
     if (!ports.length) {
       const opt = document.createElement("option");
       opt.value = ""; opt.textContent = "未发现任何串口";
@@ -971,9 +999,9 @@ $("#btnScanSerial").addEventListener("click", async e => {
     $("#serialPortRow").style.display = "flex";
     // P1-1（2026-09-30 审查）：程序化填充不触发 change——按当前选中项
     // 直接同步绑定按钮可见性（单串口场景 btnBindSerial 才能出现）。
-    const selected = sel.selectedOptions[0];
-    $("#btnBindSerial").style.display = selected && selected.dataset.bound ? "none" : "";
+    renderSerialAction();
   } catch (err) {
+    if (device !== DEV_RAW() || generation !== selectionGeneration || scanGeneration !== serialScanGeneration) return;
     msg.textContent = `扫描失败：${err.message || err}`;
   }
 });
@@ -999,28 +1027,44 @@ $("#btnRecoveryAttempt").addEventListener("click", async e => {
   }
 });
 $("#serialPortSel").addEventListener("change", e => {
-  const opt = e.target.selectedOptions[0];
-  $("#btnBindSerial").style.display = opt && opt.dataset.bound ? "none" : "";
+  renderSerialAction();
 });
 $("#btnBindSerial").addEventListener("click", async e => {
   e.preventDefault();
+  if (serialActionPending || deviceConnectPending || cameraMappingPending) return;
   const sel = $("#serialPortSel");
   const port = sel.value;
   if (!port) { $("#serialPortMsg").textContent = "请先选择串口"; return; }
+  const bound = sel.selectedOptions[0]?.dataset.bound;
+  if (bound && bound !== DEV_RAW()) return;
+  if (bound === DEV_RAW()) {
+    if (!$("#btnConnect").disabled) await connectSelectedDevice();
+    return;
+  }
+  serialActionPending = true;
+  renderDeviceWritePending();
+  sel.disabled = true;
   $("#serialPortMsg").textContent = "绑定中…";
   try {
     const r = await api("/api/serial-bind", {
       method: "POST",
       body: JSON.stringify({device: DEV_RAW(), port}),
     });
-    $("#serialPortMsg").textContent = r.note || "绑定已更新";
+    sel.selectedOptions[0].dataset.bound = DEV_RAW();
+    $("#serialPortMsg").textContent = r.note || "绑定已更新，请点击「连接设备」后重新校准";
     await refreshArmDevices();
+    await refreshStatus();
   } catch (err) {
     $("#serialPortMsg").textContent = `绑定失败：${err.message || err}`;
+  } finally {
+    serialActionPending = false;
+    renderDeviceWritePending();
+    sel.disabled = false;
+    await refreshStatus();
+    renderSerialAction();
   }
 });
 
-let cameraMappingPending = false;
 async function refreshCameraChannels() {
   const device = DEV_RAW(), generation = selectionGeneration;
   const message = $("#cameraChannelMsg"), select = $("#cameraChannelSel");
@@ -1044,14 +1088,14 @@ async function refreshCameraChannels() {
 }
 $("#btnCameraOptions").addEventListener("click", refreshCameraChannels);
 $("#btnBindCamera").addEventListener("click", async () => {
-  if (cameraMappingPending) return;
+  if (cameraMappingPending || serialActionPending || deviceConnectPending) return;
   const device = DEV_RAW(), cameraResource = $("#cameraChannelSel").value;
   if (!cameraResource) { toast("请先刷新并选择相机通道", "err"); return; }
   if (!confirm(`将 ${device} 对应到 ${cameraResource.slice(7)}？保存后请人工重新校准。`)) return;
   cameraMappingPending = true;
   $("#btnBindCamera").disabled = true;
   $("#cameraChannelSel").disabled = true;
-  $("#deviceId").disabled = true;
+  renderDeviceWritePending();
   try {
     const result = await api("/api/camera-bind", {method: "POST", body: JSON.stringify({
       device, cameraResource, requestId: crypto.randomUUID(),
@@ -1067,7 +1111,7 @@ $("#btnBindCamera").addEventListener("click", async () => {
     cameraMappingPending = false;
     $("#btnBindCamera").disabled = false;
     $("#cameraChannelSel").disabled = false;
-    $("#deviceId").disabled = false;
+    renderDeviceWritePending();
   }
 });
 
@@ -1093,6 +1137,9 @@ $("#deviceId").addEventListener("change", async e => {
   await closeDeviceContext();
   if (generation !== selectionGeneration) return;
   selectedDevice = v;
+  $("#serialPortSel").replaceChildren();
+  $("#serialPortMsg").textContent = "请扫描当前设备的串口";
+  renderSerialAction();
   $("#cameraChannelSel").replaceChildren();
   $("#cameraChannelMsg").textContent = "请刷新相机通道后选择对应关系。";
   deviceSelectionError = "";
@@ -1476,8 +1523,9 @@ function renderStatus(data) {
   // 连续 ≥3 拍（约 4.5s）才按「暂不可确认」处理（业主 2026-10-16 拍板）。
   S.staleBeats = d.status_stale ? (S.staleBeats || 0) + 1 : 0;
   const btnConnect = $("#btnConnect"), btnDisconnect = $("#btnDisconnect");
-  btnConnect.disabled = Boolean(d.status_stale) || !d.device_present || Boolean(d.session);
+  btnConnect.disabled = deviceConnectPending || serialActionPending || cameraMappingPending || Boolean(d.status_stale) || !d.device_present || Boolean(d.session);
   btnDisconnect.disabled = Boolean(d.status_stale) || !d.connected || !d.session;
+  renderSerialAction();
   if (d.session)
     setBadge($("#bDaemon"), "ok", `已连接 · 锚点 ${String(d.session).slice(0, 6)}` +
       (d.status_stale ? "（状态滞后）" : ""));
@@ -2855,13 +2903,22 @@ $("#btnHover").addEventListener("click", () => {
   motion("/api/hover", {hoverZ: hz}, "已回悬停高度", `回悬停 Z${hz}`);
 });
 
-$("#btnConnect").addEventListener("click", async () => {
+async function connectSelectedDevice() {
+  if (deviceConnectPending || serialActionPending || cameraMappingPending) return;
+  deviceConnectPending = true;
+  $("#btnConnect").disabled = true;
+  renderDeviceWritePending();
   try {
     const r = await api("/api/connect", {method: "POST"});
     toast(`✅ 机械臂已连接，会话锚点 ${String(r.session).slice(0, 8)}（MPos 已重新从 0 计数）`, "ok");
   } catch (e) { toast("连接失败：" + e.message, "err"); }
-  refreshStatus();
-});
+  finally {
+    deviceConnectPending = false;
+    renderDeviceWritePending();
+    await refreshStatus();
+  }
+}
+$("#btnConnect").addEventListener("click", connectSelectedDevice);
 $("#btnDisconnect").addEventListener("click", async () => {
   try { await api("/api/disconnect", {method: "POST"}); toast("已断开串口连接", "ok"); }
   catch (e) { toast(e.message, "err"); }

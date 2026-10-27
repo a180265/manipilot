@@ -53,6 +53,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import select
 import socket
 import sys
@@ -646,15 +647,45 @@ class ArmHolder:
 
     def _watch(self) -> None:
         while True:
-            present = os.path.exists(PORT)
-            if present != self.device_present:
-                print(f"设备在位变化：{'插入' if present else '拔出'}", flush=True)
-            self.device_present = present
-            arm = self.arm
-            if arm is not None and not present:
-                # 拔线感知：设备节点消失，立即丢弃会话（锚点随之失效）
-                self._drop(arm, reason="串口设备已拔出")
+            # 检测和丢弃会话与 CONNECT 共用锁，避免旧端口检测误断新会话。
+            if self.cmd_lock.acquire(blocking=False):
+                try:
+                    self._refresh_serial_binding_locked()
+                    present = os.path.exists(PORT)
+                    if present != self.device_present:
+                        print(f"设备在位变化：{'插入' if present else '拔出'}", flush=True)
+                    self.device_present = present
+                    arm = self.arm
+                    if arm is not None and not present:
+                        self._drop_locked(arm, reason="串口设备已拔出")
+                finally:
+                    self.cmd_lock.release()
             time.sleep(WATCH_INTERVAL_S)
+
+    def _refresh_serial_binding_locked(self) -> None:
+        """监督器显式指定配置源；独立运行的 daemon 保持 env 绑定。"""
+        global PORT
+        config_file = os.environ.get("ARM_DAEMON_CONFIG_FILE")
+        if not config_file or self.arm is not None or self.leases.snapshot():
+            return
+        try:
+            entries = json.loads(Path(config_file).read_text(encoding="utf-8"))["devices"]
+            if not isinstance(entries, list) or not all(isinstance(c, dict) for c in entries):
+                return
+            matches = [c for c in entries if c.get("device_id") == DEVICE_ID]
+            if len(matches) != 1:
+                return
+            port = matches[0].get("serial_port")
+            if not isinstance(port, str) or not re.fullmatch(r"/dev/(?:cu|tty)\.[A-Za-z0-9._-]+", port):
+                return
+            if any(c.get("device_id") != DEVICE_ID and c.get("serial_port") == port for c in entries):
+                return
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+        if port != PORT:
+            PORT = port
+            self.device_present = os.path.exists(PORT)
+            print(f"已同步 {DEVICE_ID} 串口绑定：{PORT}（等待人工 CONNECT）", flush=True)
 
     def _drop(self, arm: ArmSession, reason: str) -> None:
         # Watcher, manual disconnect and command-error paths all serialize
@@ -676,6 +707,7 @@ class ArmHolder:
 
     def connect(self) -> dict:
         with self.cmd_lock:  # 全程持锁：两路同时 CONNECT 不允许交错开串口
+            self._refresh_serial_binding_locked()
             if self.arm is not None:
                 return {"connected": True, "deviceId": DEVICE_ID,
                         "session": self.arm.session, "already": True,
