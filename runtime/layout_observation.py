@@ -150,6 +150,19 @@ class SelectedLayout:
         self.service, self.device_id = service, device_id
         self.pointer, self.region_pointer = copy.deepcopy(pointer), dict(region_pointer)
         self.adaptation, self.template, self.region = adaptation, template, region
+        # A completed new calibration may reuse this exact immutable selection.
+        # Only runtime projection/source copies change; old evidence is untouched.
+        from drivers import calibration_bundle as cb
+        from runtime.layout_recalibration import derive_execution_layout
+        services = service._services()
+        root = services.get("calibration_data_root", services["state_store"].data_root)
+        bundle = cb.load_bundle(device_id, root)
+        self.recalibration_fingerprint = None
+        if bundle:
+            derived = derive_execution_layout(root, bundle, adaptation, region)
+            if derived:
+                self.adaptation, self.region = derived
+                self.recalibration_fingerprint = cb.motion_calibration_fingerprint(bundle)
         self.assets, self.empty_assets = assets, empty_assets
         current = self.service._device(device_id)
         self.device_binding = {key: current.get(key) for key in BINDING_KEYS}
@@ -211,6 +224,10 @@ class SelectedLayout:
         _require(isinstance(bundle, dict) and bundle.get("status") in {"ready", "motion_ready"}
                  and bundle.get("deviceId") == self.device_id,
                  "本设备当前校准尚未就绪", "geometry_changed")
+        if self.recalibration_fingerprint is not None:
+            from drivers import calibration_bundle as cb
+            _require(cb.motion_calibration_fingerprint(bundle) == self.recalibration_fingerprint,
+                     "布局复用所依据的新校准已变化", "geometry_changed")
         current = self.service._device(self.device_id)
         expected = self.region["installation_binding"]
         _require(bundle.get("schemaVersion") == 3

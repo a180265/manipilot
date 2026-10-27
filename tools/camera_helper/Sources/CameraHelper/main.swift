@@ -241,13 +241,19 @@ private final class FrameUploader: @unchecked Sendable {
                 return
             }
             var code: String?
+            var message = "HTTP \(http.statusCode)"
             if let object = try? JSONSerialization.jsonObject(with: payload)
                     as? [String: Any],
                let errorBody = object["error"] as? [String: Any] {
                 code = errorBody["code"] as? String
+                if let detail = errorBody["message"] as? String,
+                   !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    message += "：" + detail
+                }
+                if let code, !code.isEmpty { message += "（" + code + "）" }
             }
             completion(.failure(V2Error(statusCode: http.statusCode, code: code,
-                                        message: "HTTP \(http.statusCode)")))
+                                        message: message)))
         }.resume()
     }
 
@@ -1491,7 +1497,10 @@ private final class ChannelRow {
 
         devicePopup.target = self
         devicePopup.action = #selector(selectionChanged)
-        channel.onStatus = { [weak self] text in self?.statusLabel.stringValue = text }
+        channel.onStatus = { [weak self] text in
+            self?.statusLabel.stringValue = text
+            self?.statusLabel.toolTip = text
+        }
         channel.onPreview = { [weak self] data in self?.previewView.image = NSImage(data: data) }
     }
 
@@ -1502,7 +1511,7 @@ private final class ChannelRow {
         devicePopup.removeAllItems()
         devicePopup.addItem(withTitle: "未选择")
         devices.forEach {
-            devicePopup.addItem(withTitle: "\($0.localizedName) · \($0.uniqueID.suffix(8))")
+            devicePopup.addItem(withTitle: "\($0.uniqueID) · \($0.localizedName)")
         }
         if let previousID, let index = devices.firstIndex(where: { $0.uniqueID == previousID }) {
             devicePopup.selectItem(at: index + 1)
@@ -1558,6 +1567,7 @@ private final class ChannelRow {
     /// 外部事件（如摄像头拔出）写入状态行的中文说明。
     func note(_ text: String) {
         statusLabel.stringValue = text
+        statusLabel.toolTip = text
     }
 
     @objc private func toggle() {
@@ -1570,6 +1580,7 @@ private final class ChannelRow {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.syncControls()
+                    self?.note("接入已保存；启动画面后到调试台选择机械臂并重新校准")
                 }
             }
         }
@@ -1594,7 +1605,7 @@ private final class ChannelRow {
         toggleButton.isEnabled = channel.isBound(to: device)
         if device == nil {
             statusLabel.stringValue = channel.hasBinding()
-                ? "已绑定的物理摄像头当前不可用"
+                ? "原接入已离线：选择当前摄像头保存，再重新校准"
                 : "未选择摄像头"
         } else if channel.isBound(to: device) {
             statusLabel.stringValue = "绑定已恢复，等待启动"

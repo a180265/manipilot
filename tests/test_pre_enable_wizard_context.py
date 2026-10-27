@@ -12,7 +12,8 @@ from tests.test_layout_observation import offline_only  # noqa: F401
 
 @pytest.mark.parametrize("fault", [
     "none", "unregistered", "draft_only", "needs_review",
-    "content", "device", "version", "pointer_changed",
+    "content", "device", "version", "pointer_changed", "source_binding_changed",
+    "source_and_other_reason",
 ])
 def test_debug_wizard_region_reader_rejects_unselected_or_changed(tmp_path, monkeypatch, fault):
     from runtime.layout_region import canonical_digest
@@ -41,6 +42,10 @@ def test_debug_wizard_region_reader_rejects_unselected_or_changed(tmp_path, monk
         view["pending_draft"] = {"id": "arm-01", "version": 1}
     if fault == "needs_review":
         view["status"] = "needs_review"
+    if fault in {"source_binding_changed", "source_and_other_reason"}:
+        view.update(status="needs_review", reasons=["source_binding_changed"])
+        if fault == "source_and_other_reason":
+            view["reasons"].append("phone_not_located")
     if fault == "content":
         record["rect"]["x"] = .2
     reads = []
@@ -56,7 +61,7 @@ def test_debug_wizard_region_reader_rejects_unselected_or_changed(tmp_path, monk
         return copy.deepcopy(view)
 
     monkeypatch.setattr(debug, "_auto_proxy", proxy)
-    if fault == "none":
+    if fault in {"none", "source_binding_changed"}:
         result = debug.wizard_search_region("arm-01")
         assert result["sha256"] == record["sha256"]
         assert result["_selection_revision"] == 1

@@ -10,6 +10,7 @@ import pytest
 @pytest.mark.parametrize("script_name", [
     "motor_debug_auto_calibration_ui.test.cjs",
     "motor_debug_gesture_ui.test.cjs",
+    "motor_debug_camera_mapping_ui.test.cjs",
 ])
 def test_calibration_ui_handlers(script_name):
     node = shutil.which("node")

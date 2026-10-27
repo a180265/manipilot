@@ -76,3 +76,10 @@ defaults read com.armfleet.camerahelper captureFormatPinsByUniqueID
 帧服务（8790）按通道记录绑定变更、来源切换/冲突、分辨率不匹配、画面过期/恢复
 与服务重启事件：`GET /cameras/{camera_id}/events`，并追加落盘
 `data/camera_helper/events.jsonl`。
+
+保存绑定失败时显示 HTTP 状态、服务端中文原因和错误码；长消息可悬停查看。
+物理摄像头可独立绑定到 cam-01～cam-10，不以机械臂在线或机械状态已知为前提。
+`camera_unique_id_conflict` 表示相机已被其他通道绑定；实际动作占用或未完成写入仍会拒绝修改，需按中文原因处理。
+换口后刷新列表，按完整 USB 标识选择并保存，再启动通道；在调试台设置机械臂与通道对应并完成人工校准。
+原页面素材保留，校准完成时显示是否已沿用；不会凭相同名称、标识后缀或 USB 序号推断旧校准仍有效。
+离线回归：`python3 Tests/check_binding_errors.py`（不访问相机或生产服务）。

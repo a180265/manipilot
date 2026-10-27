@@ -417,8 +417,15 @@ class RealCameraDriver(CameraDriver):
         source = self._frame_provider
         if source is None:
             return None
+        resolution = getattr(source, "last_resolution", None)
         info = {
             "camera_id": getattr(source, "last_camera_id", None),
+            "device_id": getattr(source, "last_device_id", None),
+            "device_unique_id": getattr(source, "last_device_unique_id", None),
+            "camera_binding_id": getattr(source, "last_camera_binding_id", None),
+            "source_geometry_id": getattr(source, "last_source_geometry_id", None),
+            "frame_width": resolution[0] if resolution else None,
+            "frame_height": resolution[1] if resolution else None,
             "binding_revision": getattr(source, "last_binding_revision", None),
             "frame_seq": getattr(source, "last_frame_seq", None),
             "captured_at": getattr(source, "last_captured_at", None),

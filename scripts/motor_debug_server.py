@@ -506,6 +506,23 @@ def serial_bind_payload(device: str, port: str) -> dict:
             "note": "绑定已更新；daemon 将在新端口重连，随后走正常校准流程"}
 
 
+def camera_bind_payload(device: str, camera_resource: str, request_id: str) -> tuple[int, dict]:
+    """Assign a registered capture channel through Fleet; never edit local mirror files."""
+    import re
+    strict_debug_device(device)
+    if not re.fullmatch(r"camera:cam-(?:0[1-9]|10)", camera_resource or ""):
+        raise ValueError("请选择 cam-01 至 cam-10 摄像头通道")
+    if not request_id or len(request_id) > 128:
+        raise ValueError("保存相机对应关系需要有效请求编号")
+    return _agent_passthrough("PUT", f"/v1/devices/{device}/binding", {
+        "camera_binding_id": camera_resource,
+        "operator_id": "调试台", "role": "operator",
+        "reason": "人工修改相机对应关系，随后重新校准",
+        "confirmation_token": "确认执行", "client_request_id": request_id,
+        "correlation_id": request_id,
+    })
+
+
 _LAYOUT_TOKEN_ENV = "ARMFLEET_LAYOUT_FORWARDER_TOKEN_FILE"
 
 
@@ -1122,8 +1139,13 @@ def create_device_context(device: str) -> dict:
         checks.append({"code": "camera_unbound", "message": "摄像头尚未绑定物理设备"})
     if camera.get("binding_revision") is None:
         checks.append({"code": "camera_binding_revision_missing", "message": "摄像头绑定版本缺失"})
-    expected_width = cfg.get("expected_frame_width")
-    expected_height = cfg.get("expected_frame_height")
+    v2_binding = _camera_v2_binding(device, cfg)
+    live_v2_size = cfg.get("camera_mode") == "multi_channel" and v2_binding.get("enabled") and all(
+        v2_binding.get(key) for key in ("cameraBindingId", "sourceGeometryId", "sourceGenerationId"))
+    # A newly established trusted source may have a different output size. Freeze
+    # its current dimensions in this context; subsequent drift still invalidates it.
+    expected_width = None if live_v2_size else cfg.get("expected_frame_width")
+    expected_height = None if live_v2_size else cfg.get("expected_frame_height")
     if expected_width and int(camera.get("width") or 0) != int(expected_width):
         checks.append({"code": "camera_resolution_changed", "message": "摄像头画面宽度与配置不一致"})
     if expected_height and int(camera.get("height") or 0) != int(expected_height):
@@ -1143,7 +1165,6 @@ def create_device_context(device: str) -> dict:
     # B05（T31/T32/T33）：v2 上下文携带单通道实例与采集代际——迟到回包按
     # 代际隔离不串机；缺来源（binding/geometry/generation 任一缺失）时
     # 不得生成 ready 上下文（只给查看/校准资格）。
-    v2_binding = _camera_v2_binding(device, cfg)
     if v2_binding.get("enabled") and (
             not v2_binding.get("cameraBindingId")
             or not v2_binding.get("sourceGeometryId")
@@ -2348,7 +2369,11 @@ def wizard_search_region(device: str) -> dict | None:
         # unregistered：未安装粗框包的旧设备（判别依据=登记状态/版本，
         # 不是适配是否为空）——保留旧全图路径。
         return None
-    if (view or {}).get("status") != "verified" or not isinstance(selected, dict):
+    # 换 USB/相机后旧粗框仍可作本轮重新定位的搜索提示；它不授权旧校准
+    # 执行动作。只放行来源绑定过期，资料缺失/损坏和其他待复核原因仍拒绝。
+    source_changed = ((view or {}).get("status") == "needs_review"
+                      and set((view or {}).get("reasons") or []) == {"source_binding_changed"})
+    if ((view or {}).get("status") != "verified" and not source_changed) or not isinstance(selected, dict):
         raise RegionContextError(
             "region_context_invalid", "本设备搜索范围尚未复核或没有生效版本")
     version = selected.get("version")
@@ -2381,9 +2406,18 @@ def get_wizard(device: str) -> CalibrationWizard:
     wizard = WIZARDS.get(device)
     if wizard is None:
         daemon = daemon_for(device)
+        # Match Fleet's configured layout database while keeping explicit isolated
+        # debug data roots independent of production configuration.
+        from runtime.config import load_platform_config
+        layout_db = DATA_DIR / "layout.db"
+        if not os.environ.get("MOTOR_DEBUG_DATA_DIR"):
+            platform = load_platform_config()
+            if platform.get("layout_db_path"):
+                layout_db = platform._resolve_path(platform.get("layout_db_path"))
         wizard = CalibrationWizard(
             device=device, daemon=daemon, position_read=daemon.mpos,
             ime=IME_CLIENT, data_root=DATA_DIR,
+            layout_db_path=layout_db,
             # R2-04（§4.1）：后台自动校准动作的安装锁与调试台动作锁同根
             # （INSTALLATION_LOCK_ROOT），由 wizard 实际执行者持有到最后安全收尾。
             installation_lock_root=INSTALLATION_LOCK_ROOT,
@@ -3867,7 +3901,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 不让并发请求在快照锁外堆积摄像头/daemon 查询。
                 require_context_local(device, context_id)
             elif path.startswith("/api/") and path not in (
-                    "/api/devices", "/api/serial-ports",
+                    "/api/devices", "/api/serial-ports", "/api/camera-options",
                     "/api/debug-session") \
                     and not is_auto_proxy_path(path):
                 require_context(device, context_id, motion=False)
@@ -4054,6 +4088,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/wizard/state":
                 wizard = get_wizard(device)
                 self._json(wizard.state_view())
+            elif path == "/api/camera-options":
+                strict_debug_device(query.get("device"))
+                status, payload = _agent_passthrough(
+                    "GET", f"/v1/devices/{device}/binding/options")
+                self._json(payload, code=status)
             elif path == "/api/devices":
                 self._json({"devices": list_arm_devices()})
             elif path == "/api/serial-ports":
@@ -4141,7 +4180,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = self.path.split("?")[0]
         body = self._body()
-        if path in {"/api/device-context", "/api/gestures/test", "/api/gestures/review",
+        if path in {"/api/device-context", "/api/camera-bind", "/api/gestures/test", "/api/gestures/review",
                     "/api/gestures/preview", "/api/gestures/saved"}:
             try:
                 if not isinstance(body, dict):
@@ -4158,6 +4197,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
         device = normal_device(body.get("deviceId") or body.get("device"))
         _REQUEST_CONTEXT.device = device
+        if path == "/api/camera-bind":
+            try:
+                with _device_operation_guard(device):
+                    status, payload = camera_bind_payload(
+                        device, str(body.get("cameraResource") or ""),
+                        str(body.get("requestId") or ""))
+                self._json(payload, code=status)
+            except Exception as exc:
+                status, payload = api_error(exc)
+                self._json(payload, code=status)
+            return
         daemon = daemon_for(device)
         # 请求级设备互斥→共享安装锁→原动作/输入短锁；均不排队。
         # 参数测试须从布防前持有到回报、保存及安全收尾结束；STOP/急停不取锁。

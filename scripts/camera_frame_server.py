@@ -51,6 +51,9 @@ FRAME_SOURCES: dict[str, str] = {
     "legacy": "旧单路兼容来源",
 }
 FRAME_LOCK = threading.RLock()
+_BINDING_WRITE_LOCK = threading.Lock()
+_DEVICES_PATH = DEFAULT_DEVICES_PATH
+_DEVICES_SIGNATURE = None
 LEGACY_CAMERA_ID: str | None = None
 BINDINGS_PATH = DEFAULT_BINDINGS_PATH
 # §4（camera-binding 附件，B01）：CAMERA_CONTROL_TOKEN_FILE 配置后启用 v2 写
@@ -123,19 +126,12 @@ def _load_device_configs(path: Path) -> dict[str, dict]:
             "expected_width": raw.get("expected_frame_width"),
             "expected_height": raw.get("expected_frame_height"),
         }
-    # Only synthesize the ten-channel compatibility layout when no device
-    # configuration exists at all.  A deliberate single-device production
-    # config must not silently reintroduce arm-02..arm-10 as selectable
-    # simulation channels.
-    if not configs:
-        for camera_id in DEFAULT_CAMERA_IDS:
-            suffix = camera_id.rsplit("-", 1)[-1]
-            configs.setdefault(camera_id, {
-                "camera_id": camera_id,
-                "device_id": f"arm-{suffix}",
-                "expected_width": None,
-                "expected_height": None,
-            })
+    # 摄像头通道独立于机械臂登记；未分配通道不虚构同编号机械臂。
+    for camera_id in DEFAULT_CAMERA_IDS:
+        configs.setdefault(camera_id, {
+            "camera_id": camera_id, "device_id": camera_id,
+            "expected_width": None, "expected_height": None,
+        })
     return configs
 
 
@@ -159,16 +155,17 @@ def _load_bindings(path: Path) -> tuple[int, dict[str, dict]]:
             "display_name": str(raw.get("displayName") or "摄像头"),
             "bound_at": raw.get("boundAt"),
             "bound_by": raw.get("boundBy"),
+            # 老档案首次修改前沿用旧全局值；写入时为各通道固化。
+            "binding_revision": int(raw.get("bindingRevision", payload.get("revision") or 0)),
         }
     return int(payload.get("revision") or 0), bindings
 
 
 def _new_channel(camera_id: str) -> dict:
     cfg = CAMERA_CONFIGS.get(camera_id) or {}
-    suffix = camera_id.rsplit("-", 1)[-1]
     return {
         "camera_id": camera_id,
-        "device_id": str(cfg.get("device_id") or f"arm-{suffix}"),
+        "device_id": str(cfg.get("device_id") or camera_id),
         "frame": b"",
         "seq": 0,
         "source_seq": None,
@@ -255,7 +252,7 @@ def configure_state(
     global CHANNELS, LEGACY_CAMERA_ID, MAX_FRAME_BYTES
     global STALE_AFTER_SECONDS, UNAVAILABLE_AFTER_SECONDS, EVENTS_PATH
     global INSTALLATION_DATA_ROOT, SOURCE_EVIDENCE_DB, SOURCE_EVIDENCE_DIR
-    global _SOURCE_EVIDENCE_STORE
+    global _SOURCE_EVIDENCE_STORE, _DEVICES_PATH, _DEVICES_SIGNATURE
     BINDINGS_PATH = bindings_path or DEFAULT_BINDINGS_PATH
     EVENTS_PATH = events_path or DEFAULT_EVENTS_PATH
     if data_root is not None:
@@ -269,7 +266,9 @@ def configure_state(
     SOURCE_EVIDENCE_DB = Path(fleet_db_path) if fleet_db_path else None
     SOURCE_EVIDENCE_DIR = Path(evidence_dir) if evidence_dir else None
     _SOURCE_EVIDENCE_STORE = None
-    CAMERA_CONFIGS = _load_device_configs(devices_path or DEFAULT_DEVICES_PATH)
+    _DEVICES_PATH = devices_path or DEFAULT_DEVICES_PATH
+    CAMERA_CONFIGS = _load_device_configs(_DEVICES_PATH)
+    _DEVICES_SIGNATURE = _device_config_signature()
     BINDING_REVISION, BINDINGS = _load_bindings(BINDINGS_PATH)
     LEGACY_CAMERA_ID = _camera_id(legacy_camera_id) if legacy_camera_id else None
     MAX_FRAME_BYTES = int(max_frame_bytes or _env_int("CAMERA_MAX_FRAME_BYTES", DEFAULT_MAX_FRAME_BYTES))
@@ -281,6 +280,7 @@ def configure_state(
             for camera_id in sorted(CAMERA_CONFIGS)
         }
         CHANNEL_EVENTS.clear()
+        _V2_FRAME_RECEIPTS.clear()
     if record_restart:
         _audit_event("service_restart", detail={
             "binding_revision": BINDING_REVISION,
@@ -300,6 +300,7 @@ def _persist_bindings() -> None:
                 "displayName": item["display_name"],
                 "boundAt": item.get("bound_at"),
                 "boundBy": item.get("bound_by"),
+                "bindingRevision": item.get("binding_revision", BINDING_REVISION),
             }
             for camera_id, item in sorted(BINDINGS.items())
         ],
@@ -314,8 +315,56 @@ def _persist_bindings() -> None:
 
 def channel_device_id(camera_id: str) -> str:
     """通道 → 机械臂设备号（安装锁按 device_id 派生；未配置通道回退通道名）。"""
+    _refresh_device_assignments()
     return str((CAMERA_CONFIGS.get(camera_id) or {}).get("device_id")
                or camera_id)
+
+
+def _device_config_signature():
+    try:
+        stat = _DEVICES_PATH.stat()
+        return stat.st_ino, stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return None
+
+
+def _clear_channel_source(camera_id: str, generation: str | None = None) -> None:
+    """FRAME_LOCK 内撤销本通道来源；不清其他通道回执。"""
+    channel = CHANNELS.get(camera_id) or {}
+    retired = {channel.get("v2_generation_id"), channel.get("v2_generation"),
+               (channel.get("v2_session") or {}).get("source_generation_id")}
+    for key in list(_V2_FRAME_RECEIPTS):
+        if key[0] is not None and key[0] in retired:
+            _V2_FRAME_RECEIPTS.pop(key, None)
+    CHANNELS[camera_id] = {**_new_channel(camera_id),
+        "v2_generation_id": generation, "v2_session": None,
+        "v2_last_seq": -1, "v2_last_captured_ns": None,
+        "v2_uncertainty_ms": None, "v2_timing_provenance": None}
+
+
+def _refresh_device_assignments() -> None:
+    """读取已原子保存的工位映射；仅变更通道撤销旧来源，等待重新握手。"""
+    global CAMERA_CONFIGS, _DEVICES_SIGNATURE
+    signature = _device_config_signature()
+    if signature == _DEVICES_SIGNATURE or signature is None:
+        return
+    with FRAME_LOCK:
+        if signature == _DEVICES_SIGNATURE:
+            return
+        # 配置写坏不当作删除全部映射。正式写入口采用原子替换。
+        try:
+            payload = json.loads(_DEVICES_PATH.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("devices"), list):
+                return
+        except (OSError, ValueError):
+            return
+        updated = _load_device_configs(_DEVICES_PATH)
+        old = CAMERA_CONFIGS
+        CAMERA_CONFIGS = updated
+        _DEVICES_SIGNATURE = signature
+        for camera_id in set(old) | set(updated):
+            if old.get(camera_id) != updated.get(camera_id):
+                _clear_channel_source(camera_id)
 
 
 # ---- R3-08/R3-10 受控来源证明：本机宿主代际 + helper 摘要 + 时钟包络核验 ----
@@ -813,6 +862,8 @@ def _register_capture_session(camera_id: str, *, client_instance_id: str,
         sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     with FRAME_LOCK:
         channel = _channel(camera_id)
+        if _binding_entry_for(camera_id).get("cameraBindingId") != camera_binding_id:
+            raise _FrameReject(409, "source_binding_changed", "握手期间相机绑定已变化")
         current = channel.get("v2_session")
         if current is not None \
                 and current["client_instance_id"] == client_instance_id \
@@ -865,7 +916,7 @@ def _register_capture_session(camera_id: str, *, client_instance_id: str,
             "response": response,
         }
         for key in [k for k in _V2_FRAME_RECEIPTS
-                    if k[0] and k[0] != generation]:
+                    if retired is not None and k[0] == retired]:
             _V2_FRAME_RECEIPTS.pop(key, None)
         _audit_event("frame_source_changed", camera_id=camera_id, detail={
             "from": retired, "to": generation,
@@ -891,6 +942,7 @@ def channel_generation(camera_id: str) -> str | None:
 
 
 def _channel(camera_id: str) -> dict:
+    _refresh_device_assignments()
     if camera_id not in CAMERA_CONFIGS:
         raise KeyError(camera_id)
     with FRAME_LOCK:
@@ -915,10 +967,10 @@ _STATUS_ADVICE = {
 
 
 def _channel_status(camera_id: str) -> dict:
-    channel = _channel(camera_id)
-    binding = BINDINGS.get(camera_id)
-    cfg = CAMERA_CONFIGS[camera_id]
     with FRAME_LOCK:
+        channel = _channel(camera_id)
+        binding = BINDINGS.get(camera_id)
+        cfg = CAMERA_CONFIGS[camera_id]
         age_ms = _frame_age_ms(channel)
         error = channel.get("last_error")
         if not binding and not (camera_id == LEGACY_CAMERA_ID and channel["frame"]):
@@ -942,7 +994,7 @@ def _channel_status(camera_id: str) -> dict:
             "device_unique_id": binding.get("device_unique_id") if binding else None,
             "display_name": binding.get("display_name") if binding else None,
             "bound_by": binding.get("bound_by") if binding else None,
-            "binding_revision": BINDING_REVISION,
+            "binding_revision": int(binding.get("binding_revision", 0)) if binding else 0,
             "status": status,
             "status_display": display,
             "status_advice": _STATUS_ADVICE.get(status, ""),
@@ -981,6 +1033,7 @@ def _record_status_transition(camera_id: str, channel: dict, status: str, displa
 
 
 def _channel_listing() -> dict:
+    _refresh_device_assignments()
     return {
         "service": "camera-frame-server",
         "service_version": "multi-camera-v2",
@@ -1027,6 +1080,7 @@ def _save_binding(camera_id: str, payload: dict) -> dict:
             "display_name": str(payload.get("displayName") or "摄像头"),
             "bound_at": _utc_iso(),
             "bound_by": str(payload.get("operator") or "local-operator"),
+            "binding_revision": BINDING_REVISION + 1,
         }
         BINDING_REVISION += 1
         CHANNELS[camera_id] = _new_channel(camera_id)
@@ -1218,6 +1272,13 @@ def _accept_frame_v2(handler, camera_id: str) -> None:
     jpeg_sha = hashlib.sha256(data).hexdigest()
     receipt_key = (meta["source_generation_id"], seq)
     with FRAME_LOCK:
+        channel = _channel(camera_id)
+        # 解码期间可能换绑/改映射：提交前重新核对，旧帧不得写进新来源。
+        if (channel.get("v2_session") is not session
+                or _binding_entry_for(camera_id).get("cameraBindingId")
+                != meta["camera_binding_id"]):
+            handler._error(409, "source_binding_changed", "上传期间相机来源已变化")
+            return
         prior = _V2_FRAME_RECEIPTS.get(receipt_key)
         if prior is not None:
             if prior["jpeg_sha256"] == jpeg_sha:
@@ -1226,8 +1287,7 @@ def _accept_frame_v2(handler, camera_id: str) -> None:
             handler._error(409, "camera_source_conflict",
                            "同代际同序号不同内容：拒绝")
             return
-        channel = _channel(camera_id)
-        last_seq = int(channel.get("v2_last_seq") or -1)
+        last_seq = int(channel.get("v2_last_seq", -1))
         if seq <= last_seq:
             handler._error(409, "camera_source_conflict",
                            f"源序号倒退（当前 {last_seq}）：低序号拒绝")
@@ -1241,7 +1301,7 @@ def _accept_frame_v2(handler, camera_id: str) -> None:
                            "PTS 单调采样时间较上一接纳帧倒退：时钟基准变化，拒绝")
             return
         received_at = _now_iso()
-        device_id = channel_device_id(camera_id)
+        device_id = channel["device_id"]
         # R2-18：桥序号在归档记录构造前分配（接纳快照字段 source_frame_seq）
         bridge_seq = channel["seq"] + 1
         # FIX-06②：合法 v2 帧 → 归档 camera_source_v2 证据（同代际+序号幂等复用；
@@ -1268,7 +1328,7 @@ def _accept_frame_v2(handler, camera_id: str) -> None:
                     "source_clock_id": meta["source_clock_id"],
                     "source_captured_monotonic_ns": captured_monotonic_ns,
                     # R2-18：诊断修订与桥序号为接纳时冻结快照，不得事后补写
-                    "binding_revision": int(BINDING_REVISION),
+                    "binding_revision": int(BINDINGS[camera_id]["binding_revision"]),
                     "source_frame_seq": bridge_seq,
                     "captured_at": meta["captured_at"],
                     "received_at": received_at,
@@ -1583,33 +1643,33 @@ class Handler(BaseHTTPRequestHandler):
         return path[len(prefix):-len(suffix)].strip("/") or None
 
     def _send_frame(self, camera_id: str) -> None:
-        try:
-            status = _channel_status(camera_id)
-        except KeyError:
-            self._error(404, "camera_not_found", "摄像头通道不存在", camera_id=camera_id)
-            return
-        if status["status"] in ("wrong_binding", "resolution_mismatch"):
-            error = status.get("error") or {}
-            self._error(409, error.get("code", "camera_unavailable"), status["status_display"])
-            return
-        if status["status"] != "streaming":
-            self._error(
-                503,
-                "camera_frame_stale",
-                "摄像头没有可用实时帧",
-                camera_id=camera_id,
-                camera_status=status["status"],
-            )
-            return
-        channel = _channel(camera_id)
-        binding = BINDINGS.get(camera_id) or {}
         with FRAME_LOCK:
+            try:
+                status = _channel_status(camera_id)
+            except KeyError:
+                self._error(404, "camera_not_found", "摄像头通道不存在", camera_id=camera_id)
+                return
+            if status["status"] in ("wrong_binding", "resolution_mismatch"):
+                error = status.get("error") or {}
+                self._error(409, error.get("code", "camera_unavailable"), status["status_display"])
+                return
+            if status["status"] != "streaming":
+                self._error(
+                    503,
+                    "camera_frame_stale",
+                    "摄像头没有可用实时帧",
+                    camera_id=camera_id,
+                    camera_status=status["status"],
+                )
+                return
+            channel = CHANNELS[camera_id]
+            binding = BINDINGS.get(camera_id) or {}
             frame = bytes(channel["frame"])
             headers = {
                 "X-Camera-Id": camera_id,
                 "X-Device-Id": channel["device_id"],
                 "X-Camera-Unique-Id": binding.get("device_unique_id", ""),
-                "X-Binding-Revision": str(BINDING_REVISION),
+                "X-Binding-Revision": str(binding.get("binding_revision", 0)),
                 "X-Frame-Seq": str(channel["seq"]),
                 "X-Frame-At": str(channel["captured_at"] or ""),
                 "X-Captured-At": str(channel["captured_at"] or ""),
@@ -1844,48 +1904,34 @@ class Handler(BaseHTTPRequestHandler):
             return
         channel = path[len("/cameras/"):].split("/")[0]
         try:
-            # FIX-05（§4.1）：bind/unbind/renew 取本设备排他安装锁（非阻塞，
-            # 忙=动作进行中 → 立即 409，不排队）；锁内完成意图/原子替换/committed
-            # 与换绑清帧，持有到绑定及响应生成结束。
-            with v2.installation_lock(INSTALLATION_DATA_ROOT,
-                                      channel_device_id(channel), exclusive=True):
-                # R3-11：拿到锁不代表没有未知动作——排他锁内先核对持久在途
-                # 任务/未解决机械与输入未知/当前 daemon 安全事实（Fleet 只读
-                # 服务签名查询；读不全/过期/断网保守拒绝），再提交变更。
-                _require_fleet_device_safe(channel_device_id(channel))
-                intent = v2.save_binding_v2(BINDINGS_PATH, {
-                    "request_id": body.get("requestId"),
-                    "action": action,
-                    "camera_id": channel,
-                    "device_unique_id": body.get("deviceUniqueId"),
-                    "display_name": body.get("displayName"),
-                    "bound_by": body.get("boundBy"),
-                    "principal_id": f"camera-helper:{os.getuid()}",
-                })
-                # 换绑/renew：清该通道旧帧/来源会话并签发新代际（§4.1 提交保护内；
-                # 旧代际上下文/帧链立即失效=换绑清帧断流 T34）
-                if action in ("bind", "renew"):
-                    new_generation = intent["response"].get("sourceGenerationId")
-                    with FRAME_LOCK:
-                        channel_state = _channel(channel)
-                        channel_state["frame"] = b""
-                        channel_state["seq"] = 0
-                        channel_state["source_seq"] = None
-                        channel_state["captured_at"] = None
-                        channel_state["received_at"] = None
-                        channel_state["received_epoch"] = None
-                        channel_state["v2_generation_id"] = new_generation
-                        channel_state["v2_last_seq"] = -1
-                        channel_state["v2_last_captured_ns"] = None
-                        channel_state["v2_session"] = None  # 会话随换绑失效
-                        # R2-18：时钟证明随会话/绑定失效清空，不得跨绑复用
-                        channel_state["v2_uncertainty_ms"] = None
-                        channel_state["v2_timing_provenance"] = None
-                        for key in [k for k in _V2_FRAME_RECEIPTS
-                                    if k[0] and k[0] != new_generation]:
-                            _V2_FRAME_RECEIPTS.pop(key, None)
-                # R2-09：绑定提交完成后同步进程内视图（bind/renew/unbind 一致）
-                _reload_bindings_view()
+            _channel(channel)
+        except KeyError:
+            self._error(404, "camera_not_found", "摄像头通道未登记")
+            return
+        try:
+            # 采集登记不依赖机械臂在线/unknown。动作共享锁仍阻止在执行中换源；
+            # 全局写锁串行化绑定文件写入，帧锁覆盖持久化及来源撤销。
+            with _BINDING_WRITE_LOCK, v2.installation_lock(
+                    INSTALLATION_DATA_ROOT, "camera-" + channel, exclusive=True):
+                owner = channel_device_id(channel)
+                with v2.installation_lock(INSTALLATION_DATA_ROOT, owner, exclusive=True), FRAME_LOCK:
+                    if channel_device_id(channel) != owner:
+                        raise v2.CameraBindingError("device_maintenance_busy", "工位映射已变化，请刷新后重试")
+                    request_id = body.get("requestId")
+                    prior = v2.load_operation(BINDINGS_PATH, str(request_id or ""))
+                    intent = v2.save_binding_v2(BINDINGS_PATH, {
+                        "request_id": request_id,
+                        "action": action,
+                        "camera_id": channel,
+                        "device_unique_id": body.get("deviceUniqueId"),
+                        "display_name": body.get("displayName"),
+                        "bound_by": body.get("boundBy"),
+                        "principal_id": f"camera-helper:{os.getuid()}",
+                    })
+                    replayed = prior is not None and prior.get("state") == "committed"
+                    if action in ("bind", "renew", "unbind") and not replayed:
+                        _clear_channel_source(channel, intent["response"].get("sourceGenerationId"))
+                    _reload_bindings_view()
         except v2.CameraBindingError as exc:
             status = {"camera_request_invalid": 422,
                       "camera_unique_id_conflict": 409,

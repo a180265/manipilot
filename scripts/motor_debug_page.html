@@ -141,7 +141,13 @@
   <span id="serialPortMsg" style="color:#8a94a2"></span>
 </div>
 <div id="deviceContext" class="hint" style="margin:8px 16px 0;color:#b8c3cf"></div>
-<div id="deviceBinding" class="hint" style="margin:4px 16px 0;color:#8a94a2">摄像头绑定由 CameraHelper 管理；本页只使用当前设备已经绑定的分路摄像头。</div>
+<div id="deviceBinding" class="hint" style="margin:4px 16px 0;color:#8a94a2">在 CameraHelper 登记物理摄像头，再为当前机械臂选择画面通道。</div>
+<div class="row" style="margin:6px 16px 0">
+  <button id="btnCameraOptions">刷新相机通道</button>
+  <select id="cameraChannelSel" aria-label="当前机械臂的相机通道"></select>
+  <button id="btnBindCamera">保存相机对应关系</button>
+  <span id="cameraChannelMsg" class="hint">更改后请人工重新校准；页面模板和素材保留。</span>
+</div>
 
 <section id="regionEditor" style="margin:14px 16px">
   <h2>📱 手机粗框（真实源预览）</h2>
@@ -177,6 +183,7 @@
   </h2>
   <div class="hint" id="wzInvalid" style="display:none;color:#ff9c9c"></div>
   <div class="hint" id="wzActionInfo" role="status" aria-live="polite"></div>
+  <div class="hint" id="wzLayoutReuse" role="status" aria-live="polite" style="display:none"></div>
 
   <!-- A · 设备与现场状态 -->
   <div class="sub" style="border-top:none;margin-top:4px;padding-top:0">
@@ -823,7 +830,7 @@ function renderDeviceContext() {
       `当前帧 ${size}${checks ? ` · 阻断：${checks}` : " · 身份检查通过"}`;
   } else {
     binding.textContent = `绑定关系：${item.deviceId} → ${item.cameraId || "未配置"} · ` +
-      "请在 CameraHelper 选择物理摄像头并保存绑定；调试台不提供自由改绑。";
+      "请在 CameraHelper 登记物理摄像头，再在此选择对应通道并重新校准。";
   }
 }
 async function closeDeviceContext() {
@@ -1013,6 +1020,57 @@ $("#btnBindSerial").addEventListener("click", async e => {
   }
 });
 
+let cameraMappingPending = false;
+async function refreshCameraChannels() {
+  const device = DEV_RAW(), generation = selectionGeneration;
+  const message = $("#cameraChannelMsg"), select = $("#cameraChannelSel");
+  try {
+    const data = await api(`/api/camera-options?device=${encodeURIComponent(device)}`);
+    if (device !== DEV_RAW() || generation !== selectionGeneration) return;
+    select.replaceChildren();
+    for (const item of data.camera_options || []) {
+      if (!/^camera:cam-(0[1-9]|10)$/.test(item.resource_id)) continue;
+      const option = document.createElement("option");
+      option.value = item.resource_id;
+      option.textContent = item.label;
+      option.selected = !!item.selected;
+      select.appendChild(option);
+    }
+    message.textContent = "选择当前机械臂使用的画面通道；保存后人工重新校准。";
+  } catch (error) {
+    if (device === DEV_RAW() && generation === selectionGeneration)
+      message.textContent = `读取相机通道失败：${error.message}`;
+  }
+}
+$("#btnCameraOptions").addEventListener("click", refreshCameraChannels);
+$("#btnBindCamera").addEventListener("click", async () => {
+  if (cameraMappingPending) return;
+  const device = DEV_RAW(), cameraResource = $("#cameraChannelSel").value;
+  if (!cameraResource) { toast("请先刷新并选择相机通道", "err"); return; }
+  if (!confirm(`将 ${device} 对应到 ${cameraResource.slice(7)}？保存后请人工重新校准。`)) return;
+  cameraMappingPending = true;
+  $("#btnBindCamera").disabled = true;
+  $("#cameraChannelSel").disabled = true;
+  $("#deviceId").disabled = true;
+  try {
+    const result = await api("/api/camera-bind", {method: "POST", body: JSON.stringify({
+      device, cameraResource, requestId: crypto.randomUUID(),
+    })});
+    if (device !== DEV_RAW()) return;
+    $("#cameraChannelMsg").textContent = result.说明 || "对应关系已保存，请人工重新校准。";
+    // Reload reconstructs all source-bound previews/contexts from the new mapping.
+    await closeDeviceContext();
+    location.reload();
+  } catch (error) {
+    if (device === DEV_RAW()) $("#cameraChannelMsg").textContent = `保存失败：${error.message}`;
+  } finally {
+    cameraMappingPending = false;
+    $("#btnBindCamera").disabled = false;
+    $("#cameraChannelSel").disabled = false;
+    $("#deviceId").disabled = false;
+  }
+});
+
 $("#deviceId").addEventListener("change", async e => {
   const v = e.target.value;
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(v) || !DEVICE_ITEMS.has(v)) {
@@ -1035,6 +1093,8 @@ $("#deviceId").addEventListener("change", async e => {
   await closeDeviceContext();
   if (generation !== selectionGeneration) return;
   selectedDevice = v;
+  $("#cameraChannelSel").replaceChildren();
+  $("#cameraChannelMsg").textContent = "请刷新相机通道后选择对应关系。";
   deviceSelectionError = "";
   const selectedUrl = new URL(location.href);
   selectedUrl.searchParams.set("deviceId", v);
@@ -3146,8 +3206,17 @@ async function wzAction(action, body, okMsg) {
   }
 }
 
+function renderLayoutReuse() {
+  const result = WZ?.layoutReuse || WZ?.auto?.layoutReuse;
+  const node = $("#wzLayoutReuse");
+  node.style.display = result?.message ? "block" : "none";
+  node.style.color = result?.status === "warning" ? "#ffce8a" : "";
+  node.textContent = result?.message
+    ? (result.status === "warning" ? "⚠ " : "") + result.message : "";
+}
 function renderWizard() {
   if (!WZ) return;
+  renderLayoutReuse();
   $("#wzArmDevice").value = decodeURIComponent(DEV());
   const stage = WZ.stage;
   const badge = $("#wzStageBadge");

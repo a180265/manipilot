@@ -124,8 +124,10 @@ def _pixel_rect_from_norm(rect: dict, width: int, height: int) -> dict:
 class LayoutRegionStore:
     """phone-search-region 不可变版本 + CAS 指针（per-device）。"""
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, *, calibration_data_root: Path | None = None):
         db_path = Path(db_path)
+        self.db_path = db_path
+        self.calibration_data_root = Path(calibration_data_root) if calibration_data_root else db_path.parent
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
@@ -983,7 +985,7 @@ class LayoutRegionService:
         selected_ref = None
         if record is not None:
             selected_ref = {"id": device_id, "version": record["version"],
-                            "sha256": record.get("sha256")}
+                            "sha256": pointer["selected_sha256"]}
         pending_ref = None
         if _draft is not None:
             pending_ref = {"id": device_id, "version": draft_version,

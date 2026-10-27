@@ -176,6 +176,7 @@ class AutoRunHost(Protocol):
     def _require_park_session_current(self, *args, **kwargs): ...
     def _require_session(self, *args, **kwargs): ...
     def _save_gesture_coordinate_frame(self, *args, **kwargs): ...
+    def _record_layout_recalibration(self, *args, **kwargs): ...
     def _save_state(self, *args, **kwargs): ...
     def _tap_with_report(self, *args, **kwargs): ...
     def _target_rect(self, *args, **kwargs): ...
@@ -907,6 +908,7 @@ class AutoRunner:
             "lastFailure": run.get("lastFailure"),
             "deferInputAcceptance": run.get("deferInputAcceptance", False),
             "qualificationStatus": run.get("qualificationStatus"),
+            "layoutReuse": deepcopy(run.get("layoutReuse")),
             "h": ({k: run["h"].get(k) for k in
                    ("rms", "maxError", "version", "lockedAt", "source")}
                   if run.get("h") else None),
@@ -3167,6 +3169,9 @@ class AutoRunner:
         except cb.BundleConcurrentWrite as exc:
             raise AutoRunError("promote_base_changed",
                                f"{exc}（candidate 保留）") from exc
+        run["layoutReuse"] = self.host._record_layout_recalibration(promoted, source="auto_promote")
+        if (run["layoutReuse"] or {}).get("status") == "warning":
+            self._auto_event(run, "layout_reuse_failed", run["layoutReuse"])
         run["qualificationStatus"] = promoted["status"]
         if run.get("edge"):
             geometry = dict(self.host.state.get("geometry") or {})

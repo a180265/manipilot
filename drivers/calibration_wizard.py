@@ -508,6 +508,7 @@ class CalibrationWizard:
 
     def __init__(self, *, device: str, daemon, ime,
                  data_root: Path | None = None,
+                 layout_db_path: Path | None = None,
                  camera_fetch=None, tip_detector=None, edge_detector=None,
                  search_region_provider=None,
                  target_detector=None, ocr_engine=None, binding_facts=None,
@@ -530,6 +531,7 @@ class CalibrationWizard:
         self._position_context = threading.local()
         self.ime = ime
         self.data_root = Path(data_root) if data_root else cb.default_data_root()
+        self.layout_db_path = Path(layout_db_path) if layout_db_path else self.data_root / "layout.db"
         # R2-04（camera-binding 附件 §4.1）：安装锁根必须与帧桥/调试台同根派生；
         # 缺省回退 data_root（锁路径=data_root/installation_locks/{device_id}.lock）。
         self._installation_lock_root = (Path(installation_lock_root)
@@ -1325,6 +1327,7 @@ class CalibrationWizard:
             preserved["daemonSession"] = status["session"] if status else None
             preserved["binding"] = binding
             preserved.pop("screenSearchContext", None)
+            preserved.pop("layoutReuse", None)
             preserved["invalidReason"] = None
             preserved["phoneOpenedAt"] = None
             preserved["imeSequence"] = 0
@@ -4158,6 +4161,7 @@ class CalibrationWizard:
             bundle["status"] = "ready"
             bundle["daemonSession"] = self.state["daemonSession"]
             cb.save_bundle(bundle, self.data_root)
+            self._record_layout_recalibration(bundle, source="manual_finish")
             # 坐标桥旁档尽力写入（第 4.2/22.4 节）：失败不影响校准结果
             self._save_gesture_coordinate_frame(bundle)
             # 验收期登记（bindPending）的固定目标绑定快照随最终档案生效
@@ -4174,7 +4178,8 @@ class CalibrationWizard:
                     self.ime.complete(sid)
                 except ImeError:
                     pass
-            return {"status": "ready", "stage": self.state["stage"]}
+            return {"status": "ready", "stage": self.state["stage"],
+                    "layoutReuse": self.state.get("layoutReuse")}
 
     def _finish_observation(self) -> dict:
         """纯观测档收尾（Auto_CS#20）：屏幕几何+摄像头单应 → observation_ready。
@@ -4221,6 +4226,24 @@ class CalibrationWizard:
             raise WizardError(
                 "本向导会话为纯观测校准（observation）：不含机械臂动作阶段，"
                 "运动/验收类操作不可用；如需动作校准请以运动目标重新开始")
+
+    def _record_layout_recalibration(self, bundle: dict, *, source: str) -> dict:
+        """New completed calibration is the operator's layout reuse checkpoint."""
+        from runtime.layout_recalibration import record_completed_calibration
+        try:
+            receipt = record_completed_calibration(
+                bundle, self.data_root, source=source,
+                db_path=getattr(self, "layout_db_path", None))
+            result = ({"status": "ready", "message": "已按新校准沿用当前页面资料",
+                       "receiptSha256": receipt["sha256"]} if receipt else
+                      {"status": "not_selected", "message": "当前没有需要沿用的已选页面资料"})
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "设备 %s 新校准已保存，但页面资料复用未完成：%s", self.device, exc)
+            result = {"status": "warning",
+                      "message": f"新校准已保存，但页面资料暂不能沿用：{exc}；请处理受影响资料后再运行"}
+        self.state["layoutReuse"] = result
+        return deepcopy(result)
 
     def _save_gesture_coordinate_frame(self, bundle: dict) -> None:
         """坐标桥旁档（第 4.2/22.4 节）：完成/提升后尽力写入，独立于 bundle。

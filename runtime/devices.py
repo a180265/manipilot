@@ -215,6 +215,9 @@ class DeviceManager:
                         key: current.get(key) for key in (*BINDING_KEYS, "daemon_session")
                     })
 
+                # Camera assignment can change without reconnecting the arm.
+                _camera = self._cameras.get(_device_id, _camera)
+                _camera_id = (self.get(_device_id) or {}).get("camera_id", _camera_id)
                 bundle = deepcopy(calibration_bundle.load_bundle(_device_id, _arm.data_root))
                 binding = binding_snapshot()
                 search_region = None
@@ -276,6 +279,7 @@ class DeviceManager:
             async def wake_gate(*, require_pose: bool = False,
                                 _arm=arm, _device_id=device_id,
                                 _camera_id=cfg.get("camera_id")):
+                _camera_id = (self.get(_device_id) or {}).get("camera_id", _camera_id)
                 bundle = calibration_bundle.load_bundle(_device_id, _arm.data_root)
                 state = await _arm.read_state()
                 return await check_live_calibration(
@@ -336,9 +340,14 @@ class DeviceManager:
                     str(frame_url),
                     expected_camera_id=cfg.get("camera_id"),
                     expected_device_id=cfg.get("device_id"),
-                    expected_device_unique_id=cfg.get("camera_device_unique_id"),
-                    expected_width=cfg.get("expected_frame_width"),
-                    expected_height=cfg.get("expected_frame_height"),
+                    # USB接入身份由帧桥当前绑定核验；动作另比对新校准。
+                    # 固定旧USB编号会阻断换口后取新帧，导致无法人工重新校准。
+                    expected_device_unique_id=(None if camera_mode == "multi_channel"
+                                               else cfg.get("camera_device_unique_id")),
+                    expected_width=(None if camera_mode == "multi_channel"
+                                    else cfg.get("expected_frame_width")),
+                    expected_height=(None if camera_mode == "multi_channel"
+                                     else cfg.get("expected_frame_height")),
                     allow_legacy=camera_mode == "legacy_single",
                 )
             elif camera_mode == "legacy_single" or source_mode == "direct":
@@ -982,6 +991,18 @@ class DeviceManager:
                 "selected": True,
             })
 
+        # Capture channels exist independently of registered arms.
+        for number in range(1, 11):
+            camera_id = f"cam-{number:02d}"
+            if any(item["camera_id"] == camera_id for item in camera_options):
+                continue
+            camera_options.append({
+                "resource_id": f"camera:{camera_id}", "camera_id": camera_id,
+                "device_id": None, "camera_device_unique_id": None,
+                "label": f"{camera_id} · 未分配机械臂",
+                "selected": str(current.get("camera_id") or "") == camera_id,
+            })
+
         daemon_options = []
         for cfg in configs:
             if not str(cfg.get("daemon_addr") or "").strip():
@@ -1022,6 +1043,32 @@ class DeviceManager:
         configs = self._registered_configs
         if kind == "camera":
             cfg = next((item for item in configs if str(item.get("camera_id") or "") == value), None)
+            independent = value in {f"cam-{number:02d}" for number in range(1, 11)}
+            if independent:
+                from urllib.parse import urlsplit, urlunsplit
+                current = next((item for item in configs
+                                if str(item.get("device_id")) == device_id), self.get(device_id))
+                # The configured bridge is trusted; the client only supplies a channel ID.
+                base = urlsplit(str(current.get("camera_frame_url")
+                                    or "http://127.0.0.1:8790/cameras/cam-01/latest.jpg"))
+                if base.scheme not in {"http", "https"} or not base.netloc:
+                    raise ApiError("camera_config_invalid", "当前设备的帧桥地址无效")
+                resolved = {
+                    "camera_id": value, "camera_device_unique_id": None,
+                    "camera_frame_url": urlunsplit((base.scheme, base.netloc,
+                                                     f"/cameras/{value}/latest.jpg", "", "")),
+                    "camera_status_url": urlunsplit((base.scheme, base.netloc,
+                                                      f"/cameras/{value}/status", "", "")),
+                    "camera_mode": "multi_channel",
+                }
+                # Simulation must not acquire real hardware URLs.
+                if str(current.get("driver_mode") or "") not in {"real", "daemon"} \
+                        and current.get("binding_mode") != "real":
+                    return {"camera_id": value, "camera_device_unique_id": None}
+                for key in ("expected_frame_width", "expected_frame_height"):
+                    if current.get(key) is not None:
+                        resolved[key] = current[key]
+                return resolved
             if cfg is None:
                 raise ApiError("binding_resource_not_found", f"未找到已登记摄像头资源：{value}")
             resolved = {
@@ -1263,11 +1310,97 @@ class DeviceManager:
             detail={"operation_id": operation_id, "phase": "applied",
                     "new_ime_device_id": new_ime})
 
+    CAMERA_ASSIGNMENT_FIELDS = frozenset({
+        "camera_id", "camera_device_unique_id", "camera_frame_url", "camera_status_url",
+        "camera_mode", "expected_frame_width", "expected_frame_height",
+    })
+
+    async def _update_camera_assignment(self, device_id: str, allowed: dict, merged: dict,
+                                        *, operator_id: str, reason: str) -> dict:
+        """Persist camera mapping and replace only its consumer; arm session stays intact."""
+        import scripts.camera_binding_v2 as camera_v2
+        from contextlib import ExitStack
+
+        try:
+            with ExitStack() as guards:
+                root = self._config_root / "data"
+                guards.enter_context(camera_v2.installation_lock(root, device_id, exclusive=True))
+                device = self._devices[device_id]
+                channels = {str(device.get("camera_id") or ""), str(merged.get("camera_id") or "")}
+                for channel in sorted(channels - {""}):
+                    guards.enter_context(camera_v2.installation_lock(
+                        root, f"camera-{channel}", exclusive=True))
+                # Another assignment may have completed before these guards were acquired.
+                self._validate_registration(merged, replacing=True)
+                if device.get("status") in {"busy", "returning_home", "recovering"}:
+                    raise ApiError("device_busy", "设备正在执行任务，请停止后再修改相机对应关系")
+                if self._leases is not None and self._leases.get(device_id) is not None:
+                    raise ApiError("device_busy", "设备仍持有动作租约，请停止任务后再修改相机对应关系")
+                if device.get("driver_mode") in {"real", "daemon"}:
+                    camera = self._make_real_camera(merged)
+                else:
+                    camera = FakeCameraDriver(
+                        device_id=str(merged.get("camera_id") or device_id),
+                        ui_state=merged.get("sim_ui_state", "wechat_main"),
+                        account_clue=merged.get("wechat_account_id"))
+                applied = {**allowed, "calibration_status": "due", "device_mode": "unmanaged",
+                           "camera_binding_id": None, "source_geometry_id": None}
+                candidate = [dict(item, **applied) if str(item.get("device_id")) == device_id
+                             else dict(item) for item in self._registered_configs]
+                if not any(str(item.get("device_id")) == device_id for item in candidate):
+                    candidate.append({**merged, **applied})
+                # Never report a successful mapping after swallowing a disk failure.
+                if self._persist_configs is not None:
+                    try:
+                        self._persist_configs(candidate)
+                    except Exception as exc:
+                        raise ApiError("device_config_invalid", f"相机对应关系未保存：{exc}") from exc
+                old_camera = self._cameras[device_id]
+                self._lifecycle_versions[device_id] = self._lifecycle_versions.get(device_id, 0) + 1
+                self._registered_configs = candidate
+                device.update(applied)
+                device.update(calibration_status="due", calibration_status_display="待校准",
+                              device_mode="unmanaged", device_mode_display=DEVICE_MODE["unmanaged"],
+                              binding_revision=int(device.get("binding_revision", 1)) + 1,
+                              config_version=str(int(device.get("config_version", "1") or 1) + 1),
+                              camera_quality="unknown", camera_quality_display="未知",
+                              camera_last_frame_at=None, camera_frame_age_ms=None)
+                if device.get("status") != "quarantined":
+                    self._set_status(device_id, "paused", "相机对应关系已更新，等待人工重新校准", force=True)
+                self._cameras[device_id] = camera
+                self._camera_brokers.pop(device_id, None)
+                self._last_camera_hash.pop(device_id, None)
+                self._attach_layout_consumers(device_id)
+                for name in ("motion_verifier", "gesture_motion_verifier"):
+                    verifier = getattr(self._arms[device_id], name, None)
+                    if verifier is not None:
+                        verifier._camera = self.camera_broker(device_id)
+                self._store.save_device(device)
+                try:
+                    await old_camera.close()
+                except Exception:
+                    pass
+                try:
+                    await camera.open()
+                except Exception as exc:
+                    device["camera_quality_note"] = f"对应关系已保存，画面暂不可用：{exc}"
+                    self._store.save_device(device)
+                self._audit.record("device_binding_update", device_id=device_id,
+                                   operator_id=operator_id, reason=reason,
+                                   detail={"updates": allowed, "camera_only": True,
+                                           "binding_revision": device["binding_revision"]})
+                self._events.publish("device.binding_updated", {
+                    "device_id": device_id, "binding_revision": device["binding_revision"],
+                    "reason": reason, "calibration_required": True})
+                return self.binding_view(device_id)
+        except camera_v2.CameraBindingError as exc:
+            raise ApiError("device_busy", exc.message) from exc
+
     async def update_binding(self, device_id: str, updates: dict, *, operator_id: str, reason: str) -> dict:
         """设备菜单绑定变更：一对一校验、暂停、版本递增、待校准、审计、写回绑定表。
 
-        daemon/串口/取流地址/摄像头通道/物理摄像头唯一 ID 属于重绑定：走挂载路径重建驱动
-        并重新自检；其余字段做轻量镜像更新。调用前必须已完成二次确认。
+        纯摄像头变更只替换摄像头消费者，保留机械臂/输入会话；daemon/串口等
+        重绑定走挂载路径重建驱动并重新自检。调用前必须已完成二次确认。
 
         FIX-04 换手机流程（§4.8.3/§4.8.6）：ime_device_id 变更时先落
         binding_change 意图并阻断 → 系统关闭原许可（复用 input_control
@@ -1324,11 +1457,14 @@ class DeviceManager:
         if cfg is None:
             cfg = dict(device)
         merged = normalize_daemon_binding({**cfg, **allowed, "device_id": device_id})
-        if merged.get("daemon_addr"):
+        if merged.get("daemon_addr") and not set(allowed) <= self.CAMERA_ASSIGNMENT_FIELDS:
             allowed.update({key: merged[key] for key in
                             ("daemon_resource_id", "daemon_binding_id")})
         # 先做一对一校验：冲突请求不得改变设备状态（不暂停、不递增版本）
         self._validate_registration(merged, replacing=True)
+        if set(allowed) <= self.CAMERA_ASSIGNMENT_FIELDS:
+            return await self._update_camera_assignment(
+                device_id, allowed, merged, operator_id=operator_id, reason=reason)
         self._release_device_lease(device_id, "绑定变更，撤销旧租约")
         heavy = bool(self.REATTACH_FIELDS & set(allowed))
         if heavy:
@@ -1497,6 +1633,9 @@ class DeviceManager:
         from drivers import calibration_bundle
         from runtime.calibration_gate import check_registered_calibration
 
+        camera = self._cameras.get(device["device_id"])
+        if camera is not None:
+            self._record_camera_source_metadata(device["device_id"], camera)
         arm = self._arms.get(device["device_id"])
         facts = dict(device)
         if arm is None or not getattr(arm, "connected", False):
@@ -2378,15 +2517,40 @@ class DeviceManager:
             "camera_binding_revision": info.get("binding_revision"),
         }
         received = info.get("received_at")
+        source_age_ms = None
         if received:
             try:
                 moment = datetime.fromisoformat(str(received).replace("Z", "+00:00"))
                 if moment.tzinfo is None:
                     moment = moment.replace(tzinfo=timezone.utc)
-                updates["camera_frame_age_ms"] = max(
-                    0, int((datetime.now(timezone.utc) - moment).total_seconds() * 1000))
+                source_age_ms = (datetime.now(timezone.utc) - moment).total_seconds() * 1000
+                updates["camera_frame_age_ms"] = max(0, int(source_age_ms))
             except ValueError:
                 pass
+        # Only the current driver's recently validated frame can refresh camera identity.
+        # A saved calibration is never used to guess a newly attached source.
+        # Task layout snapshots freeze these identity fields. Late metadata from a
+        # task's first capture must not mutate its baseline; live frame/bundle gates
+        # still reject an actually changed source. Idle reads/polls adopt it later.
+        identity_idle = (device.get("status") not in {"busy", "returning_home", "recovering"}
+                         and not (self._leases is not None and self._leases.get(device_id)))
+        if (identity_idle and source_age_ms is not None
+                and 0 <= source_age_ms <= self.camera_broker_max_age_seconds * 1000
+                and info.get("camera_id") == device.get("camera_id")
+                and info.get("device_id") == device_id
+                and info.get("device_unique_id") and info.get("camera_binding_id")
+                and info.get("source_geometry_id") and not info.get("legacy_mode")):
+            updates.update(camera_device_unique_id=info["device_unique_id"],
+                           camera_binding_id=info["camera_binding_id"],
+                           source_geometry_id=info["source_geometry_id"])
+            # Runtime facts follow decoded pixels from the current trusted v2 source.
+            # Configuration and capture format stay unchanged; calibration must match
+            # these observed dimensions before any formal action can run.
+            width, height = info.get("frame_width"), info.get("frame_height")
+            if (device.get("camera_mode") == "multi_channel"
+                    and type(width) is int and width > 0
+                    and type(height) is int and height > 0):
+                updates.update(expected_frame_width=width, expected_frame_height=height)
         changed = any(device.get(key) != value for key, value in updates.items())
         if changed:
             device.update(updates)

@@ -754,7 +754,8 @@ class ArmFleetRuntime(PluginCapabilityMixin):
                         (prefix.replace("%", r"\%") + "%",)).fetchall()
                 return [(r["k"], json.loads(r["json"])) for r in rows]
 
-        region_store = LayoutRegionStore(db)
+        calibration_data_root = self.config.root / "data"
+        region_store = LayoutRegionStore(db, calibration_data_root=calibration_data_root)
         template_store = LayoutTemplateStore(db)
         # R2-25/R2-19（D 包交付）：typed state store + ops/适配服务由本
         # Runtime 束持有（无进程级单例）；Clock 注入本 Runtime 时钟。
@@ -776,6 +777,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
             server_instance_id=f"fleet-{_uuid.uuid4()}")
         bundle = {
             "db_path": db,
+            "calibration_data_root": calibration_data_root,
             "kv_store": kv_store,
             "region_store": region_store,
             "region_svc": LayoutRegionService(region_store),

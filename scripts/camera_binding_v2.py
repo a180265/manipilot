@@ -240,7 +240,9 @@ def save_binding_v2(bindings_path: Path, request: dict) -> dict:
 
     after_payload = {"schemaVersion": 2,
                      "revision": int(before_payload["revision"]) + 1,
-                     "bindings": [dict(b) for b in before_payload["bindings"]]}
+                     "bindings": [{**b, "bindingRevision": int(b.get(
+                         "bindingRevision", before_payload["revision"]))}
+                                  for b in before_payload["bindings"]]}
     entries = after_payload["bindings"]
     current = next((b for b in entries if b.get("cameraId") == channel), None)
     if action == "unbind":
@@ -267,6 +269,7 @@ def save_binding_v2(bindings_path: Path, request: dict) -> dict:
         entry = {**(current or {}),
                  "cameraId": channel, "deviceUniqueId": unique_id,
                  "cameraBindingId": new_id,
+                 "bindingRevision": after_payload["revision"],
                  "boundAt": request.get("bound_at"),
                  "boundBy": str(request.get("bound_by") or "")}
         if current is None:

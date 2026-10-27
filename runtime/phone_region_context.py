@@ -70,6 +70,18 @@ def load_region_context(region_store, device_id: str) -> dict | None:
     if (not isinstance(rect, dict) or not record.get("pixel_rect")
             or not record.get("source_size")):
         raise RegionContextError("region_context_invalid", "生效粗框字段不完整")
+    db_path = getattr(region_store, "db_path", None)
+    if db_path is not None:
+        from drivers import calibration_bundle as cb
+        from runtime.layout_recalibration import execution_region
+        calibration_root = getattr(region_store, "calibration_data_root", db_path.parent)
+        bundle = cb.load_bundle(device_id, calibration_root)
+        if bundle:
+            try:
+                record = execution_region(calibration_root, bundle, record, db_path=db_path)
+            except Exception as exc:
+                raise RegionContextError("region_context_unavailable",
+                                         f"新校准的粗框复用资料读取失败：{exc}") from exc
     return {"mode": "region", "device_id": device_id,
             "pointer": {key: pointer[key] for key in
                         ("revision", "selected_version", "selected_sha256")},

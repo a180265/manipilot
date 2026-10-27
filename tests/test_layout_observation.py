@@ -39,7 +39,9 @@ def offline_only(monkeypatch, tmp_path):
         raise AssertionError("Hardware, processes and network are forbidden")
 
     def connect(path, *args, **kwargs):
-        if path != ":memory:" and not Path(path).resolve().is_relative_to(tmp_path):
+        from urllib.parse import urlparse, unquote
+        checked_path = unquote(urlparse(path).path) if kwargs.get("uri") else path
+        if checked_path != ":memory:" and not Path(checked_path).resolve().is_relative_to(tmp_path):
             attempts.append("non-temporary SQLite")
             raise AssertionError("SQLite must belong to this test's tmp_path")
         return real_connect(path, *args, **kwargs)
@@ -160,7 +162,7 @@ def test_registration_and_observation_share_pose_coordinate_domain(tmp_path):
 class LayoutRig:
     """Real Runtime wiring and tmp stores, with synthetic camera/arm/IME only."""
 
-    def __init__(self, tmp_path, monkeypatch, *, seed_selected=True):
+    def __init__(self, tmp_path, monkeypatch, *, seed_selected=True, layout_db_path=None):
         from drivers import calibration_bundle as cb
         from drivers.fake_arm import FakeArmDriver
         from drivers.fake_input import FakeInputDriver
@@ -174,6 +176,7 @@ class LayoutRig:
         self.state_key = state_key
         self.runtime = ArmFleetRuntime(PlatformConfig({
             "pre_enable_maintenance": True, "hardware_mode": "simulation",
+            "layout_db_path": str(layout_db_path) if layout_db_path else None,
         }, root=tmp_path))
         self.data = tmp_path / "data"
         self.bundle = ready_bundle()
