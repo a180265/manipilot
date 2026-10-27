@@ -47,7 +47,13 @@ def test_region_read_uses_archived_physical_identity(tmp_path, identity):
             "/v1/devices/arm-01/phone-search-region",
             headers={**reopened.auth(), "X-Correlation-Id": str(uuid.uuid4()),
                      "X-Layout-Contract-Version": "phone-search-region-read.v1"})
-        assert response.status_code == (200 if identity in {"canonical", "legacy"} else 409), response.text
+        # 历史粗框始终可读；当前来源不可信时标成待复核，不背书为已验证。
+        assert response.status_code == 200, response.text
+        assert response.json()["selected"]["version"] == saved.json()["selected_version"]
+        assert response.json()["revision"] == saved.json()["revision"]
+        trusted = identity in {"canonical", "legacy"}
+        assert response.json()["status"] == ("verified" if trusted else "needs_review")
+        assert response.json()["reasons"] == ([] if trusted else ["source_binding_changed"])
 
 
 @pytest.mark.parametrize("identity", ["canonical", "legacy", "conflict", "missing"])
