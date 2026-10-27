@@ -105,11 +105,10 @@ class LayoutObservationService:
             _validate(template, "template")
             _require(_reference(template, "template_id") == ref, "适配引用的模板已损坏")
             region_pointer = services["region_store"].get_pointer(device_id)
-            region_ref = adaptation["installation_region_ref"]
-            _require(region_pointer is not None and region_ref == {
+            _require(region_pointer is not None, "已选布局缺少生效粗框", "source_binding_changed")
+            region_ref = {
                 "id": device_id, "version": region_pointer["selected_version"],
-                "sha256": region_pointer["selected_sha256"]},
-                "粗框已变更，适配需要重新核验", "source_binding_changed")
+                "sha256": region_pointer["selected_sha256"]}
             region = ops.resolve_region(device_id, region_ref["version"])
             _validate(region, "region")
             _require(_reference(region, "device_id") == region_ref, "当前粗框资料已损坏")
@@ -136,6 +135,10 @@ class LayoutObservationService:
                     empty_assets[sample["state"]] = screen_proof.decode(data)
             snapshot = SelectedLayout(self, device_id, pointer, region_pointer, adaptation,
                                       template, region, assets, empty_assets)
+            # Only an exact completed-calibration receipt can join old page
+            # assets to a redrawn region; merely publishing it is not enough.
+            _require(snapshot.adaptation["installation_region_ref"] == region_ref,
+                     "粗框已变更，适配需要重新核验", "source_binding_changed")
             snapshot.ensure_current()
             return snapshot
         except LayoutObservationError:

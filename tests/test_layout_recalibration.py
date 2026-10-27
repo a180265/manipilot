@@ -162,3 +162,74 @@ def test_custom_layout_database_keeps_calibration_root_separate(tmp_path, monkey
         assert context["region"]["pixel_rect"]["left"] > 600
     finally:
         item.close()
+
+
+def republish_region(rig, bundle, version=2):
+    """Publish a newly drawn source rectangle without editing the old adaptation."""
+    region = deepcopy(rig.region)
+    region.update(version=version, source_geometry_id=bundle["sourceGeometryId"],
+                  rect={"x": .5, "y": 0, "width": .4, "height": 1},
+                  pixel_rect={"left": 640, "top": 0, "right": 1152, "bottom": 720})
+    region["installation_binding"].update(
+        camera_device_unique_id=bundle["cameraDeviceUniqueId"],
+        camera_binding_id=bundle["cameraBindingId"])
+    rig.seal(region)
+    store = rig.parts["region_store"]
+    revision = store.get_pointer("arm-01")["revision"]
+    store.insert_version("arm-01", version, region)
+    store.cas_pointer("arm-01", revision, version, region["sha256"], "redraw")
+    return region
+
+
+def test_redraw_after_calibration_is_readable_without_rewriting_calibration(rig):
+    from runtime.layout_recalibration import record_completed_calibration, receipt_path
+    from runtime.phone_region_context import load_region_context
+    bundle = changed_bundle(rig)
+    record_completed_calibration(bundle, rig.data, source="auto_promote")
+    paths = [cb.bundle_path("arm-01", rig.data), receipt_path("arm-01", rig.data)]
+    before = [p.read_bytes() for p in paths]
+    region = republish_region(rig, bundle)
+    # The old layout's v1 reference must not prevent the new v2 drawing being read.
+    view = rig.parts["region_svc"].get("arm-01")
+    assert view["selected"]["version"] == 2
+    assert load_region_context(rig.parts["region_store"], "arm-01")["region"] == region
+    assert [p.read_bytes() for p in paths] == before
+    # An old receipt does not silently authorize a newly selected region for layout execution.
+    with pytest.raises(LayoutObservationError, match="粗框已变更"):
+        rig.runtime.layout_observation.resolve("arm-01")
+
+
+def test_redraw_then_completed_calibration_reuses_assets_with_current_camera(rig):
+    import asyncio
+    import numpy as np
+    from runtime.layout_recalibration import record_completed_calibration
+    from runtime.phone_region_context import load_region_context
+    bundle = changed_bundle(rig)
+    record_completed_calibration(bundle, rig.data, source="auto_promote")
+    region = republish_region(rig, bundle)
+    original_adaptation = deepcopy(rig.parts["ops_svc"].resolve_adaptation("arm-01", 1))
+    original_bundle = cb.bundle_path("arm-01", rig.data).read_bytes()
+    receipt = record_completed_calibration(bundle, rig.data, source="auto_promote")
+    assert receipt["region_ref"] == {"id": "arm-01", "version": 2, "sha256": region["sha256"]}
+    selected = rig.runtime.layout_observation.resolve("arm-01")
+    selected.verify_saved_binding(bundle)
+    # Keep the operator's new rectangle; only stale-source regions need projection.
+    assert selected.region["rect"] == region["rect"]
+    assert load_region_context(rig.parts["region_store"], "arm-01")["region"]["rect"] == region["rect"]
+    assert selected.adaptation["installation_region_ref"] == receipt["region_ref"]
+    image = np.full((720, 1280, 3), 20, np.uint8)
+    image[50:690, 700:1020] = rig.screens["chat_ime_empty"]
+    rig.source.image = image
+    rig.source.last_device_unique_id = bundle["cameraDeviceUniqueId"]
+    rig.source.last_camera_binding_id = bundle["cameraBindingId"]
+    rig.source.last_source_geometry_id = bundle["sourceGeometryId"]
+    observed = asyncio.run(rig.camera.observe_regions())
+    assert observed["ui"]["ui_state"] == "conversation"
+    assert observed["input_empty"] is True
+    assert rig.parts["ops_svc"].resolve_adaptation("arm-01", 1) == original_adaptation
+    assert rig.parts["region_store"].get_version("arm-01", 2) == region
+    assert cb.bundle_path("arm-01", rig.data).read_bytes() == original_bundle
+    # A later redraw is not covered by this exact receipt.
+    republish_region(rig, bundle, version=3)
+    with pytest.raises(LayoutObservationError, match="粗框已变更"):
+        rig.runtime.layout_observation.resolve("arm-01")

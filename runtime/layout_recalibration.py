@@ -64,9 +64,11 @@ def _selected(data_root, device_id, db_path=None):
                 or adaptation["version"] != pointer["selected_version"]
                 or adaptation["sha256"] != pointer["selected_sha256"]
                 or region["version"] != region_pointer["selected_version"]
-                or region["sha256"] != region_pointer["selected_sha256"]
-                or adaptation["installation_region_ref"] != _reference(region, "device_id")):
-            raise ValueError("布局选择在校准期间已变化，请重新确认")
+                or region["sha256"] != region_pointer["selected_sha256"]):
+            raise ValueError("布局或范围与已保存指针不一致，请重新确认")
+        # Redrawing changes the region selection independently of the immutable
+        # page assets. A completed calibration records this exact new pair;
+        # the previous receipt cannot authorize it for layout execution.
         return adaptation, region
 
 
@@ -149,13 +151,18 @@ def derive_execution_layout(data_root, bundle, adaptation, region):
         derived["installation_binding"].update(
             camera_id=bundle["cameraId"], camera_device_unique_id=bundle["cameraDeviceUniqueId"],
             camera_binding_id=bundle["cameraBindingId"])
+        same_source = (region["installation_binding"] == derived["installation_binding"]
+                       and region.get("source_geometry_id") == bundle["sourceGeometryId"]
+                       and region.get("source_size") == bundle["frame"])
         derived.update(source_geometry_id=bundle["sourceGeometryId"], source_size=deepcopy(bundle["frame"]),
-                       rect={"x": left / width, "y": top / height,
-                             "width": (right-left) / width, "height": (bottom-top) / height},
-                       pixel_rect={"left": left, "top": top, "right": right, "bottom": bottom},
                        recalibration_receipt_sha256=receipt["sha256"])
+        if not same_source:
+            derived.update(rect={"x": left / width, "y": top / height,
+                                 "width": (right-left) / width, "height": (bottom-top) / height},
+                           pixel_rect={"left": left, "top": top, "right": right, "bottom": bottom})
         derived["sha256"] = content_sha({k: v for k, v in derived.items() if k != "sha256"})
         adapted = deepcopy(adaptation)
+        adapted["installation_region_ref"] = _reference(region, "device_id")
         adapted["screen_descriptor"]["calibration_geometry_hash"] = (
             bundle.get("coordinateFrameHash") or bundle.get("bindingFingerprint"))
         return adapted, derived
