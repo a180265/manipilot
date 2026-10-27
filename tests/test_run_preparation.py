@@ -164,3 +164,70 @@ def test_initialize_authorization_rejection_happens_before_pause(tmp_path):
         response = client.post('/v1/devices/arm-01/prepare-run', json={**op_context(), 'confirmed': True, 'mode': 'initialize'})
         assert response.status_code == 403
         assert rt.devices.get('arm-01')['status'] == 'ready'
+
+
+@pytest.mark.parametrize('mode', ['prepare', 'initialize'])
+def test_prepare_releases_finished_task_lease_after_idle_check(tmp_path, mode):
+    async def scenario():
+        rt = make_runtime(tmp_path)
+        await rt.startup(device_configs=make_device_configs())
+        try:
+            rt.devices.pause('arm-01', '任务未知')
+            task = rt.submit_task(probe_payload([]), source='console', context={'operator_id': 'test'})
+            task.update(status='unknown', result={'outcome': 'unknown'})
+            rt.store.save_task(task)
+            rt.devices.hold_unknown('arm-01', task['task_id'], '任务未知')
+            rt.leases.acquire('arm-01', task['task_id'])
+            arm = rt.devices.driver('arm-01')
+            actions = list(arm.action_log)
+            async def hook(runtime, device_id, context):
+                # A newer business session must not be blocked by the old lease.
+                assert runtime.leases.get(device_id) is None
+            result = await prepare_run(rt, 'arm-01', {'confirmed': True, 'mode': mode},
+                                       op_context(), before_resume=hook)
+            assert result['status'] == ('ready' if mode == 'prepare' else 'paused')
+            assert rt.leases.get('arm-01') is None
+            assert rt.get_task(task['task_id'])['reviewed_at']
+            assert rt.get_task(task['task_id'])['result'] == {'outcome': 'unknown'}
+            assert arm.action_log == actions
+        finally:
+            await rt.shutdown()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('fault', ['executor', 'motion_lease', 'connection'])
+def test_prepare_keeps_finished_lease_when_hardware_or_executor_not_idle(tmp_path, monkeypatch, fault):
+    async def scenario():
+        rt = make_runtime(tmp_path)
+        await rt.startup(device_configs=make_device_configs())
+        running = None
+        try:
+            rt.devices.pause('arm-01', '任务未知')
+            task = rt.submit_task(probe_payload([]), source='console', context={'operator_id': 'test'})
+            task.update(status='unknown')
+            rt.store.save_task(task)
+            lease = rt.leases.acquire('arm-01', task['task_id'])
+            arm = rt.devices.driver('arm-01')
+            read_state = arm.read_state
+            async def state():
+                value = await read_state()
+                if fault == 'motion_lease':
+                    value['motion_lease'] = {'owner': 'active'}
+                if fault == 'connection':
+                    value['connected'] = False
+                return value
+            monkeypatch.setattr(arm, 'read_state', state)
+            if fault == 'executor':
+                running = asyncio.create_task(asyncio.Event().wait())
+                rt._exec_tasks[task['task_id']] = running
+            with pytest.raises(ApiError):
+                await prepare_run(rt, 'arm-01', {'confirmed': True}, op_context())
+            assert rt.leases.get('arm-01')['lease_id'] == lease['lease_id']
+            assert not rt.get_task(task['task_id']).get('reviewed_at')
+            assert rt.devices.get('arm-01')['status'] == 'paused'
+        finally:
+            if running:
+                running.cancel()
+                await asyncio.gather(running, return_exceptions=True)
+            await rt.shutdown()
+    asyncio.run(scenario())

@@ -14,9 +14,7 @@ PREPARING = "正在清理旧任务并核对新运行条件"
 TERMINAL = {"confirmed", "failed", "unknown", "cancelled", "expired"}
 
 
-def _idle(runtime, device_id):
-    if runtime.leases.get(device_id):
-        raise ApiError("device_busy", "仍有任务租约，请等待当前动作结束后恢复")
+def _idle(runtime, device_id, *, allow_finished_lease=False):
     tasks = [t for t in runtime.store.all_tasks() if t["device_id"] == device_id]
     for task in tasks:
         running = runtime._exec_tasks.get(task["task_id"])
@@ -26,6 +24,11 @@ def _idle(runtime, device_id):
                 any(s.get("is_action") for s in task.get("step_log", []))
                 or (task.get("action_receipt") or {}).get("state") in {"pending", "unknown"}):
             raise ApiError("device_busy", "队列中仍有待对账动作，不能当作未执行任务丢弃")
+    lease = runtime.leases.get(device_id)
+    if lease:
+        owner = next((task for task in tasks if task["task_id"] == lease.get("task_id")), None)
+        if not allow_finished_lease or owner is None or owner["status"] not in TERMINAL:
+            raise ApiError("device_busy", "仍有任务租约，请等待当前动作结束后恢复")
     return tasks
 
 
@@ -85,7 +88,7 @@ async def prepare_run(runtime, device_id, body, context, *, before_resume=None):
             return {**previous["result"], "status": runtime.devices.get(device_id)["status"],
                     "eligibility": runtime.device_eligibility(device_id, require_input=False)}
         device = _available(runtime, device_id, require_calibration=not initialize)
-        _idle(runtime, device_id)
+        _idle(runtime, device_id, allow_finished_lease=True)
         fingerprint = _fingerprint(runtime, device_id)
         session = device.get("daemon_session")
         runtime.devices.pause(device_id, PREPARING)
@@ -116,9 +119,22 @@ async def prepare_run(runtime, device_id, body, context, *, before_resume=None):
                               ui_confidence=ui.get("confidence", 0))
                 runtime.store.save_device(device)
             _available(runtime, device_id, require_calibration=not initialize)
-            _idle(runtime, device_id)
+            _idle(runtime, device_id, allow_finished_lease=True)
             if _fingerprint(runtime, device_id) != fingerprint:
                 raise ApiError("calibration_unavailable", "恢复期间校准已变化，请重新核对")
+            # An unknown result deliberately retains its software lease. Explicit
+            # preparation may retire it only after the executor and hardware are
+            # idle. Do this before the application hook: its current session may
+            # already belong to a newer task than the lease owner.
+            lease = runtime.leases.get(device_id)
+            if lease:
+                if not runtime.leases.release(device_id, lease["lease_id"]):
+                    raise ApiError("device_busy", "任务占用已变化，请刷新后重新恢复")
+                runtime.audit.record(
+                    "prepare_run_finished_lease_released", device_id=device_id,
+                    task_id=lease["task_id"], operator_id=context["operator_id"],
+                    reason=context["reason"], client_request_id=context["client_request_id"],
+                    detail={"lease_id": lease["lease_id"]})
             discarded = []
             async def discard_queued():
                 for task in _idle(runtime, device_id):
