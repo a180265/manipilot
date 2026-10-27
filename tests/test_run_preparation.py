@@ -143,6 +143,7 @@ def test_initialize_discards_work_but_never_resumes_or_requires_camera(tmp_path,
             context = op_context()
             result = await prepare_run(rt, 'arm-01', {'confirmed': True, 'mode': 'initialize'}, context, before_resume=hook)
             assert result['status'] == 'paused' and result['mode'] == 'initialize'
+            assert '已初始化' in rt.devices.get('arm-01')['status_reason']
             assert rt.get_task(task['task_id'])['status'] == 'cancelled'
             assert rt.devices.get('arm-01')['calibration_status'] == 'due'
             assert rt.devices.driver('arm-01').action_log == actions

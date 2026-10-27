@@ -148,6 +148,9 @@ async def prepare_run(runtime, device_id, body, context, *, before_resume=None):
                 device["home_ok"] = False
                 device["home_checked_at"] = None
                 ready = runtime.devices.pause(device_id, "运行状态已初始化；请回主页后点击一键恢复，再重新开始检测")
+                ready["status_reason"] = ready["pause_reason"]
+                runtime.store.save_device(ready)
+                runtime.devices._publish_device_updated(device_id)
                 message = "已初始化旧运行状态，保持暂停；请回主页后恢复并重新开始检测"
             else:
                 runtime.devices.mark_home_ok(device_id, context["operator_id"], context["reason"])
