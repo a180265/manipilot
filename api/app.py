@@ -2988,7 +2988,15 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         if not isinstance(body, dict):
             raise ApiError("invalid_request", "请求体必须为对象")
         body = {**body, "reason": body.get("reason") or REASON}
-        return await prepare_run(rt(request), device_id, body, op_context(body),
+        context = op_context(body)
+        if body.get("mode") == "initialize":
+            authorize = getattr(app.state, "authorize_initialization_hook", None)
+            if authorize is not None:
+                import inspect
+                authorization = authorize(device_id, body, context)
+                if inspect.isawaitable(authorization):
+                    await authorization
+        return await prepare_run(rt(request), device_id, body, context,
                                  before_resume=getattr(app.state, "prepare_run_hook", None))
 
     @app.post("/v1/devices/{device_id}/reset-home")

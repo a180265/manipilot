@@ -123,3 +123,43 @@ def test_prepare_does_not_clear_active_faults(tmp_path, fault):
         finally:
             await rt.shutdown()
     asyncio.run(scenario())
+
+
+def test_initialize_discards_work_but_never_resumes_or_requires_camera(tmp_path, monkeypatch):
+    async def scenario():
+        rt = make_runtime(tmp_path)
+        await rt.startup(device_configs=make_device_configs())
+        try:
+            rt.devices.pause('arm-01', '管理员调整')
+            task = rt.submit_task(probe_payload([]), source='console', context={'operator_id': 'test'})
+            rt.devices.set_calibration_status('arm-01', 'due')
+            async def no_camera():
+                raise AssertionError('初始化不依赖相机观测')
+            monkeypatch.setattr(rt.devices.camera('arm-01'), 'check_quality', no_camera)
+            actions = list(rt.devices.driver('arm-01').action_log)
+            contexts = []
+            async def hook(runtime, device, context):
+                contexts.append(context)
+            context = op_context()
+            result = await prepare_run(rt, 'arm-01', {'confirmed': True, 'mode': 'initialize'}, context, before_resume=hook)
+            assert result['status'] == 'paused' and result['mode'] == 'initialize'
+            assert rt.get_task(task['task_id'])['status'] == 'cancelled'
+            assert rt.devices.get('arm-01')['calibration_status'] == 'due'
+            assert rt.devices.driver('arm-01').action_log == actions
+            assert contexts[0]['preparation_mode'] == 'initialize'
+            with pytest.raises(ApiError, match='idempotency_conflict'):
+                await prepare_run(rt, 'arm-01', {'confirmed': True}, context)
+        finally:
+            await rt.shutdown()
+    asyncio.run(scenario())
+
+
+def test_initialize_authorization_rejection_happens_before_pause(tmp_path):
+    app, rt = build_app(tmp_path, n_devices=1)
+    def denied(device, body, context):
+        raise ApiError('permission_denied')
+    app.state.authorize_initialization_hook = denied
+    with TestClient(app) as client:
+        response = client.post('/v1/devices/arm-01/prepare-run', json={**op_context(), 'confirmed': True, 'mode': 'initialize'})
+        assert response.status_code == 403
+        assert rt.devices.get('arm-01')['status'] == 'ready'
