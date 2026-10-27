@@ -115,11 +115,15 @@ class EvidenceStore:
         task_id: str | None,
         label: str,
         operator: str = "runtime",
+        observation_context: dict | None = None,
     ) -> dict:
         """用指定摄像头采集一帧并归档为证据（老入口：委托 archive_camera_frame）。
 
         FIX-08：记录补充帧的采样身份（source/broker 序号与单调时刻，存在才落），
         不再丢弃截图与采样时序的关联。
+
+        observation_context：步骤归属等结构化上下文（如 step_no / step_action），
+        原样落进证据记录，供事后按步骤检索，不再靠 label 中文串反推步骤号。
         """
         frame = camera.capture_sync()
         # Shared brokers expose camera_id; legacy drivers use device_id.
@@ -127,6 +131,7 @@ class EvidenceStore:
         camera_id = getattr(camera, "camera_id", None) or getattr(camera, "device_id", None)
         return self.archive_camera_frame(
             frame,
+            observation_context,
             device_id=device_id, task_id=task_id, label=label,
             camera_id=camera_id, operator=operator,
             kind="screenshot", kind_display="截图",

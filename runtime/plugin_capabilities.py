@@ -8,6 +8,7 @@ ArmFleetRuntime 经 Mixin 继承本模块；tasks/plugin_api 与 runtime/executo
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from copy import deepcopy
 from pathlib import Path
@@ -21,6 +22,23 @@ from runtime.util import iso, parse_iso, sha256_bytes, sha256_text, utc_now
 # 自 runtime.py 随唯一消费者 _stop_task_arm 迁入；字符串路径补丁已跟随本模块
 # （test_plugin_cancellation）。
 TASK_STOP_TIMEOUT_SECONDS = 5.0
+
+
+def capability_params_digest(params: dict | None) -> dict:
+    """能力调用参数的留痕摘要：结构 + 内容哈希，不落明文。
+
+    消息正文等敏感内容不进审计库；调参调优需要的"这步调了什么形状的目标"
+    由键名 + 字节数 + 稳定哈希回答，配合任务 payload_hash 可与原文对齐。
+    """
+    if not isinstance(params, dict):
+        return {"keys": [], "bytes": 0, "sha256_8": ""}
+    payload = json.dumps(params, ensure_ascii=False, sort_keys=True, default=str)
+    encoded = payload.encode("utf-8")
+    return {
+        "keys": sorted(str(key) for key in params),
+        "bytes": len(encoded),
+        "sha256_8": sha256_text(payload)[:8],
+    }
 
 
 class PluginCapabilityMixin:
@@ -390,6 +408,12 @@ class PluginCapabilityMixin:
             operator_id=f"plugin:{plugin_id}",
             task_id=task["task_id"], device_id=device_id,
             reason=f"能力调用：{capability_id}",
+            detail={
+                "capability_id": capability_id,
+                "step_cursor": int(task.get("step_cursor", 0)),
+                "params_digest": capability_params_digest(params),
+                "action_call_count": int(task.get("action_call_count", 0)),
+            },
         )
 
         if capability_id == "device.gesture_profile":

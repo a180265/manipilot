@@ -499,6 +499,11 @@ class TaskExecutor:
                         "message": uncertainty,
                     }
 
+                detail = result.get("detail") or {}
+                if not detail and result["outcome"] in {"failed", "unknown"}:
+                    # 插件没给现场时补最小执行上下文：调优必须能回答
+                    # "哪一步、哪台设备、卡了多久、调了几次能力"。
+                    detail = self._failure_context(task, step, result)
                 log_entry = {
                     "step_no": step["step_no"],
                     "action": step["action"],
@@ -507,7 +512,7 @@ class TaskExecutor:
                     "phase": "done",
                     "outcome": result["outcome"],
                     "message": result.get("message", ""),
-                    "detail": result.get("detail") or {},
+                    "detail": detail,
                     "at": iso(utc_now()),
                 }
                 task.setdefault("step_log", []).append(log_entry)
@@ -516,7 +521,9 @@ class TaskExecutor:
                 self._save(task)
 
                 if step.get("evidence_required", True):
-                    await self._capture_evidence(task, f"步骤{step['step_no']}取证：{step['action_display']}")
+                    await self._capture_evidence(
+                        task, f"步骤{step['step_no']}取证：{step['action_display']}",
+                        step_no=step["step_no"], step_action=step["action"])
 
                 if result["outcome"] == "unknown":
                     return await self.finalize(
@@ -1092,17 +1099,56 @@ class TaskExecutor:
         return task
 
     # ---------- 内部 ----------
-    async def _capture_evidence(self, task: dict, label: str) -> dict | None:
+    async def _capture_evidence(self, task: dict, label: str, *,
+                                step_no: int | None = None,
+                                step_action: str | None = None) -> dict | None:
         try:
             camera = self._runtime.devices.camera_broker(task["device_id"])
+            context: dict = {}
+            if step_no is not None:
+                context["step_no"] = step_no
+            if step_action is not None:
+                context["step_action"] = step_action
             record = self._runtime.evidence.capture_screenshot(
-                device_id=task["device_id"], camera=camera, task_id=task["task_id"], label=label
+                device_id=task["device_id"], camera=camera, task_id=task["task_id"], label=label,
+                observation_context=context or None,
             )
             task.setdefault("evidence_ids", []).append(record["evidence_id"])
             self._runtime._save_task_progress(task)
             return record
         except Exception:
             return None
+
+    def _failure_context(self, task: dict, step: dict, result: dict) -> dict:
+        """失败/未知步骤的最小执行现场（插件没给 detail 时的兜底）。
+
+        只落执行元信息，不落消息正文：正文属敏感内容，另有 payload_hash 覆盖。
+        """
+        started = None
+        for entry in reversed(task.get("step_log") or []):
+            if entry.get("phase") == "started" and entry.get("step_no") == step["step_no"]:
+                started = entry.get("at")
+                break
+        elapsed_ms = None
+        if started:
+            try:
+                elapsed_ms = int((utc_now() - parse_iso(started)).total_seconds() * 1000)
+            except Exception:  # noqa: BLE001 现场兜底不得反过来打断收尾
+                elapsed_ms = None
+        return {
+            "failure_context": {
+                "step_no": step["step_no"],
+                "action": step["action"],
+                "is_action": step.get("is_action", False),
+                "device_id": task.get("device_id"),
+                "outcome": result.get("outcome"),
+                "error_category": task.get("error_category"),
+                "elapsed_ms": elapsed_ms,
+                "capability_call_count": int(task.get("capability_call_count", 0)),
+                "action_call_count": int(task.get("action_call_count", 0)),
+                "plugin_supplied_detail": False,
+            }
+        }
 
     def _aggregate_results(self, task: dict) -> dict:
         extras: dict = {}
