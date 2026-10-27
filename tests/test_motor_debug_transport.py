@@ -656,3 +656,41 @@ def test_failed_position_read_never_reconnects_or_uses_cached_position(transport
     assert error.value.code == "daemon_unreachable"
     assert sock.closed and len(opened) == 1
     assert sock.stream.writes == [b"MPOS\n"]
+
+
+@pytest.mark.parametrize("method,command,response", [
+    ("connect_arm", b"CONNECT\n", b'{"connected":true,"session":"new-session"}\n'),
+    ("disconnect_arm", b"DISCONNECT\n", b'{"disconnected":true}\n'),
+])
+def test_manual_connection_action_replaces_expired_unleased_tcp(transport, method, command, response):
+    client, sockets, opened = transport
+    expired = FakeSocket(b"")
+    next(expired.stream.replies)
+    client.sock, client.f = expired, expired.stream
+    fresh = FakeSocket(response)
+    sockets.append(fresh)
+    getattr(client, method)()
+    assert expired.closed and expired.stream.writes == []
+    assert len(opened) == 1 and fresh.stream.writes == [command]
+
+
+def test_status_exposes_serial_disconnect_reason(transport):
+    client, sockets, _opened = transport
+    sockets.append(FakeSocket(status_reply(connected=False, session=None,
+        disconnectReason="控制器启动/复位，会话已撤销")))
+    status = client.status()
+    assert status["connected"] is False
+    assert status["error_code"] is None
+    assert "启动/复位" in status["disconnect_reason"]
+
+
+def test_connect_preserves_live_lease_and_does_not_reopen_serial(transport):
+    client, _sockets, opened = transport
+    current = FakeSocket(b'{"connected":true,"session":"same-session","already":true}\n')
+    next(current.stream.replies)
+    client.sock, client.f = current, current.stream
+    client.lease_id = "active-debug-lease"
+    assert client.connect_arm()["already"] is True
+    assert not current.closed and opened == []
+    assert client.lease_id == "active-debug-lease"
+    assert current.stream.writes == [b"CONNECT\n"]

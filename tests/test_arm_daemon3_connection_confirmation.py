@@ -1,5 +1,6 @@
 """连接/恢复的成功必须来自控制器状态，全部使用假串口。"""
 import json
+import threading
 
 import pytest
 
@@ -100,3 +101,65 @@ def test_resume_never_claims_success_without_observed_release(rig, failure):
     assert clock.now < 2.0
     assert holder.estop_locked is True
     assert not any(item.startswith((b"G", b"$")) for item in wire.writes)
+
+
+@pytest.mark.parametrize("banner_at", [3.2, 4.0, 5.5, 6.3])
+def test_connect_delayed_boot_tail_does_not_drop_manual_jog_session(rig, monkeypatch, banner_at):
+    """现场链：CONNECT 成功后下一轮位置查询才读到启动尾包。"""
+    from scripts import motor_debug_server as debug
+    holder, wire, clock = rig
+    holder.arm = None
+    open_fake(monkeypatch, wire)
+    write = wire.write
+    sent_banner = False
+
+    def respond(data):
+        nonlocal sent_banner
+        result = write(data)
+        if data == b"?":
+            if clock.now >= banner_at and not sent_banner:
+                wire.fragments.append(b"Grbl 1.3b ['$' for help]\n")
+                sent_banner = True
+            wire.fragments.append(POSITION)
+        return result
+
+    wire.write = respond
+    client = object.__new__(debug.DaemonClient)
+    client._lock = threading.RLock()
+    client.lease_id = None
+    client._close_ordinary_channel = lambda: None
+    client.device_id = daemon.DEVICE_ID
+    client.daemon_addr = ("127.0.0.1", 8795)
+    client._status_cmd = lambda line, **_kw: daemon.handle(line, 12)
+    monkeypatch.setattr(client, "cmd", lambda line: daemon.handle(line, 11))
+    client.connect_arm()
+    clock.sleep(3)
+    try:
+        daemon.handle("MPOS", 12)  # 页面状态轮询，不下发运动
+    except RuntimeError:
+        pass
+    context_id = "ctx-delayed-boot"
+    monkeypatch.setattr(debug, "CONTEXTS", {context_id: {
+        "device_id": daemon.DEVICE_ID, "expires_at": debug.time.time() + 60,
+        "daemon_addr": "127.0.0.1:8795"}})
+    monkeypatch.setattr(debug, "daemon_for", lambda _d: client)
+    # 同一个手动点动守卫不得因尚未收完的开机尾包而报 daemon_unreachable。
+    debug.require_context(daemon.DEVICE_ID, context_id, motion=True, manual=True)
+    assert sent_banner and holder.arm is not None
+    assert all(item == b"?" for item in wire.writes)
+
+
+def test_status_retains_disconnect_reason_until_new_manual_connection(rig, monkeypatch):
+    holder, wire, _clock = rig
+    wire.fragments.append(b"Grbl 1.3b ['$' for help]\n")
+    with pytest.raises(RuntimeError, match="启动/复位"):
+        daemon.handle("MPOS", 12)
+    status = json.loads(daemon.handle("STATUS", 12))
+    assert status["connected"] is False
+    assert "启动/复位" in status["disconnectReason"]
+    replacement = type("FakeArm", (), {"session": "new-session"})()
+    monkeypatch.setattr(daemon, "ArmSession", lambda: replacement)
+    daemon.handle("CONNECT", 11)
+    status = json.loads(daemon.handle("STATUS", 12))
+    assert status["session"] == "new-session"
+    assert status["disconnectReason"] is None

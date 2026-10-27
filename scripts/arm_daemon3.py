@@ -100,7 +100,8 @@ LISTEN = ("127.0.0.1", int(os.environ.get("ARM_DAEMON_PORT", "8795")))
 DEVICE_ID = os.environ.get("ARM_DAEMON_DEVICE_ID", "arm-01").strip() or "arm-01"
 WATCH_INTERVAL_S = 2.0
 MPOS_RESPONSE_TIMEOUT_S = 2.0
-CONNECT_HANDSHAKE_TIMEOUT_S = 4.0
+CONNECT_HANDSHAKE_TIMEOUT_S = 8.0
+CONNECT_STARTUP_OBSERVATION_S = 4.0
 CONNECT_STABLE_WINDOW_S = 0.5
 RESUME_CONFIRM_TIMEOUT_S = 1.5  # 调试台控制请求总超时为 2 秒。
 CLIENT_IDLE_TIMEOUT_S = 120.0
@@ -175,7 +176,8 @@ class ArmSession:
 
     def _confirm_connection(self) -> None:
         """只读等待稳定状态；启动横幅重置窗口，不下发复位或运动。"""
-        deadline = time.monotonic() + CONNECT_HANDSHAKE_TIMEOUT_S
+        started = time.monotonic()
+        deadline = started + CONNECT_HANDSHAKE_TIMEOUT_S
         stable_key, stable_since = None, None
         while time.monotonic() < deadline:
             position = self.mpos(deadline=deadline)
@@ -186,7 +188,8 @@ class ArmSession:
                 stable_key, stable_since = None, None
             elif key != stable_key:
                 stable_key, stable_since = key, time.monotonic()
-            elif time.monotonic() - stable_since >= CONNECT_STABLE_WINDOW_S:
+            elif (time.monotonic() - started >= CONNECT_STARTUP_OBSERVATION_S
+                  and time.monotonic() - stable_since >= CONNECT_STABLE_WINDOW_S):
                 self._boot_banner_grace = False
                 self._initializing_connection = False
                 self._idle_without_motion = state == "Idle"
@@ -639,6 +642,7 @@ class ArmHolder:
         self.cmd_lock = threading.Lock()
         self.estop_locked = False
         self.communication_recovery: dict | None = None
+        self.disconnect_reason: str | None = None
         self.stop_generation = 0
         self.transactions: dict[int, str] = {}  # conn_id -> tx_id
         self.active_commands: dict[int, tuple[threading.Event, bool]] = {}
@@ -699,6 +703,7 @@ class ArmHolder:
             if self.arm is not arm:
                 return
             self.arm = None
+            self.disconnect_reason = reason
             self.communication_recovery = None
             self.leases.invalidate_all(reason)
             self.transactions.clear()
@@ -718,6 +723,7 @@ class ArmHolder:
                 raise RuntimeError(f"连接失败：{exc}") from exc
             with self.lock:
                 self.arm = arm
+                self.disconnect_reason = None
             return {"connected": True, "deviceId": DEVICE_ID, "session": arm.session}
 
     def disconnect(self) -> dict:
@@ -934,6 +940,7 @@ class ArmHolder:
                     "connected": arm is not None,
                     "devicePresent": self.device_present,
                     "session": arm.session if arm else None,
+                    "disconnectReason": getattr(self, "disconnect_reason", None),
                     "estopLocked": self.estop_locked,
                     "communicationRecoveryRequired": bool(recovery),
                     "communicationRecoveryId": recovery["id"] if recovery else None,

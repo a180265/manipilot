@@ -137,6 +137,7 @@ _ERROR_HTTP_STATUS = {
     "camera_resolution_changed": 409,
     "camera_frame_stale": 503,
     "daemon_unreachable": 503,
+    "serial_not_connected": 409,
     "daemon_device_mismatch": 409,
     "daemon_session_changed": 409,
     "device_removed": 409,
@@ -1250,8 +1251,7 @@ def require_context(device: str, context_id: str | None, *, motion: bool = False
         if motion:
             if status.get("estop_locked"):
                 raise RuntimeError("急停锁定中，拒绝手动运动")
-            if not status.get("connected") or not status.get("session"):
-                raise RuntimeError("daemon_unreachable")
+            require_manual_connection(status)
         with _LOCK:
             stored = CONTEXTS.get(context_id)
             if stored:
@@ -1394,6 +1394,19 @@ class DaemonCommandError(RuntimeError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+def require_manual_connection(status: dict) -> None:
+    """区分 daemon 通信故障与已确认的串口断开，不引入自动任务资格。"""
+    if status.get("error_code") or status.get("status_stale"):
+        raise DaemonCommandError(
+            status.get("error_code") or "daemon_unreachable",
+            status.get("last_error") or "守护进程状态暂不可确认，请稍后重试")
+    if not status.get("connected") or not status.get("session"):
+        reason = status.get("disconnect_reason") or "尚未建立串口会话"
+        raise DaemonCommandError(
+            "serial_not_connected",
+            f"机械臂串口未连接：{reason}；请点击「连接设备」后再手动调整")
 
 
 class DaemonClient:
@@ -1698,7 +1711,7 @@ class DaemonClient:
             resp = json.loads(self._status_cmd("STATUS", timeout=self.STATUS_TIMEOUT))
             actual_device = resp.get("deviceId")
             if actual_device != self.device_id:
-                raise RuntimeError(
+                raise DaemonCommandError("daemon_device_mismatch",
                     f"daemon 设备身份不匹配：期望 {self.device_id}，"
                     f"实际 {actual_device or '未返回'}"
                 )
@@ -1711,6 +1724,7 @@ class DaemonClient:
                     "estop_locked": bool(resp.get("estopLocked")),
                     "lease": resp.get("lease"),
                     "motion_features": resp.get("motionFeatures") or [],
+                    "disconnect_reason": resp.get("disconnectReason"),
                     "last_error": None,
                     "error_code": None}
         except Exception as exc:
@@ -1794,23 +1808,29 @@ class DaemonClient:
     def resume(self) -> dict:
         with self._lock:
             status = self.status()
-            if not status.get("connected") or not status.get("session"):
-                raise RuntimeError("daemon_unreachable")
             if status.get("estop_locked"):
                 raise RuntimeError("急停锁定中，拒绝恢复运动")
+            require_manual_connection(status)
             self.ensure_debug_lease()
             return json.loads(self.cmd("RESUME", timeout=self.CONTROL_TIMEOUT))
 
     def connect_arm(self) -> dict:
         """人工连接机械臂（打开串口，生成新会话锚点）。"""
-        resp = json.loads(self.cmd("CONNECT"))
-        self.session = resp.get("session")
-        return resp
+        with self._lock:
+            if not self.lease_id:
+                self._close_ordinary_channel()
+            resp = json.loads(self.cmd("CONNECT"))
+            self.session = resp.get("session")
+            return resp
 
     def disconnect_arm(self) -> dict:
-        resp = json.loads(self.cmd("DISCONNECT"))
-        self.session = None
-        return resp
+        with self._lock:
+            if not self.lease_id:
+                self._close_ordinary_channel()
+            resp = json.loads(self.cmd("DISCONNECT"))
+            self.session = None
+            self.lease_id, self.lease_expires = None, 0.0
+            return resp
 
 
 DAEMONS: dict[str, DaemonClient] = {}
@@ -1872,7 +1892,13 @@ def status_snapshot(device: str, context_id: str | None = None) -> dict:
         }, "状态查询进行中，当前状态暂不可确认")
     try:
         if context_id is not None:
-            require_context(device, context_id)
+            # 状态面展示当前事实；相机换绑不能遮蔽串口连接及 XYZ。
+            require_context_local(device, context_id)
+            with _LOCK:
+                stored = CONTEXTS.get(context_id)
+                if stored:
+                    stored["last_used_at"] = time.time()
+                    stored["expires_at"] = time.time() + CONTEXT_TTL_SECONDS
         revision = daemon.motion_revision
         daemon_status = daemon.status()
         mpos = None

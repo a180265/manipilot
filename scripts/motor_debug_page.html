@@ -1548,7 +1548,8 @@ function renderStatus(data) {
     banner.textContent = "⚠ 当前状态暂不可确认，已锁定坐标动作；请等待状态刷新或人工核对。";
     banner.classList.add("show");
   } else if (!d.session && d.device_present) {
-    banner.textContent = "🔔 检测到机械臂串口已插入。点击右上「🔌 连接设备」建立连接" +
+    banner.textContent = (d.disconnect_reason ? "⚠ " + d.disconnect_reason + "。" : "") +
+      "🔔 检测到机械臂串口已插入。点击右上「🔌 连接设备」建立连接" +
       "（连接会使控制器复位、MPos 从 0 重新计数，属于正常现象）。";
     banner.classList.add("show");
   } else if (d.lease && d.lease.owner_type === "business") {
@@ -2911,7 +2912,7 @@ async function connectSelectedDevice() {
   renderDeviceWritePending();
   try {
     const r = await api("/api/connect", {method: "POST"});
-    toast(`✅ 机械臂已连接，会话锚点 ${String(r.session).slice(0, 8)}（MPos 已重新从 0 计数）`, "ok");
+    toast(`✅ ${r.already ? "机械臂保持原连接" : "机械臂连接已完成"}，会话锚点 ${String(r.session).slice(0, 8)}；请按当前坐标人工校准`, "ok");
   } catch (e) { toast("连接失败：" + e.message, "err"); }
   finally {
     deviceConnectPending = false;

@@ -790,7 +790,7 @@ def test_manual_controls_ignore_task_and_camera_gates(two_devices, monkeypatch, 
 
 @pytest.mark.parametrize("condition,expected", [
     ({"estop_locked": True}, "急停锁定"),
-    ({"connected": False, "session": None}, "daemon_unreachable"),
+    ({"connected": False, "session": None}, "串口未连接"),
     ({"device_id": "arm-02"}, "daemon_device_mismatch"),
 ])
 def test_manual_context_reports_actual_hardware_restrictions(two_devices, monkeypatch, condition, expected):
@@ -817,3 +817,44 @@ def test_manual_context_does_not_relax_automatic_context(two_devices, monkeypatc
     with pytest.raises(RuntimeError, match="device_context_mismatch"):
         debug.require_context("arm-02", context["contextId"], motion=True, manual=True)
     assert daemons["arm-01"].commands == []
+
+
+def test_status_after_camera_rebinding_keeps_manual_connection_visible(two_devices, monkeypatch):
+    _configs, daemons = two_devices
+    context = debug.create_device_context("arm-01")
+    camera = {**debug.camera_status("arm-01"), "binding_revision": 6}
+    monkeypatch.setattr(debug, "camera_status", lambda _d: camera)
+    daemon = daemons["arm-01"]
+    monkeypatch.setattr(daemon, "mpos", lambda **_kw: dict(daemon._mpos))
+    result = debug.status_snapshot("arm-01", context["contextId"])
+    assert result["daemon"]["connected"] is True
+    assert result["mpos"]["x"] == 1.0
+    assert result["camera"]["binding_revision"] == 6
+    with pytest.raises(RuntimeError, match="camera_binding_revision_changed"):
+        debug.require_context("arm-01", context["contextId"], motion=True)
+
+
+@pytest.mark.parametrize("condition,code,http_status,message", [
+    ({"connected": False, "session": None, "disconnect_reason": "控制器启动/复位，会话已撤销"},
+     "serial_not_connected", 409, "控制器启动/复位"),
+    ({"connected": False, "session": None, "status_stale": True,
+      "error_code": "daemon_command_timeout", "last_error": "守护进程状态查询超时"},
+     "daemon_command_timeout", 504, "查询超时"),
+    ({"connected": False, "session": None, "status_stale": True,
+      "error_code": "daemon_unreachable", "last_error": "守护进程连接被拒绝"},
+     "daemon_unreachable", 503, "连接被拒绝"),
+])
+def test_manual_guard_preserves_connection_failure_reason(two_devices, monkeypatch,
+                                                         condition, code, http_status, message):
+    _configs, daemons = two_devices
+    context = debug.create_device_context("arm-01")
+    daemon = daemons["arm-01"]
+    status = {**daemon.status(), **condition}
+    monkeypatch.setattr(daemon, "status", lambda: status)
+    with pytest.raises(debug.DaemonCommandError) as failure:
+        debug.require_context("arm-01", context["contextId"], motion=True, manual=True)
+    actual_http, body = debug.api_error(failure.value)
+    assert actual_http == http_status
+    assert body["error"]["code"] == code
+    assert message in body["error"]["message"]
+    assert daemon.commands == []
