@@ -548,3 +548,32 @@ def test_recovery_attempt_action_real_body_wiring(tmp_path, monkeypatch):
     # rebind_targets 可调用且收 restored bundle（真实重绑在
     # attempt_recovery 内部以 restored 调用——rebinds 由真实现填充）
     assert callable(recorded_kwargs["rebind_targets"])
+
+
+def test_post_promote_write_requests_have_stable_distinct_ids(env, monkeypatch):
+    calls = []
+    def request(method, path, body=None):
+        if method == 'GET':
+            return {'camera_quality': 'clear'}
+        assert body.get('client_request_id'), 'write API rejects missing client_request_id'
+        calls.append(body['client_request_id'])
+        return {'home_ok': True}
+    monkeypatch.setattr(debug, '_agent_json', request)
+    debug._post_promote_platform_sync('arm-01', 'run-request-id', background=False)
+    first = calls[:]
+    assert len(set(first)) == 3
+    debug._post_promote_platform_sync('arm-01', 'run-request-id', background=False)
+    assert calls[3:] == first
+
+
+def test_post_promote_failed_home_result_does_not_resume(env, monkeypatch):
+    calls = []
+    def request(method, path, body=None):
+        calls.append(path)
+        if method == 'GET':
+            return {'camera_quality': 'clear'}
+        return {'home_ok': False, 'detail': {'fail_reason': '旧任务尚待人工核对'}}
+    monkeypatch.setattr(debug, '_agent_json', request)
+    result = debug._post_promote_platform_sync('arm-01', 'run-held', background=False)
+    assert '旧任务尚待人工核对' in result['home-check']
+    assert not any(path.endswith('/resume') for path in calls)

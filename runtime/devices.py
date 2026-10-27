@@ -734,7 +734,11 @@ class DeviceManager:
             device["current_ui_state"] = ui["ui_state"]
             device["current_ui_state_display"] = ui["ui_state_display"]
             device["ui_confidence"] = ui["confidence"]
-            self._set_status(device_id, held_status or "ready", "自检通过")
+            reason = ((device.get("pause_reason") or "设备仍暂停，需人工确认")
+                      if held_status == "paused" else
+                      (device.get("quarantine_reason") or "设备仍隔离，需人工确认")
+                      if held_status == "quarantined" else "自检通过")
+            self._set_status(device_id, held_status or "ready", reason)
         device["camera_quality"] = quality["quality"]
         device["camera_quality_display"] = quality["quality_display"]
         self._record_camera_quality_diagnostics(device, quality)
@@ -2562,6 +2566,14 @@ class DeviceManager:
         changed = any(device.get(f"camera_quality_{key}") != diagnostics[key]
                       for key in ("reason_code", "note"))
         device.update({f"camera_quality_{key}": value for key, value in diagnostics.items()})
+        if (quality.get("quality") == "clear"
+                and device.get("status_reason") == "摄像头画面异常，撤销输入/托管资格"):
+            # A recovered camera does not resolve a paused task or grant execution.
+            # Show the surviving hold instead of a stale camera failure.
+            device["status_reason"] = (device.get("pause_reason")
+                                       or device.get("quarantine_reason")
+                                       or "摄像头画面已恢复；执行资格需另行确认")
+            changed = True
         return changed
 
     async def _camera_loop(self) -> None:

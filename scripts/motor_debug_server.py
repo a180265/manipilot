@@ -409,6 +409,7 @@ def _post_promote_platform_sync(device: str, run_id: str, *, background: bool = 
         results: dict[str, str] = {}
         camera_waiting: bool | None = None  # 惰性探测：只在 home-check 前读一次
         for path, body in steps:
+            body = {**body, "client_request_id": f"post-promote:{device}:{run_id}:{path}"}
             if path == "home-check":
                 # P1-3（第五轮复审）：暗屏时 home-check 必败并把设备闩进
                 # degraded（home_not_confirmed 连 resume 都拒）——保持
@@ -428,7 +429,10 @@ def _post_promote_platform_sync(device: str, run_id: str, *, background: bool = 
                            detail="暗屏：跳过归位检查与 resume，保持 ready+camera_waiting 交 A6")
                     return results
             try:
-                _agent_json("POST", f"/v1/devices/{device}/{path}", body)
+                response = _agent_json("POST", f"/v1/devices/{device}/{path}", body)
+                if path == "home-check" and response.get("home_ok") is False:
+                    detail = response.get("detail") or {}
+                    raise ValueError(detail.get("fail_reason") or "归位检查未通过，尚不能恢复设备")
                 results[path] = "ok"
                 log_op("post_promote_sync", {"device": device, "run_id": run_id,
                                              "step": path}, ok=True, detail="")

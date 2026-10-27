@@ -471,3 +471,37 @@ def test_low_detail_frame_is_not_misreported_as_check_exception(via_broker):
     assert result.get("reason_code") == "camera_detail_insufficient"
     assert result.get("note") == "画面细节不足，清晰度未达到要求"
     assert result["metrics"]["blur_variance"] == 0
+
+
+def test_clear_camera_restores_pause_reason_without_clearing_unknown_hold(managed_camera, monkeypatch):
+    manager, camera, store, events, cfg = managed_camera
+    device = manager.get('arm-test')
+    device.update(status='paused', camera_quality='clear', device_mode='unmanaged',
+                  status_reason='摄像头画面异常，撤销输入/托管资格',
+                  pause_reason='任务结果未知，自动暂停待人工确认',
+                  unknown_hold_task_id='held-task', home_ok=False)
+    camera.report = {'quality': 'clear', 'quality_display': '清晰', 'metrics': {}}
+    asyncio.run(poll_once(manager, monkeypatch))
+    saved = store.get_device('arm-test')
+    assert saved['status_reason'] == '任务结果未知，自动暂停待人工确认'
+    assert saved['status'] == 'paused' and saved['home_ok'] is False
+    assert saved['unknown_hold_task_id'] == 'held-task'
+    assert saved['device_mode'] == 'unmanaged'
+
+
+def test_clear_camera_does_not_replace_unrelated_status_reason():
+    device = {'status_reason': '人工维护中'}
+    DeviceManager._record_camera_quality_diagnostics(device, {'quality': 'clear', 'metrics': {}})
+    assert device['status_reason'] == '人工维护中'
+
+
+def test_successful_selfcheck_keeps_existing_pause_explanation(managed_camera):
+    manager, camera, store, events, cfg = managed_camera
+    device = manager.get('arm-test')
+    device.update(status='paused', pause_reason='原任务待人工核对',
+                  unknown_hold_task_id='held-task', home_ok=False)
+    store.save_device(device)
+    camera.report = {'quality': 'clear', 'quality_display': '清晰', 'metrics': {}}
+    result = asyncio.run(manager.register_and_selfcheck(cfg, replacing=True))
+    assert result['status'] == 'paused'
+    assert result['status_reason'] == '原任务待人工核对'
