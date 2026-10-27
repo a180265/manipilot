@@ -1509,6 +1509,7 @@ class DaemonArmDriver(ArmDriver):
         return resolved
 
     def _precheck_motion(self, resolved: dict, current: dict, *, with_tap: bool) -> None:
+        self._require_controller_idle(current)
         for key in ("robotX", "robotY", "hoverZ", "tapDepth", "tapFeed"):
             resolved[key] = _finite(resolved.get(key), key)
         self._position(current)
@@ -1538,6 +1539,7 @@ class DaemonArmDriver(ArmDriver):
 
     def _precheck_swipe_motion(self, resolved: dict, current: dict) -> None:
         """校验滑动的两段 XY 和接触深度，仍沿用当前设备 Z 标定。"""
+        self._require_controller_idle(current)
         for key in (
             "startRobotX", "startRobotY", "endRobotX", "endRobotY",
             "hoverZ", "tapDepth", "tapFeed", "swipeFeed", "durationMs",
@@ -1641,6 +1643,7 @@ class DaemonArmDriver(ArmDriver):
 
     def _precheck_path_motion(self, resolved: dict, current: dict) -> None:
         """连续路径的悬停/走位预检：接触段本身由 PATH1 宏内限值把关。"""
+        self._require_controller_idle(current)
         for key in ("hoverZ", "tapDepth", "tapFeed"):
             resolved[key] = _finite(resolved.get(key), key)
         self._position(current)
@@ -3069,16 +3072,28 @@ class DaemonArmDriver(ArmDriver):
             **({"layout_state": layout.state, **layout.selected.references} if layout is not None else {}),
         }
 
+    @staticmethod
+    def _require_controller_idle(position: dict) -> None:
+        if position.get("state") != "Idle":
+            raise DriverError(
+                "driver_policy_rejected",
+                f"控制器未空闲（{position.get('state') or '状态未知'}），本次动作未下发；"
+                "请人工检查控制器，不自动继续旧动作")
+
     async def go_home(self) -> dict:
         """无限位设备：停止并保持当前位置，不宣称硬件回零（设计 v1.2 §11.5）。"""
         self._check_ready()
         mpos = await self._call(self._mpos)
+        idle = mpos.get("state") == "Idle"
         self.action_log.append({"action": "go_home", "home_mode": "hold_position", "position": mpos})
         return {
-            "ok": True,
+            "ok": idle,
+            "controller_state": mpos.get("state"),
             "position": {k: mpos[k] for k in ("x", "y", "z") if k in mpos},
             "home_mode": "保持当前位置（无限位设备不执行回零）",
-            "message": "聊天结束停靠请由插件显式调用 move_target('ime_delete_key')",
+            "message": ("聊天结束停靠请由插件显式调用 move_target('ime_delete_key')" if idle
+                        else f"控制器未空闲（{mpos.get('state') or '状态未知'}），安全检查未通过；"
+                        "未移动机械臂或继续旧动作"),
         }
 
     async def move_preset(self, position_id: str) -> dict:
@@ -3150,7 +3165,9 @@ class DaemonArmDriver(ArmDriver):
         error = resp.get("error")
         if not stopped and outcome_hint is None:
             outcome_hint = "unknown"
-        message = ("已发送进给保持；如需彻底停止请使用硬件急停"
+        message = ("机械臂已确认空闲，保持当前位置"
+                   if stopped and resp.get("already_idle") is True else
+                   "已发送进给保持；如需彻底停止请使用硬件急停"
                    if stopped else f"停止命令未确认：{error or '结果未知'}")
         return {"ok": stopped, "stopped": stopped, "outcome_hint": outcome_hint,
                 "error": error, "message": message}

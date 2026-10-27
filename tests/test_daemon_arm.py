@@ -884,6 +884,34 @@ def test_move_preset_rejected_go_home_holds(daemon_and_driver):
     assert daemon.commands == before  # 不产生任何运动
 
 
+@pytest.mark.parametrize("state", ["Hold:0", "Hold:1", "Run", "Alarm", "Door:0"])
+def test_go_home_does_not_pass_nonidle_controller(daemon_and_driver, state):
+    daemon, driver = daemon_and_driver
+    daemon.response_hook = lambda command, response, _conn: (
+        json.dumps({**json.loads(response), "state": state}) if command == "MPOS" else response)
+    result = asyncio.run(driver.go_home())
+    assert result["ok"] is False
+    assert result["controller_state"] == state
+    assert state in result["message"]
+    assert daemon.commands == []
+
+
+@pytest.mark.parametrize("state", ["Hold:0", "Hold:1", "Run", "Alarm", "Door:0"])
+def test_click_rejects_nonidle_controller_before_any_motion(daemon_and_driver, state):
+    daemon, driver = daemon_and_driver
+    daemon.response_hook = lambda command, response, _conn: (
+        json.dumps({**json.loads(response), "state": state}) if command == "MPOS" else response)
+    with pytest.raises(DriverError, match=state) as error:
+        asyncio.run(driver.click({
+            "target_id": "send_button",
+            "target_ref": {"source": "camera_ocr", "cameraX": 320, "cameraY": 240,
+                           "frameW": 640, "frameH": 480, "text": "发送", "confidence": .96},
+        }))
+    assert error.value.motion_not_started is True
+    assert daemon.commands == []
+    assert daemon.lease is None and not daemon.transactions
+
+
 def test_supports_and_read_state(daemon_and_driver):
     daemon, driver = daemon_and_driver
     assert driver.supports("arm.move_target")

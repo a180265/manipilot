@@ -754,8 +754,23 @@ class ArmHolder:
         ``!`` 是控制器的异步实时命令。位置查询或普通运动卡住时，若仍走
         ``cmd_lock`` 会把停止也排在故障命令后面，违背急停优先级。
         """
-        with self.lock:
-            return self._stop_locked()
+        # Failure cleanup also calls STOP after a completed park. Sending !
+        # then can turn Idle into persistent Hold and suspend G-code parsing.
+        # Only omit it with completed-idle proof and no command in flight;
+        # never wait for a query or a busy command before sending a real stop.
+        quiescent = self.cmd_lock.acquire(blocking=False)
+        try:
+            with self.lock:
+                arm = self.arm
+                if (quiescent and arm is not None
+                        and getattr(arm, "_idle_without_motion", False)
+                        and not getattr(arm, "_awaiting_ack", False)):
+                    self.stop_generation = getattr(self, "stop_generation", 0) + 1
+                    return {"stopped": True, "connected": True, "already_idle": True}
+                return self._stop_locked()
+        finally:
+            if quiescent:
+                self.cmd_lock.release()
 
     def _stop_locked(self) -> dict:
         self.stop_generation = getattr(self, "stop_generation", 0) + 1
