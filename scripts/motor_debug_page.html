@@ -951,7 +951,7 @@ function renderSerialAction() {
   const other = opt?.dataset.bound && !own;
   const button = $("#btnBindSerial");
   button.style.display = !opt?.value || other ? "none" : "";
-  button.textContent = own ? "连接此串口" : "绑定此串口";
+  button.textContent = own && deviceConnectPending ? "⏳ 正在连接并等待就绪…" : own ? "连接此串口" : "绑定此串口";
   button.disabled = serialActionPending || deviceConnectPending || cameraMappingPending || (own && $("#btnConnect").disabled);
 }
 let serialActionPending = false;
@@ -962,6 +962,7 @@ function renderDeviceWritePending() {
   const pending = serialActionPending || deviceConnectPending || cameraMappingPending;
   $("#deviceId").disabled = pending;
   $("#btnScanSerial").disabled = pending;
+  $("#btnConnect").textContent = deviceConnectPending ? "⏳ 正在连接并等待就绪…" : "🔌 连接设备";
   if (pending) $("#btnConnect").disabled = true;
   renderSerialAction();
 }
@@ -1525,9 +1526,11 @@ function renderStatus(data) {
   S.staleBeats = d.status_stale ? (S.staleBeats || 0) + 1 : 0;
   const btnConnect = $("#btnConnect"), btnDisconnect = $("#btnDisconnect");
   btnConnect.disabled = deviceConnectPending || serialActionPending || cameraMappingPending || Boolean(d.status_stale) || !d.device_present || Boolean(d.session);
-  btnDisconnect.disabled = Boolean(d.status_stale) || !d.connected || !d.session;
+  btnDisconnect.disabled = deviceConnectPending || Boolean(d.status_stale) || !d.connected || !d.session;
   renderSerialAction();
-  if (d.session)
+  if (deviceConnectPending)
+    setBadge($("#bDaemon"), "warn", "正在连接并等待就绪…");
+  else if (d.session)
     setBadge($("#bDaemon"), "ok", `已连接 · 锚点 ${String(d.session).slice(0, 6)}` +
       (d.status_stale ? "（状态滞后）" : ""));
   else if (d.status_stale || String(d.last_error || "").includes("状态查询忙"))
@@ -1541,6 +1544,9 @@ function renderStatus(data) {
   const banner = $("#banner");
   if (d.estop_locked) {
     banner.textContent = "⛔ 急停锁定中（daemon 级，所有普通运动已拒绝）：现场确认安全后点右上「🔓 急停复位」，并用硬件急停/断电作为最终手段。";
+    banner.classList.add("show");
+  } else if (deviceConnectPending) {
+    banner.textContent = "⏳ 正在连接机械臂并确认当前位置，请等待完成提示后再点动或校准。";
     banner.classList.add("show");
   } else if (d.status_stale && !d.session && (S.staleBeats || 0) >= 3) {
     // 已连接时状态查询脱靶不亮此横幅（业主 2026-10-16 拍板：连上就别翻牌子；
@@ -2906,18 +2912,47 @@ $("#btnHover").addEventListener("click", () => {
 });
 
 async function connectSelectedDevice() {
-  if (deviceConnectPending || serialActionPending || cameraMappingPending) return;
+  if (deviceConnectPending || serialActionPending || cameraMappingPending || S.busy > 0) return;
+  const device = DEV_RAW(), generation = selectionGeneration;
+  const current = () => device === DEV_RAW() && generation === selectionGeneration;
+  let ready = null;
   deviceConnectPending = true;
+  setBusy(1);
+  renderWizardBusy();
   $("#btnConnect").disabled = true;
+  $("#btnDisconnect").disabled = true;
+  setBadge($("#bDaemon"), "warn", "正在连接并等待就绪…");
   renderDeviceWritePending();
   try {
     const r = await api("/api/connect", {method: "POST"});
-    toast(`✅ ${r.already ? "机械臂保持原连接" : "机械臂连接已完成"}，会话锚点 ${String(r.session).slice(0, 8)}；请按当前坐标人工校准`, "ok");
-  } catch (e) { toast("连接失败：" + e.message, "err"); }
+    if (!current()) return;
+    if (!r.connected || !r.session) throw new Error("串口连接未确认，请查看设备状态");
+    // CONNECT 已等待控制器启动；再等当前会话的位置快照，避免旧轮询/忙缓存提前报成功。
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const data = await api(`/api/status?device=${encodeURIComponent(device)}`);
+      if (!current()) return;
+      const d = data.daemon || {};
+      if (d.estop_locked) throw new Error("连接已建立，但急停仍锁定，请先人工复位急停");
+      if (!d.status_stale && (!d.connected || d.session !== r.session))
+        throw new Error(d.disconnect_reason || d.last_error || "串口会话已断开或变化，请重新连接");
+      if (!d.status_stale && d.connected && d.session === r.session &&
+          data.mpos && [data.mpos.x, data.mpos.y, data.mpos.z].every(Number.isFinite)) {
+        ready = data;
+        break;
+      }
+      if (attempt < 9) await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    if (!ready) throw new Error("连接已响应，但当前位置尚未确认；请等待状态恢复后重试");
+  } catch (e) { if (current()) toast("连接未就绪：" + e.message, "err"); }
   finally {
     deviceConnectPending = false;
+    setBusy(-1);
+    renderWizardBusy();
     renderDeviceWritePending();
-    await refreshStatus();
+    if (current() && ready) {
+      renderStatus(ready);
+      toast("✅ 连接完成，可以手动调整 XYZ 并人工校准", "ok");
+    } else await refreshStatus();
   }
 }
 $("#btnConnect").addEventListener("click", connectSelectedDevice);
