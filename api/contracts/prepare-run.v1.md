@@ -1,0 +1,15 @@
+# 一键恢复（prepare-run.v1）
+
+`POST /v1/devices/{device_id}/prepare-run` 是操作者主动确认：已切回目标程序主页、探头停稳、放弃旧任务。只读角色及外部系统角色不可调用。
+
+请求使用标准 operator_id、role、correlation_id、client_request_id，另需 confirmed=true；reason 可省略，由服务端记录固定原因。无需填写原因或再次弹框。
+
+先暂停并停止旧托管，以只读方式检查连接/空闲/当前校准/清晰画面；取消未执行队列，经可选应用扩展结束旧业务会话，再核对连接及校准未变。旧 unknown 仅标记已处理，保留原结果和证据；完成主页及停稳确认后恢复接收新任务。不会产生机械动作、输入发送或启动托管。活动租约、在途动作、急停、通信故障或无效校准会拒绝，部分失败保持暂停，允许重新点击。
+
+成功响应含 device_id、status、discarded_task_count（取消旧队列数）、reviewed_task_count（核对旧未知任务数）、message、eligibility（不要求主页上输入法已弹出）。输入动作仍在真正执行前检查输入服务。相同请求编号返回原处理计数及当前状态，不重新解除后来暂停。
+
+校准发布后仅执行 pause→calibration-status，保持暂停；操作者回目标主页后再点本按钮。校准成功不代表自动恢复。
+
+WX 部署的可选扩展以签名 HTTP 调用 WX 清理服务并释放插件旧会话；独立 SDK 不依赖 WX。
+
+设备列表/详情兼容新增 task_eligibility（导航等无需立即输入的任务资格），原 eligibility 保持严格输入资格；主页输入法隐藏不再显示成机械臂整体不可执行。

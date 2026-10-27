@@ -1,5 +1,7 @@
 # Arm Fleet API Contracts
 
+[一键恢复（prepare-run.v1）](prepare-run.v1.md)：结束旧任务后准备新运行，校准完成保持暂停等待操作者。
+
 [校准安全停车（safe-park.v1）](safe-park.v1.md) 定义独立 `arm.park` 能力及当前会话、无接触、到位证据和失败语义。
 
 本页按当前源码整理；历史加固日期不代表当前已部署版本或真机验收结果。

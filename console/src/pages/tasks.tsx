@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { callApi, opContext, currentOperator } from "../api";
 import { ErrorBanner, ReasonDialog, StatusTag, useApp } from "../ui";
+import { PrepareRun } from "../PrepareRun";
 
 // ---------- 任务中心 ----------
 interface TaskItem {
@@ -140,6 +141,7 @@ export const Takeovers: React.FC = () => {
   const { version } = useApp();
   const [items, setItems] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [devices, setDevices] = useState<{ device_id: string; name_display: string }[]>([]);
   const [error, setError] = useState<any>(null);
   const [reviewTask, setReviewTask] = useState<any>(null);
   const [resolveAlert, setResolveAlert] = useState<any>(null);
@@ -147,10 +149,12 @@ export const Takeovers: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
-      const data = await callApi("/v1/takeovers");
+      const [data, alertData, deviceData] = await Promise.all([
+        callApi("/v1/takeovers"), callApi("/v1/alerts"), callApi("/v1/devices"),
+      ]);
       setItems(data.items);
-      const alertData = await callApi("/v1/alerts");
       setAlerts(alertData.alerts);
+      setDevices(deviceData.devices);
     } catch (e: any) {
       setError(e);
     }
@@ -220,6 +224,13 @@ export const Takeovers: React.FC = () => {
     <div className="page">
       <div className="page-head"><h2>异常与恢复</h2></div>
       <ErrorBanner error={error} onClose={() => setError(null)} />
+      <section className="panel">
+        <h3>准备新运行</h3>
+        {devices.map(device => <div key={device.device_id}>
+          <strong>{device.name_display || device.device_id}</strong>
+          <PrepareRun deviceId={device.device_id} onPrepared={load} />
+        </div>)}
+      </section>
       {items.length === 0 && <p className="muted">当前没有需要人工处理的条目。</p>}
       <table className="table">
         <thead><tr><th>类别</th><th>对象</th><th>原因</th><th>时间</th><th>处理</th></tr></thead>

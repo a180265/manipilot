@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { callApi, opContext, currentOperator } from "../api";
 import { ErrorBanner, ReasonDialog, StatusTag, useApp } from "../ui";
+import { PrepareRun } from "../PrepareRun";
 import {
   bindingDraftDirty, canDeviceAction, createLatestRequest, createPreviewOwner,
   debugConsoleUrl, newBindingDraft, refreshBindingEditor,
@@ -189,6 +190,7 @@ export const Overview: React.FC = () => {
               <button onClick={() => setDialog({ device, action: "unquarantine" })} disabled={!canDeviceAction(device.status, "unquarantine", device.home_ok)}>解除隔离</button>
               <DebugLink deviceId={device.device_id} />
             </div>
+            <PrepareRun deviceId={device.device_id} onPrepared={load} />
           </div>
         ))}
       </div>
@@ -598,6 +600,7 @@ const DeviceDetailContent: React.FC<{ deviceId: string }> = ({ deviceId }) => {
           <div>微信账号：{device.wechat_account_id || "待确认"}</div>
           <DeviceConnection device={device} />
           {device.status_reason && <div>状态原因：{device.status_reason}</div>}
+          <PrepareRun key={device.device_id} deviceId={device.device_id} onPrepared={load} />
           <div>归位状态：{device.home_ok ? "已归位" : "未确认归位"}</div>
           <div>租约：{device.lease_id ?? "无"}</div>
           <div>绑定说明：{device.binding_note}</div>

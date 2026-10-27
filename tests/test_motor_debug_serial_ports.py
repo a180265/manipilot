@@ -257,63 +257,16 @@ def test_serial_bind_rejects_non_serial_port_form(env):
 
 
 def test_post_promote_sync_chain_order_and_once(env, monkeypatch):
-    """A5（2026-10-01 拍板）：PROMOTE 后自动平台同步链——顺序
-    calibration-status→home-check→resume；每个 run 只触发一次；
-    任一步失败即止（后续步骤留给人工），不抛出。"""
-    import json as _json
-    (tmp := _tmp_configs(monkeypatch)).mkdir(parents=True, exist_ok=True)
-    calls: list[str] = []
-    fail_at = {"step": None}
-
-    def fake_agent_json(method, path, body=None):
-        if method == "GET" and path.endswith("/devices/arm-01"):
-            # P1-3 设备视图探针：非暗屏，链路全走
-            return {"camera_quality": "clear"}
-        step = path.rsplit("/", 1)[-1]
-        calls.append(step)
-        if fail_at["step"] == step:
-            raise OSError("平台不可达")
-        return {"ok": True}
-
-    monkeypatch.setattr(debug, "_agent_json", fake_agent_json)
-    # 守卫：PROMOTED 触发一次（每 run 去重）、非 PROMOTED 不触发
-    view = {"state": "PROMOTED", "runId": "run-sync-1"}
-    spawned: list[tuple] = []
-    real_sync = debug._post_promote_platform_sync
+    """校准完成先暂停再同步资格；轮询不会重复执行或恢复运行。"""
+    calls = []
     monkeypatch.setattr(debug, "_post_promote_platform_sync",
-                        lambda d, r, **kw: spawned.append((d, r)))
+                        lambda device, run_id: calls.append((device, run_id)))
     debug._PROMOTE_SYNCED.clear()
+    view = {"state": "PROMOTED", "runId": "run-sync-1"}
     debug._maybe_post_promote_sync("arm-01", view)
     debug._maybe_post_promote_sync("arm-01", view)
     debug._maybe_post_promote_sync("arm-01", {"state": "RUNNING", "runId": "run-2"})
-    assert spawned == [("arm-01", "run-sync-1")]
-    monkeypatch.setattr(debug, "_post_promote_platform_sync", real_sync)
-
-    # 失败即止：home-check 失败则 resume 不发
-    fail_at["step"] = "home-check"
-    result = debug._post_promote_platform_sync("arm-01", "run-sync-2",
-                                               background=False)
-    assert result["calibration-status"] == "ok"
-    assert result["home-check"].startswith("failed")
-    assert "resume" not in result
-    fail_at["step"] = None
-
-    # 全链顺序
-    calls.clear()
-    result = debug._post_promote_platform_sync("arm-01", "run-sync-1",
-                                               background=False)
-    assert list(result) == ["calibration-status", "home-check", "resume"]
-    assert calls == ["calibration-status", "home-check", "resume"]
-    debug._maybe_post_promote_sync("arm-01", view)
-    debug._maybe_post_promote_sync("arm-01", view)
-    debug._maybe_post_promote_sync("arm-01", {"state": "RUNNING", "runId": "run-2"})
-    assert spawned == [("arm-01", "run-sync-1")]
-    fail_at["step"] = "home-check"
-    result = debug._post_promote_platform_sync("arm-01", "run-sync-2",
-                                               background=False)
-    assert result["calibration-status"] == "ok"
-    assert result["home-check"].startswith("failed")
-    assert "resume" not in result
+    assert calls == [("arm-01", "run-sync-1")]
 
 
 def _tmp_configs(monkeypatch):
@@ -325,61 +278,34 @@ def _tmp_configs(monkeypatch):
 
 
 def test_post_promote_platform_sync_chain_and_failure(env, monkeypatch):
-    """A5（2026-10-01 拍板）：PROMOTE 尾部同步链按序三连
-    （calibration-status→home-check→resume）；任一步失败即停、不抛出。"""
-    calls: list[tuple] = []
-    monkeypatch.setattr(debug, "_agent_json",
-                        lambda method, path, body=None:
-                        {"camera_quality": "clear"}
-                        if method == "GET" and path.endswith("/devices/arm-01")
-                        else calls.append((method, path.split("/")[-1], body))
-                        or {"ok": True})
+    """任何画面条件下均先暂停再同步校准，不归位、不恢复、不唤醒。"""
+    calls = []
+
+    def request(method, path, body=None):
+        calls.append((method, path.rsplit("/", 1)[-1], body))
+        return {"ok": True}
+
+    monkeypatch.setattr(debug, "_agent_json", request)
     result = debug._post_promote_platform_sync("arm-01", "run-x", background=False)
-    assert result == {"calibration-status": "ok", "home-check": "ok", "resume": "ok"}
-    assert [name for _, name, _ in calls] == [
-        "calibration-status", "home-check", "resume"]
-    assert calls[0][2]["status"] == "validated"
+    assert result == {"pause": "ok", "calibration-status": "ok"}
+    assert [(method, name) for method, name, _ in calls] == [
+        ("POST", "pause"), ("POST", "calibration-status")]
+    assert calls[1][2]["status"] == "validated"
+    assert "一键恢复" in calls[0][2]["reason"]
 
     calls.clear()
 
-    def fail_home_check(method, path, body=None):
-        if path.endswith("home-check"):
-            raise OSError("camera unavailable")
-        calls.append((method, path))
+    def fail_calibration(method, path, body=None):
+        calls.append(path.rsplit("/", 1)[-1])
+        if path.endswith("calibration-status"):
+            raise OSError("平台不可达")
         return {"ok": True}
 
-    monkeypatch.setattr(debug, "_agent_json", fail_home_check)
+    monkeypatch.setattr(debug, "_agent_json", fail_calibration)
     result = debug._post_promote_platform_sync("arm-01", "run-x", background=False)
-    assert result["home-check"].startswith("failed") and "resume" not in result
-    assert all(path.split("/")[-1] != "resume" for _, path in calls)
-    # run 去重：同一 run 只触发一次
-    monkeypatch.setattr(debug, "_agent_json",
-                        lambda method, path, body=None: calls.append(
-                            (method, path.split("/")[-1])) or {"ok": True})
-    debug._PROMOTE_SYNCED.clear()
-    debug._maybe_post_promote_sync("arm-01", {"state": "PROMOTED", "runId": "run-y"})
-    debug._maybe_post_promote_sync("arm-01", {"state": "PROMOTED", "runId": "run-y"})
-    before = [c for c in calls if c[-1] == "run-y" or c[1] == "run-y"]
-    assert debug._PROMOTE_SYNCED.get("run-y") == "arm-01"
-
-    # P1-3（第五轮复审）：暗屏（camera_waiting）时跳过 home-check+resume，
-    # 保持 ready+camera_waiting 交给 A6 自动唤醒——不再把设备闩进 degraded
-    # （home_not_confirmed 连 resume 都拒，A6 永无触发机会）。
-    calls.clear()
-
-    def device_view_waiting(method, path, body=None):
-        if method == "GET" and path.endswith("/devices/arm-01"):
-            return {"camera_quality": "waiting"}
-        calls.append((method, path.split("/")[-1]))
-        return {"ok": True}
-
-    monkeypatch.setattr(debug, "_agent_json", device_view_waiting)
-    result = debug._post_promote_platform_sync("arm-01", "run-dark", background=False)
-    assert result["home-check"].startswith("skipped")
-    assert result["resume"].startswith("skipped")
-    posted = [name for method, name in calls]
-    assert "home-check" not in posted and "resume" not in posted
-    assert "calibration-status" in posted, "校准状态同步不受暗屏影响"
+    assert result["pause"] == "ok"
+    assert result["calibration-status"].startswith("failed")
+    assert calls == ["pause", "calibration-status"]
 
 
 def test_arm_anchor_verify_bounded_and_deviation(tmp_path, monkeypatch):
@@ -561,19 +487,20 @@ def test_post_promote_write_requests_have_stable_distinct_ids(env, monkeypatch):
     monkeypatch.setattr(debug, '_agent_json', request)
     debug._post_promote_platform_sync('arm-01', 'run-request-id', background=False)
     first = calls[:]
-    assert len(set(first)) == 3
+    assert len(set(first)) == 2
     debug._post_promote_platform_sync('arm-01', 'run-request-id', background=False)
-    assert calls[3:] == first
+    assert calls[2:] == first
 
 
-def test_post_promote_failed_home_result_does_not_resume(env, monkeypatch):
+def test_post_promote_pause_failure_does_not_publish_readiness(env, monkeypatch):
     calls = []
+
     def request(method, path, body=None):
         calls.append(path)
-        if method == 'GET':
-            return {'camera_quality': 'clear'}
-        return {'home_ok': False, 'detail': {'fail_reason': '旧任务尚待人工核对'}}
+        raise OSError("暂停未成功")
+
     monkeypatch.setattr(debug, '_agent_json', request)
     result = debug._post_promote_platform_sync('arm-01', 'run-held', background=False)
-    assert '旧任务尚待人工核对' in result['home-check']
-    assert not any(path.endswith('/resume') for path in calls)
+    assert '暂停未成功' in result['pause']
+    assert calls == ['/v1/devices/arm-01/pause']
+    assert 'calibration-status' not in result

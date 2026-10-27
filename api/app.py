@@ -310,6 +310,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
                           if a.get("device_id") == device["device_id"]][:5]
         view["supervision"] = rt_.supervision.view(device["device_id"])
         view["eligibility"] = rt_.device_eligibility(device["device_id"], require_input=True)
+        view["task_eligibility"] = rt_.device_eligibility(device["device_id"], require_input=False)
         return view
 
     def task_view(rt_: ArmFleetRuntime, task: dict) -> dict:
@@ -2979,6 +2980,16 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         body = await request.json()
         result = await rt(request).op_home_check(device_id, op_context(body))
         return result
+
+    @app.post("/v1/devices/{device_id}/prepare-run")
+    async def prepare_device_run(device_id: str, request: Request):
+        from runtime.run_preparation import REASON, prepare_run
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ApiError("invalid_request", "请求体必须为对象")
+        body = {**body, "reason": body.get("reason") or REASON}
+        return await prepare_run(rt(request), device_id, body, op_context(body),
+                                 before_resume=getattr(app.state, "prepare_run_hook", None))
 
     @app.post("/v1/devices/{device_id}/reset-home")
     async def reset_home(device_id: str, request: Request):

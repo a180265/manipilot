@@ -3455,7 +3455,7 @@ function renderWizard() {
 const AUTO_STATE_TEXT = {
   IDLE: "未运行", RUNNING: "运行中", STOPPING: "停止中…", PAUSED_RETRY: "已暂停（等待重试）",
   BOOTSTRAP_REQUIRED: "需要人工建立 Arm seed", FAILED: "失败", ABORT: "中止",
-  INVALIDATED: "已失效", STOPPED: "已停止", PROMOTED: "已提升为 READY",
+  INVALIDATED: "已失效", STOPPED: "已停止", PROMOTED: "校准完成，等待一键恢复",
 };
 const AUTO_LOCK_TEXT = {
   UNINITIALIZED: "未初始化", CANDIDATE: "候选", VALIDATED: "已验证", LOCKED: "🔒锁定", INVALID: "失效",
@@ -3505,6 +3505,8 @@ function renderAuto() {
     ;
   $("#wzAutoNextStep").textContent = active
     ? "自动校准正在运行，请等待本轮结果；需要中断时点击「停止」。"
+    : state === "PROMOTED"
+      ? "校准已完成。请先切回目标程序主页并确认探头停稳，再到控制台点击「一键恢复」；旧任务不再重跑。"
     : zs?.validated && pk.confirmed
       ? "准备已完成：点击参数已验证，SAFE PARK 已确认。下一步点击「启动自动校准」。"
       : zs?.validated

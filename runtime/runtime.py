@@ -2297,7 +2297,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         """聚合：结果未知任务、隔离设备、归位失败设备、未处理严重告警。"""
         items: list[dict] = []
         for task in self.store.all_tasks():
-            if task["status"] == "unknown":
+            if task["status"] == "unknown" and not task.get("reviewed_at"):
                 items.append({
                     "kind": "task_unknown",
                     "kind_display": "结果未知任务",

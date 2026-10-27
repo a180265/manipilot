@@ -384,55 +384,28 @@ _PROMOTE_SYNCED: dict[str, str] = {}
 
 
 def _post_promote_platform_sync(device: str, run_id: str, *, background: bool = True) -> dict:
-    """A5（2026-10-01 拍板）：PROMOTE 后自动执行平台同步链——
-    calibration-status validated → home-check → resume。
+    """校准完成只同步档案资格，保持暂停等待操作员准备新运行。
 
-    暗屏时 home-check 会失败并把设备闩进 degraded（home_not_confirmed 连
-    resume 都拒）——P1-3（第五轮复审）：home-check 前先读设备
-    camera_quality，waiting 则跳过 home-check+resume，保持 ready+camera_waiting
-    交给 A6 自动唤醒；任何一步失败记录 ops 日志即止，不重试不阻塞页面轮询。
-    每个成功 PROMOTE 的 run 只同步一次（_PROMOTE_SYNCED 去重）。"""
+    先暂停再写 validated，避免同步校准的瞬间被自动派发旧任务。
+    不执行归位检查或恢复；操作员切回目标主页后点击「一键恢复」。
+    每个成功 PROMOTE 的 run 只同步一次，失败记录日志即止。
+    """
     steps = (
+        ("pause", {"operator_id": "自动同步",
+                   "reason": "校准完成，请切回目标程序主页后点击一键恢复；旧任务不再重跑",
+                   "correlation_id": run_id}),
         ("calibration-status", {"status": "validated",
                                 "operator_id": "自动同步",
-                                "reason": f"PROMOTE {run_id} 后自动同步校准状态",
+                                "reason": f"PROMOTE {run_id} 后同步校准状态，等待人工准备新运行",
                                 "correlation_id": run_id}),
-        ("home-check", {"operator_id": "自动同步",
-                        "reason": f"PROMOTE {run_id} 后自动归位检查",
-                        "correlation_id": run_id}),
-        ("resume", {"operator_id": "自动同步",
-                    "reason": f"PROMOTE {run_id} 归位检查通过，自动恢复运行",
-                    "correlation_id": run_id}),
     )
 
     def _run() -> dict:
         results: dict[str, str] = {}
-        camera_waiting: bool | None = None  # 惰性探测：只在 home-check 前读一次
         for path, body in steps:
             body = {**body, "client_request_id": f"post-promote:{device}:{run_id}:{path}"}
-            if path == "home-check":
-                # P1-3（第五轮复审）：暗屏时 home-check 必败并把设备闩进
-                # degraded（home_not_confirmed 连 resume 都拒）——保持
-                # ready+camera_waiting 交给 A6 自动唤醒；校准状态同步不受影响。
-                if camera_waiting is None:
-                    try:
-                        device_view = _agent_json("GET", f"/v1/devices/{device}", None)
-                        camera_waiting = (device_view or {}).get("camera_quality") == "waiting"
-                    except Exception:
-                        camera_waiting = False
-                if camera_waiting:
-                    results["home-check"] = "skipped: camera_waiting（暗屏，留待 A6 自动唤醒）"
-                    results["resume"] = "skipped: camera_waiting"
-                    log_op("post_promote_sync",
-                           {"device": device, "run_id": run_id, "step": "home-check",
-                            "skipped": "camera_waiting"}, ok=True,
-                           detail="暗屏：跳过归位检查与 resume，保持 ready+camera_waiting 交 A6")
-                    return results
             try:
-                response = _agent_json("POST", f"/v1/devices/{device}/{path}", body)
-                if path == "home-check" and response.get("home_ok") is False:
-                    detail = response.get("detail") or {}
-                    raise ValueError(detail.get("fail_reason") or "归位检查未通过，尚不能恢复设备")
+                _agent_json("POST", f"/v1/devices/{device}/{path}", body)
                 results[path] = "ok"
                 log_op("post_promote_sync", {"device": device, "run_id": run_id,
                                              "step": path}, ok=True, detail="")
