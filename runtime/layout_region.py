@@ -996,12 +996,11 @@ class LayoutRegionService:
             status = "verified"
             binding_getter = self._env_get("binding_snapshot")
             if record is not None and callable(binding_getter):
-                # binding_snapshot 提供器返回当前受信 camera_binding_id
+                # 当前来源未知或变化时保留历史范围供重新框选，不宣称已验证。
                 current_binding_id = binding_getter(device_id)
                 bound = (record.get("installation_binding") or {}).get(
                     "camera_binding_id")
-                if current_binding_id and bound \
-                        and current_binding_id != bound:
+                if not current_binding_id or current_binding_id != bound:
                     status = "needs_review"
                     reasons.append("source_binding_changed")
             arm_getter = self._env_get("arm_binding")

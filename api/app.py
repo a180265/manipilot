@@ -1379,6 +1379,19 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
         facts["ime_device_id"] = binding.get("ime_device_id")
         return facts
 
+    def _region_binding_snapshot(rt_, device_id: str) -> str | None:
+        """读取历史范围时把来源变化显示为待确认，允许操作员重新框选。"""
+        try:
+            facts = _binding_facts(rt_, device_id)
+        except LayoutHttpError as exc:
+            if exc.code != "layout_binding_changed":
+                raise
+            return None
+        # 旧校准包中的绑定不能代替当前归档来源事实。
+        if not facts.get("camera_id"):
+            return None
+        return facts.get("camera_binding_id")
+
     def _identity(request: Request, route_id: str):
         """R2-23 单点：解析 + 授权分类（共享模板只读放行）。"""
         identity = layout_auth.resolve_identity(request)
@@ -1528,8 +1541,7 @@ def create_app(runtime: ArmFleetRuntime | None = None) -> FastAPI:
             latest_frames=rt_.evidence.latest_source_frames_v2,
             arm_binding=lambda device: _device_arm_binding(rt_, device),
             device_idle=lambda device: rt_.leases.get(device) is None,
-            binding_snapshot=lambda device: (
-                _binding_facts(rt_, device) or {}).get("camera_binding_id"))
+            binding_snapshot=lambda device: _region_binding_snapshot(rt_, device))
         svc._d2_env_attached = True
         return svc
 

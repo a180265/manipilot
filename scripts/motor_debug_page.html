@@ -1472,7 +1472,8 @@ async function motion(path, body, okMsg, label) {
     toast("当前操作尚未结束，请等待本次结果", "err");
     return;
   }
-  if (typeof REGION !== "undefined" && REGION.framing) {
+  if (typeof REGION !== "undefined" && REGION.framing &&
+      !["/api/jog", "/api/tap", "/api/hover", "/api/resume"].includes(path)) {
     // FIX-12：框选期间禁用移动/触屏类动作，防止边框选边动机械
     toast("框选进行中：请先完成或取消粗框，再执行机械动作", "err");
     return;

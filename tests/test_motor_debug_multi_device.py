@@ -669,11 +669,11 @@ def test_http_park_moves_to_confirmed_safe_park(two_devices):
         assert not any(c.startswith("TAP") for c in daemon.commands)
         assert daemon._mpos["x"] == 120.0 and daemon._mpos["y"] == -60.0
 
-        # 3) 会话变化 → 拒绝执行（设备上下文守卫先拦截 daemon_session_changed）
+        # 3) 机械会话变化后，绝对停车坐标仍须重新确认。
         daemon.session = "session-changed"
         with pytest.raises(urllib.error.HTTPError) as excinfo:
             post("/api/park", {"device": "arm-01", "contextId": context_id})
-        assert "daemon_session_changed" in str(json.loads(excinfo.value.read()))
+        assert "会话已变化" in str(json.loads(excinfo.value.read()))
         daemon.session = "session-01"
 
         # 4) P09：停车位带自身确认会话（旧）而顶层/当前会话一致 → 仍拒绝。
@@ -744,3 +744,76 @@ def test_http_motion_rejected_while_auto_run_active(two_devices, monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+@pytest.mark.parametrize("runtime_status", ["paused", "quarantined", "maintenance", "offline"])
+@pytest.mark.parametrize("route,payload,expected", [
+    ("jog", {"axis": "z", "delta": 1, "feed": 1000}, "Z 1.000 F1000"),
+    ("tap", {"depth": 1, "feed": 1000}, "TAP 1.000 F1000"),
+    ("hover", {"hoverZ": 4, "feed": 1000}, "Z 1.000 F1000"),
+    ("resume", {}, "RESUME"),
+])
+def test_manual_controls_ignore_task_and_camera_gates(two_devices, monkeypatch, runtime_status,
+                                                route, payload, expected):
+    _configs, daemons = two_devices
+    context = debug.create_device_context("arm-01")
+    monkeypatch.setattr(debug, "runtime_device_record", lambda _d: {
+        "status": runtime_status, "presence_state": "removed"})
+    def unavailable_camera(_device):
+        raise RuntimeError("手动操作不读取相机资格")
+
+    monkeypatch.setattr(debug, "camera_status", unavailable_camera)
+    daemon = daemons["arm-01"]
+    daemon.session = "session-after-usb-reconnect"
+    monkeypatch.setattr(daemon, "resume", lambda: json.loads(daemon.cmd("RESUME")), raising=False)
+    server = debug.ThreadingHTTPServer(("127.0.0.1", 0), debug.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        req = urllib.request.Request(base + "/api/" + route, method="POST",
+            headers={"Content-Type": "application/json", **_dbg_headers(base)},
+            data=json.dumps({"device": "arm-01", "contextId": context["contextId"],
+                             **payload}).encode())
+        try:
+            with urllib.request.urlopen(req, timeout=3) as response:
+                status, result = response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            status, result = exc.code, json.loads(exc.read())
+        assert status == 200, result
+        assert daemons["arm-01"].commands == [expected]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+@pytest.mark.parametrize("condition,expected", [
+    ({"estop_locked": True}, "急停锁定"),
+    ({"connected": False, "session": None}, "daemon_unreachable"),
+    ({"device_id": "arm-02"}, "daemon_device_mismatch"),
+])
+def test_manual_context_reports_actual_hardware_restrictions(two_devices, monkeypatch, condition, expected):
+    _configs, daemons = two_devices
+    context = debug.create_device_context("arm-01")
+    daemon = daemons["arm-01"]
+    status = {**daemon.status(), **condition}
+    monkeypatch.setattr(daemon, "status", lambda: status)
+    with pytest.raises(RuntimeError, match=expected):
+        debug.require_context("arm-01", context["contextId"], motion=True, manual=True)
+    assert daemon.commands == []
+
+
+def test_manual_context_does_not_relax_automatic_context(two_devices, monkeypatch):
+    _configs, daemons = two_devices
+    context = debug.create_device_context("arm-01")
+    monkeypatch.setattr(debug, "runtime_device_record", lambda _d: {"status": "paused"})
+    with pytest.raises(RuntimeError, match="device_paused"):
+        debug.require_context("arm-01", context["contextId"], motion=True)
+    # 同一旧上下文：仅手动入口放行，自动暂停状态不会被改为 ready。
+    assert debug.require_context("arm-01", context["contextId"], motion=True, manual=True)
+    with pytest.raises(RuntimeError, match="device_paused"):
+        debug.require_context("arm-01", context["contextId"], motion=True)
+    with pytest.raises(RuntimeError, match="device_context_mismatch"):
+        debug.require_context("arm-02", context["contextId"], motion=True, manual=True)
+    assert daemons["arm-01"].commands == []

@@ -1236,10 +1236,27 @@ def close_device_context(context_id: str) -> dict:
 
 
 def require_context(device: str, context_id: str | None, *, motion: bool = False,
-                    emergency: bool = False) -> dict:
+                    emergency: bool = False, manual: bool = False) -> dict:
     context = require_context_local(device, context_id)
     # STOP/ESTOP 只核对本地目标绑定；摄像头故障和状态查询不能阻挡急停。
     if emergency:
+        return context
+    # 人工操作不消费自动任务的暂停/隔离/维护、相机或归档资格。
+    # 目标身份、真实连接和急停仍以当前 daemon 事实为准；自动任务走下方原校验。
+    if manual:
+        status = daemon_for(device).status()
+        if status.get("device_id") != device:
+            raise RuntimeError("daemon_device_mismatch")
+        if motion:
+            if status.get("estop_locked"):
+                raise RuntimeError("急停锁定中，拒绝手动运动")
+            if not status.get("connected") or not status.get("session"):
+                raise RuntimeError("daemon_unreachable")
+        with _LOCK:
+            stored = CONTEXTS.get(context_id)
+            if stored:
+                stored["last_used_at"] = time.time()
+                stored["expires_at"] = time.time() + CONTEXT_TTL_SECONDS
         return context
     # 热插拔重新挂载后，旧页面上下文可能仍保留拔出时的静态门禁；
     # 设备已恢复 present/ready 时清理这些过期阻断项，避免必须切换设备。
@@ -4279,7 +4296,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/api/screen-proof/"):
                 self._json(save_screen_proof(device, body, path.rsplit("/", 1)[-1]))
             elif path == "/api/jog":
-                require_context(device, body.get("contextId") or body.get("context"), motion=True)
+                require_context(device, body.get("contextId") or body.get("context"), motion=True, manual=True)
                 _reject_motion_during_auto_run(device, "点动")
                 daemon.ensure_debug_lease()
                 axis = str(body.get("axis", "")).lower()
@@ -4290,7 +4307,7 @@ class Handler(BaseHTTPRequestHandler):
                        ok=True, detail={"mpos": mpos})
                 self._json({"mpos": mpos})
             elif path == "/api/tap":
-                require_context(device, body.get("contextId") or body.get("context"), motion=True)
+                require_context(device, body.get("contextId") or body.get("context"), motion=True, manual=True)
                 _reject_motion_during_auto_run(device, "点击测试")
                 daemon.ensure_debug_lease()
                 depth = float(body.get("depth", 3.0))
@@ -4312,7 +4329,7 @@ class Handler(BaseHTTPRequestHandler):
                 log_op("stop", {}, ok=True, detail=resp)
                 self._json(resp)
             elif path == "/api/resume":
-                require_context(device, body.get("contextId") or body.get("context"), motion=True)
+                require_context(device, body.get("contextId") or body.get("context"), motion=True, manual=True)
                 _reject_motion_during_auto_run(device, "恢复运动")
                 resp = daemon.resume()
                 log_op("resume", {}, ok=True, detail=resp)
@@ -4324,13 +4341,13 @@ class Handler(BaseHTTPRequestHandler):
                 log_op("estop_lock", {"reason": reason}, ok=True, detail=resp)
                 self._json(resp)
             elif path == "/api/estop_reset":
-                require_context(device, body.get("contextId") or body.get("context"), motion=False)
+                require_context(device, body.get("contextId") or body.get("context"), manual=True)
                 operator = str(body.get("operator") or "调试台操作者")
                 resp = daemon.daemon_estop_reset(operator)
                 log_op("estop_reset", {"operator": operator}, ok=True, detail=resp)
                 self._json(resp)
             elif path == "/api/connect":
-                require_context(device, body.get("contextId") or body.get("context"), motion=False)
+                require_context(device, body.get("contextId") or body.get("context"), manual=True)
                 resp = daemon.connect_arm()
                 with _LOCK:
                     for context in CONTEXTS.values():
@@ -4340,7 +4357,7 @@ class Handler(BaseHTTPRequestHandler):
                 log_op("connect", {}, ok=True, detail=resp)
                 self._json(resp)
             elif path == "/api/disconnect":
-                require_context(device, body.get("contextId") or body.get("context"), motion=False)
+                require_context(device, body.get("contextId") or body.get("context"), manual=True)
                 resp = daemon.disconnect_arm()
                 # 断开会清除上下文里的会话锚点，允许同一设备原地重连；
                 # 重连生成新会话后，旧校准仍会由向导/门禁判定为失效。
@@ -4353,7 +4370,7 @@ class Handler(BaseHTTPRequestHandler):
                 log_op("disconnect", {}, ok=True, detail=resp)
                 self._json(resp)
             elif path == "/api/hover":
-                require_context(device, body.get("contextId") or body.get("context"), motion=True)
+                require_context(device, body.get("contextId") or body.get("context"), motion=True, manual=True)
                 _reject_motion_during_auto_run(device, "回悬停")
                 daemon.ensure_debug_lease()
                 profile = target_archive.load_profile(device, DATA_DIR)
@@ -4368,7 +4385,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/park":
                 # 一键驶向停止位（SAFE PARK）：优先向导现场状态，回退档案；
                 # 停止位是绝对机械坐标，会话锚点变化后拒绝执行（防旧坐标乱跑）。
-                require_context(device, body.get("contextId") or body.get("context"), motion=True)
+                require_context(device, body.get("contextId") or body.get("context"), motion=True, manual=True)
                 _reject_motion_during_auto_run(device, "驶向停止位")
                 daemon = daemon_for(device)
                 daemon.ensure_debug_lease()
@@ -4414,7 +4431,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "source": source}, ok=True, detail=result)
                 self._json(result)
             elif path == "/api/goto":
-                require_context(device, body.get("contextId") or body.get("context"), motion=True)
+                require_context(device, body.get("contextId") or body.get("context"), motion=True, manual=True)
                 _reject_motion_during_auto_run(device, "画面走位")
                 daemon.ensure_debug_lease()
                 nx = float(body["nx"]); ny = float(body["ny"])
