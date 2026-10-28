@@ -51,6 +51,7 @@ def step(number, capabilities, *, calls=(), is_action=False):
 SWIPE = ("arm.swipe", {"start": {"x": 0.5, "y": 0.8},
                        "end": {"x": 0.5, "y": 0.2}})
 MEASURE = ("camera.measure_scroll", {"op": "grab"})
+CAPTURE = ("camera.capture", {})   # 身份无关能力：不需要校准档案即可执行
 
 
 async def leased_task(tmp_path, steps, *, read_only=False, capabilities=()):
@@ -114,7 +115,9 @@ def test_declared_plan_executes_normally_without_changing_permissions(tmp_path):
     async def scenario():
         steps = [
             step(1, ["arm.swipe"], calls=[SWIPE], is_action=True),
-            step(2, ["camera.measure_scroll"], calls=[MEASURE]),
+            # 本用例验的是"计划声明的能力被预检放行后正常执行"，与 grab 能否跑通无关：
+            # grab 需要校准档案与身份帧，由 test_scroll_context_chain 覆盖。
+            step(2, ["camera.measure_scroll"], calls=[CAPTURE]),
         ]
         runtime, plugin, task = await leased_task(
             tmp_path, steps, capabilities=["camera.measure_scroll"])

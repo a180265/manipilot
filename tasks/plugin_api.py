@@ -180,7 +180,12 @@ class TaskPlugin(ABC):
     @abstractmethod
     async def execute_step(self, step: dict, ctx: StepContext) -> dict:
         """执行步骤。返回 {outcome: success|failed|unknown, error_category?,
-        message(中文), detail{}}；detail 可带 provider_message_id 等结果扩展。"""
+        message(中文), detail{}}；detail 可带 provider_message_id 等结果扩展。
+
+        抛异常也受支持：ApiError / RegionContextError 表示"业务级拒绝"，平台按
+        是否已发生动作二分——未动作且错误键在白名单内 → failed（可重试），
+        否则 → unknown（人工核对）。其余异常一律按 unknown 处理；插件不要为了
+        拿到 failed 而把"不确定是否动过"的失败伪装成业务拒绝。"""
 
     async def recover(self, failure: dict, ctx: StepContext) -> dict:
         """失败恢复动作。默认：停止并请求归位。"""

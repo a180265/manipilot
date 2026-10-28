@@ -7,6 +7,9 @@
 不变量：
 - 动作开始后取消必须先停止、清理和取证。
 - 断连、超时、证据不足、运行时异常一律结果未知，禁止猜成明确失败或已完成。
+- 业务级拒绝（参数/校准/粗框）按"是否已发生动作"二分：零动作=明确失败可重试，
+  已动作=结果未知交人工；可降级的错误键白名单见 DEMOTABLE_STEP_ERROR_KEYS，
+  默认不放行（未知语义一律按结果未知处理）。
 - 结果未知时自动暂停设备进入人工路径，禁止自动重试。
 - 每个步骤前后落库（步骤游标），崩溃后按记录恢复，不能重复执行动作。
 """
@@ -19,11 +22,43 @@ from drivers.arm import DriverError
 from tasks.plugin_api import PluginViolationError, StepContext
 from runtime.device_eligibility import INPUT_TASK_TYPES
 from runtime.errors import ApiError
+from runtime.phone_region_context import RegionContextError
 from runtime.status import TASK_STATUS, display
 from runtime.screen_wake import is_screen_wake_task, record_unstarted_result
 from runtime.util import iso, parse_iso, utc_now
 
 TERMINAL_STATUSES = {"confirmed", "failed", "unknown", "cancelled", "expired"}
+
+# 可以把"零副作用业务拒绝"降级为 failed 的错误键白名单。
+# 默认不放行：不在表里的错误（语义未知/可能已动过）一律保持 unknown，交人工核对。
+# 关停只需 `DEMOTABLE_STEP_ERROR_KEYS = frozenset()`。
+DEMOTABLE_STEP_ERROR_KEYS = frozenset({
+    "invalid_request", "missing_field", "confirmation_required",
+    "calibration_invalid", "calibration_unavailable",
+    "region_context_invalid", "region_context_changed",
+    "region_context_unavailable", "frame_chain_invalid",
+    "device_not_found", "plugin_not_found", "task_not_found",
+    # 静态能力/档案缺失与观测来源不可用：均确定零副作用（camera.*/查表类不增动作计数）
+    "capability_unavailable", "capability_unknown",
+    "gesture_profile_not_found",
+    "camera_unavailable", "camera_not_found", "source_unavailable",
+    # 资格门：由能力层在自增计数之后抛出，靠 motion_not_started=True 走第 1 条判据
+    "device_not_eligible",
+})
+
+
+def business_rejection_message(exc: Exception) -> str:
+    """业务拒绝的中文可读文案。
+
+    不用 str(exc)：ApiError 的 str 是 "key：标题（detail）"，RegionContextError
+    是 "code: message"，两者都会把英文键抛到控制台"失败原因"上，违反
+    术语与中文关键值规范（前端渲染不得直接使用英文键）。
+    """
+    title = str(getattr(exc, "title", "") or getattr(exc, "message", "") or "")
+    detail = getattr(exc, "detail", None)
+    if not title:
+        title = "步骤被业务规则拒绝"
+    return f"{title}（{detail}）" if detail else title
 CANCEL_HOOK_TIMEOUT_SECONDS = 10.0
 
 
@@ -511,6 +546,7 @@ class TaskExecutor:
                     "is_action": step.get("is_action", False),
                     "phase": "done",
                     "outcome": result["outcome"],
+                    "error_category": result.get("error_category"),
                     "message": result.get("message", ""),
                     "detail": detail,
                     "at": iso(utc_now()),
@@ -526,8 +562,11 @@ class TaskExecutor:
                         step_no=step["step_no"], step_action=step["action"])
 
                 if result["outcome"] == "unknown":
+                    # 带上步骤给出的分类：unknown 不等于"没原因"，
+                    # 人工核对时必须能看到是超时、断连还是业务拒绝。
                     return await self.finalize(
                         task, "unknown", plugin=plugin,
+                        error_category=result.get("error_category"),
                         message=result.get("message", "步骤结果无法确认"),
                         extras=result.get("detail") or {},
                     )
@@ -590,6 +629,25 @@ class TaskExecutor:
                 return {"outcome": "unknown", "error_category": exc.category,
                         "message": f"{exc.message}；此前已发生动作，需人工核对"}
             return {"outcome": "failed", "error_category": exc.category, "message": exc.message, "detail": {"category_display": exc.category_display}}
+        except (ApiError, RegionContextError) as exc:
+            # 业务级拒绝（参数/校准/粗框）：这些是确定错误，不该冒充"结果未知"
+            # 去触发设备暂停+不清场+不归位。判据有优先级：
+            # 1) 能力层/驱动已证实零动作（motion_not_started）→ 明确失败。
+            #    这一条必须在前：动作计数在能力层"自增先于资格门"，只看计数会把
+            #    已证实未动作的拒绝误判成 unknown，还会谎报"此前已发生动作"。
+            # 2) 白名单内的零副作用键且确实没发生过动作 → 明确失败（可重试）。
+            # 3) 其余（未知语义/已动作）→ 结果未知，交人工核对。
+            code = str(getattr(exc, "key", "") or getattr(exc, "code", "") or "")
+            message = business_rejection_message(exc)
+            if getattr(exc, "motion_not_started", False):
+                return {"outcome": "failed", "error_category": code or "invalid_request",
+                        "message": message}
+            if code in DEMOTABLE_STEP_ERROR_KEYS and not ctx.task.get("action_call_count", 0):
+                return {"outcome": "failed", "error_category": code, "message": message}
+            suffix = "；此前已发生动作，需人工核对" if ctx.task.get("action_call_count", 0) else ""
+            return {"outcome": "unknown",
+                    "error_category": code or "result_unknown_pending",
+                    "message": f"{message}{suffix}"}
 
     # ---------- 取消 ----------
     async def _cancel_flow(self, task: dict, plugin, reason: str = "收到取消请求",
@@ -1142,7 +1200,7 @@ class TaskExecutor:
                 "is_action": step.get("is_action", False),
                 "device_id": task.get("device_id"),
                 "outcome": result.get("outcome"),
-                "error_category": task.get("error_category"),
+                "error_category": result.get("error_category") or task.get("error_category"),
                 "elapsed_ms": elapsed_ms,
                 "capability_call_count": int(task.get("capability_call_count", 0)),
                 "action_call_count": int(task.get("action_call_count", 0)),
