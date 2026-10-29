@@ -12,3 +12,7 @@ console/dist/
 build/
 node_modules/
 .build/
+
+# devices.json 写锁与原子写临时文件（运行时生成，不入库）
+configs/.devices.lock
+configs/.devices.json.*.tmp

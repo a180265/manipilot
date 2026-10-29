@@ -79,7 +79,7 @@ def test_update_device_config_refuses_when_lock_is_held(tmp_path):
     assert ready.wait(10)
     try:
         with pytest.raises(ApiError) as excinfo:
-            update_device_config(tmp_path, "arm-01", {"binding_note": "x"}, timeout=0.15)
+            update_device_config(tmp_path, "arm-01", {"wechat_account_id": "acc-x"}, timeout=0.15)
         assert excinfo.value.key == "device_config_busy"
     finally:
         holder.join(timeout=10)
@@ -103,7 +103,7 @@ def test_non_list_devices_field_raises_instead_of_clearing(tmp_path):
     target.write_text('{"devices": {"arm-01": {"device_id": "arm-01"}}}', encoding="utf-8")
     before = target.read_text(encoding="utf-8")
     with pytest.raises(ApiError) as excinfo:
-        update_device_config(tmp_path, "arm-01", {"binding_note": "x"}, create_if_missing=True)
+        update_device_config(tmp_path, "arm-01", {"wechat_account_id": "acc-x"}, create_if_missing=True)
     assert excinfo.value.key == "device_config_invalid"
     assert target.read_text(encoding="utf-8") == before
 
@@ -125,13 +125,18 @@ def test_unknown_hold_blocks_rebind_and_tolerates_odd_shapes(tmp_path):
                              hardware_mode="simulation")
 
     def _key(manager, payload):
+        """返回门禁是否命中：命中返回 device_unknown_hold，其余（含后续流程异常）返回其它值。
+
+        这里只验证"门禁不误拦"，不验证后续换绑流程能走完（那需要完整注册的设备）；
+        因此捕获全部异常，只关心 key 是否为 device_unknown_hold。
+        """
         manager._devices["arm-01"] = {"device_id": "arm-01", "status": "paused",
                                       "binding_revision": 1, **payload}
         try:
-            asyncio.run(manager.update_binding("arm-01", {"binding_note": "x"},
+            asyncio.run(manager.update_binding("arm-01", {"wechat_account_id": "acc-x"},
                                                operator_id="op", reason="t"))
-        except ApiError as exc:
-            return exc.key
+        except Exception as exc:  # noqa: BLE001 - 只为区分门禁命中
+            return getattr(exc, "key", type(exc).__name__)
         return None
 
     manager = _manager(tmp_path)

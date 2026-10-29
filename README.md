@@ -75,3 +75,18 @@ IME_BASE_URL=http://127.0.0.1:8788 .venv/bin/python scripts/motor_debug_server.p
 ## 测试基线
 
 基线（2026-10-12）：**4290 绿 / 30 红 / 240 跳过 / 0 错误**。30 红为平台继承的存量评审债（手势接线 7、串口重枚举 6、手机姿态终审 6、布局授权 4、裁剪匹配 2、线契约/能力预检/调试台屏证/摄像头代理各 1）加 1 例顺序敏感用例（隔离跑绿）；240 跳过 = 以业务示例插件为载具的端到端流量用例（本仓不发行业务示例插件，见各文件 skipif 说明），后续以通用示例载具重建。
+
+## 设备绑定表（configs/devices.json）行为说明（2026-10-29）
+
+- **写入是"按设备读改写"**：运行期绑定变更（相机/串口/daemon/微信号/IME、禁用/恢复）走
+  `runtime.config.update_device_config`，在 `configs/.devices.lock` 的 flock 内重读磁盘、
+  只合并该设备的字段并原子写。整表接口 `save_device_configs` 仅用于初始化/迁移/测试。
+- **写盘投影白名单 `STATIC_KEYS`**：落盘只保留静态字段，`daemon_session`/心跳/质量等运行时键
+  不落盘；**手写在 devices 条目里的自定义字段会在下一次绑定变更时被剥掉**（需要持久化的新字段
+  必须先登记进 `STATIC_KEYS`）。非 JSON 值（函数/Path）一律不落盘。
+- **失败语义**：绑定表写不进去时返回 `503 device_config_write_failed`（中文标题+建议），
+  内存与数据库保持原样；锁被其它进程占用返回 `409 device_config_busy`；文件损坏返回
+  `400 device_config_invalid` 且**原文件不动**。
+- **未知动作门禁**：设备存在未核对的动作结果（`unknown_hold_task_id`/`unknown_hold_task_ids`）
+  时，变更绑定返回 `409 device_unknown_hold`，须先完成核对/收尾。
+- `.gitignore` 已忽略 `configs/.devices.lock` 与 `configs/.devices.json.*.tmp`（运行时生成）。

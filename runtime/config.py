@@ -322,7 +322,7 @@ def load_device_configs(root: Path = PROJECT_ROOT) -> list[dict]:
 # 来源 = devices.json 现存键 ∪ runtime/devices.py 实际读取的 cfg 键；
 # 目的是挡住 attach 后把 38 个运行时键（daemon_session/heartbeat/quality/home_*）
 # 灌回被 git 跟踪的文件。新增真正需要持久化的字段时，必须同时登记到这里，
-# 否则会被静默丢弃（test_device_config_static_keys 会拦）。
+# 否则会被静默丢弃（tests/test_device_config_concurrency.py::test_persist_projects_runtime_keys 会拦）。
 STATIC_KEYS = frozenset({
     "arm_binding_id", "arm_slot", "baud_rate", "binding_enabled", "binding_mode",
     "binding_note", "binding_revision", "calibration_status", "calibration_validated_at",

@@ -1561,6 +1561,11 @@ class DeviceManager:
         device["device_mode"] = "unmanaged"
         device["device_mode_display"] = DEVICE_MODE["unmanaged"]
         self._store.save_device(device)
+        # 同步内存静态视图：register_device 从 cfg 读 binding_enabled，不同步会在
+        # 同进程重挂载时按旧值 True 复活（2026-10-29 审计）。
+        for registered in self._registered_configs:
+            if str(registered.get("device_id") or "") == device_id:
+                registered["binding_enabled"] = False
         self._audit.record("device_binding_disable", device_id=device_id,
                            operator_id=operator_id, reason=reason)
         self._events.publish("device.updated", {"device_id": device_id, "reason": "绑定已禁用"})
@@ -1578,6 +1583,9 @@ class DeviceManager:
         device["device_mode"] = "unmanaged"
         device["device_mode_display"] = DEVICE_MODE["unmanaged"]
         self._store.save_device(device)
+        for registered in self._registered_configs:
+            if str(registered.get("device_id") or "") == device_id:
+                registered["binding_enabled"] = True
         self._audit.record("device_binding_enable", device_id=device_id,
                            operator_id=operator_id, reason=reason,
                            detail={"note": "恢复后必须重新校准/主界面检查后才能托管"})
@@ -2362,17 +2370,15 @@ class DeviceManager:
                 free_cfg = free[0] if free else None
             if free_cfg is not None:
                 device_id = str(free_cfg.get("device_id"))
-                free_cfg["serial_port"] = port_path
-                assigned_this_pass.add(port_path)
-            if free_cfg is not None:
-                device_id = str(free_cfg.get("device_id"))
                 from runtime.config import update_device_config
 
+                # 先落盘再改内存；带 create_seed 避免空壳条目。
                 update_device_config(self._config_root, device_id,
                                      {"serial_port": port_path},
                                      create_if_missing=True,
                                      create_seed=dict(free_cfg))
                 free_cfg["serial_port"] = port_path
+                assigned_this_pass.add(port_path)
                 self._known_discovery_fingerprints.add(fingerprint)
                 self._events.publish("device.serial_auto_assigned", {
                     "device_id": device_id, "serial_port": port_path,
