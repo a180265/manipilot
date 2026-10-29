@@ -456,6 +456,22 @@ def serial_bind_payload(device: str, port: str) -> dict:
     if cfg is None:
         raise ValueError(f"设备 {device} 未登记")
     old_port = cfg.get("serial_port")
+    # unknown 门禁：动作结果未知未核对时换口会让"未知"永远无法核对。
+    # 状态取自注册中心快照；字段按 None/空串/字符串容错。
+    record = _runtime_device_records().get(device) or {}
+    unknown_first = str(record.get("unknown_hold_task_id") or "").strip()
+    raw_ids = record.get("unknown_hold_task_ids")
+    if isinstance(raw_ids, (list, tuple)):
+        unknown_rest = [str(item).strip() for item in raw_ids if str(item or "").strip()]
+    elif isinstance(raw_ids, str):
+        unknown_rest = [raw_ids.strip()] if raw_ids.strip() else []
+    else:
+        unknown_rest = []
+    if unknown_first or unknown_rest:
+        from runtime.errors import ApiError
+
+        raise ApiError("device_unknown_hold",
+                       f"设备 {device} 存在未核对的动作结果，请先完成核对/收尾再换口")
     from runtime.config import load_device_configs, update_device_config, PROJECT_ROOT
     disk_entries = load_device_configs(PROJECT_ROOT)
     target = next((item for item in disk_entries
@@ -466,10 +482,12 @@ def serial_bind_payload(device: str, port: str) -> dict:
             "动态注册设备的串口改绑请走平台注册流程")
     # 写前最后一次重读（上面 load 即最终读）：最小化与 8788 平台整表写的竞窗
     # 锁内按设备读改写：整表写会把 Fleet 内存副本里的旧值写回来（丢更新）。
-    update_device_config(PROJECT_ROOT, device, {"serial_port": port},
-                         create_if_missing=True)
+    # create_if_missing 保持默认 False：换口途中若另一写者删掉该设备，必须报错，
+    # 不能悄悄重建一条只含 device_id/serial_port 的空壳条目（2026-10-29 复核）。
+    update_device_config(PROJECT_ROOT, device, {"serial_port": port})
     log_op("serial_bind", {"device": device, "port": port,
                            "old_port": old_port}, ok=True)
+    attach_error = ""
     try:
         _agent_json("POST", f"/v1/devices/{device}/attach", {
             "serial_port": port,
@@ -479,7 +497,18 @@ def serial_bind_payload(device: str, port: str) -> dict:
             "client_request_id": f"bind-{int(time.time() * 1000)}",
         })
     except Exception as exc:
-        print(f"attach 代理失败（daemon 将由监督器按新配置重启）：{exc}", flush=True)
+        # 过去只 print 然后照样 ok=True：页面显示"换好了"，实际热重挂没跑。
+        attach_error = str(exc)
+        print(f"attach 代理失败（绑定表已写，热重挂未生效）：{exc}", flush=True)
+    if attach_error:
+        log_op("serial_bind", {"device": device, "port": port,
+                               "old_port": old_port, "attach_error": attach_error}, ok=False)
+        return {"ok": False, "device": device, "serial_port": port,
+                "old_serial_port": old_port,
+                "warning": f"绑定表已写入，但热重挂失败：{attach_error}",
+                "note": "绑定表已更新；平台恢复后按新配置重建 daemon，请确认平台在跑再点「连接设备」"}
+    log_op("serial_bind", {"device": device, "port": port,
+                           "old_port": old_port}, ok=True)
     return {"ok": True, "device": device, "serial_port": port,
             "old_serial_port": old_port,
             "note": "绑定已更新；daemon 将在新端口重连，随后走正常校准流程"}

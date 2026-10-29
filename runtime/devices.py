@@ -1363,6 +1363,8 @@ class DeviceManager:
                 if self._persist_configs is not None:
                     try:
                         self._persist_device(device_id, **applied)
+                    except ApiError:
+                        raise
                     except Exception as exc:
                         raise ApiError("device_config_invalid", f"相机对应关系未保存：{exc}") from exc
                 old_camera = self._cameras[device_id]
