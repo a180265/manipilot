@@ -175,6 +175,28 @@ _ERROR_HTTP_STATUS = {
 
 
 def api_error(exc: Exception) -> tuple[int, dict]:
+    """把异常映射成 (HTTP 状态码, 错误体)。
+
+    2026-10-29：ApiError 只有 .key/.http，没有 .code，旧实现会把 409/503 一律压成
+    400 debug_request_failed，前端只剩英文键名。
+    """
+    try:
+        from runtime.errors import ApiError
+    except Exception:  # pragma: no cover - 极端导入失败时退回旧口径
+        ApiError = ()  # type: ignore[assignment]
+    if ApiError and isinstance(exc, ApiError):
+        # to_payload() 给的是 {error:{key,title,suggestion,trace_id,detail}}；
+        # 调试台前端读的是 error.code/message，这里统一补齐两套字段。
+        raw = (exc.to_payload() or {}).get("error", {}) if hasattr(exc, "to_payload") else {}
+        error = {
+            "code": exc.key,
+            "key": exc.key,
+            "message": str(exc),
+            "title": raw.get("title") or getattr(exc, "title", ""),
+            "suggestion": raw.get("suggestion") or getattr(exc, "suggestion", ""),
+            "details": {},
+        }
+        return int(exc.http), {"ok": False, "error": error}
     message = str(exc)
     code = getattr(exc, "code", None) or (
         message if message in _ERROR_HTTP_STATUS else "debug_request_failed"

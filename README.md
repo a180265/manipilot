@@ -90,3 +90,11 @@ IME_BASE_URL=http://127.0.0.1:8788 .venv/bin/python scripts/motor_debug_server.p
 - **未知动作门禁**：设备存在未核对的动作结果（`unknown_hold_task_id`/`unknown_hold_task_ids`）
   时，变更绑定返回 `409 device_unknown_hold`，须先完成核对/收尾。
 - `.gitignore` 已忽略 `configs/.devices.lock` 与 `configs/.devices.json.*.tmp`（运行时生成）。
+- **调试台换口（`POST /api/serial-bind`）**：只对**静态绑定表里已登记**的设备生效；
+  动态注册设备（只在注册中心、不在 devices.json）会被明确拒绝并提示走平台注册流程——
+  不再隐式创建只含 `device_id/serial_port` 的空壳条目。
+- **调试台换口失败形态**：绑定表写成功但热重挂（attach）失败时返回 **HTTP 200 +
+  `ok:false` + `warning`**（台账只记一条最终结果），页面会显示 ⚠ 提示；正常返回 `ok:true`。
+- **调试台错误码**：`ApiError` 会按其自身 HTTP 码透出（如 `409 device_unknown_hold`、
+  `409 device_config_busy`、`503 device_config_write_failed`），不再统一折成
+  `400 debug_request_failed`。

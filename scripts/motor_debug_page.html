@@ -1052,7 +1052,11 @@ $("#btnBindSerial").addEventListener("click", async e => {
       body: JSON.stringify({device: DEV_RAW(), port}),
     });
     sel.selectedOptions[0].dataset.bound = DEV_RAW();
-    $("#serialPortMsg").textContent = r.note || "绑定已更新，请点击「连接设备」后重新校准";
+    // 后端 attach 失败会回 ok=false + warning：如实显示，不再假装换好了。
+    $("#serialPortMsg").textContent = r.warning
+      ? `⚠ ${r.warning}；${r.note || ""}`
+      : (r.note || "绑定已更新，请点击「连接设备」后重新校准");
+    if (r.ok === false) toast(r.warning || "串口绑定未完全生效", "err");
     await refreshArmDevices();
     await refreshStatus();
   } catch (err) {
