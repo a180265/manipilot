@@ -164,9 +164,13 @@ def test_serial_bind_logs_single_final_result(monkeypatch, tmp_path):
                                             "serial_port": "/dev/cu.OLD"}})
     monkeypatch.setattr(server, "_runtime_device_records", lambda: {"arm-01": {}})
     entries = []
-    monkeypatch.setattr(server, "log_op",
-                        lambda action, detail=None, ok=True, **kw: entries.append(
-                            (action, ok, (detail or {}).get("attach_error", ""))))
+
+    def strict_log_op(action, params, ok, detail):
+        """严格复刻真实签名 log_op(kind, params, ok, detail)。"""
+        assert isinstance(params, dict)
+        entries.append((action, ok, detail))
+
+    monkeypatch.setattr(server, "log_op", strict_log_op)
 
     monkeypatch.setattr(server, "_agent_json",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))

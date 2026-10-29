@@ -504,13 +504,14 @@ def serial_bind_payload(device: str, port: str) -> dict:
         print(f"attach 代理失败（绑定表已写，热重挂未生效）：{exc}", flush=True)
     if attach_failed:
         log_op("serial_bind", {"device": device, "port": port,
-                               "old_port": old_port, "attach_error": attach_error}, ok=False)
+                               "old_port": old_port, "attach_error": attach_error},
+               ok=False, detail=attach_error)
         return {"ok": False, "device": device, "serial_port": port,
                 "old_serial_port": old_port,
                 "warning": f"绑定表已写入，但热重挂失败：{attach_error}",
                 "note": "绑定表已更新；平台恢复后按新配置重建 daemon，请确认平台在跑再点「连接设备」"}
     log_op("serial_bind", {"device": device, "port": port,
-                           "old_port": old_port}, ok=True)
+                           "old_port": old_port}, ok=True, detail="")
     return {"ok": True, "device": device, "serial_port": port,
             "old_serial_port": old_port,
             "note": "绑定已更新；daemon 将在新端口重连，随后走正常校准流程"}
