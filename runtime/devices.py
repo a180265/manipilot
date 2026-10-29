@@ -132,9 +132,14 @@ class DeviceManager:
         """注入租约管理器：设备拔出/重绑定/禁用时必须撤销活动租约。"""
         self._leases = leases
 
-    def set_config_persistence(self, save_fn) -> None:
-        """注入绑定表持久化函数：设备菜单的绑定变更由后端写回 configs/devices.json。"""
-        self._persist_configs = save_fn
+    def set_config_persistence(self, update_fn) -> None:
+        """注入按设备持久化函数 ``update_fn(device_id, changes, *, create_if_missing,
+        create_seed) -> dict``。
+
+        2026-10-29：由"整表保存"改为"锁内单台读改写"，否则调用方拿旧整表覆盖磁盘
+        会回滚别人刚写的值（丢更新）。实现见 runtime.config.update_device_config。
+        """
+        self._persist_configs = update_fn
 
     def _release_device_lease(self, device_id: str, reason: str) -> None:
         """撤销设备当前活动租约（拔出/重绑定/禁用时调用）。"""
@@ -1354,9 +1359,10 @@ class DeviceManager:
                 if not any(str(item.get("device_id")) == device_id for item in candidate):
                     candidate.append({**merged, **applied})
                 # Never report a successful mapping after swallowing a disk failure.
+                # 锁内按设备读改写：拿整表 candidate 覆盖会回滚别处（如换口）刚写的值。
                 if self._persist_configs is not None:
                     try:
-                        self._persist_configs(candidate)
+                        self._persist_device(device_id, **applied)
                     except Exception as exc:
                         raise ApiError("device_config_invalid", f"相机对应关系未保存：{exc}") from exc
                 old_camera = self._cameras[device_id]
@@ -1419,6 +1425,19 @@ class DeviceManager:
             raise ApiError(
                 "device_busy",
                 f"设备 {device_id} 正在执行任务，禁止变更绑定；请先等任务结束或取消任务")
+        # 2026-10-29 业主授权：崩溃/中断后动作结果未知、账本未核对时禁止换绑
+        # （换源会让"未知"永远无法核对）。只看本地内存事实，不发 HTTP；字段按
+        # None/空串容错，避免历史数据缺键时抛空值异常。
+        unknown_first = str(device.get("unknown_hold_task_id") or "").strip()
+        unknown_rest = [str(item).strip()
+                        for item in (device.get("unknown_hold_task_ids") or [])
+                        if str(item or "").strip()]
+        unknown_ids = ([unknown_first] if unknown_first else []) + unknown_rest
+        if unknown_ids:
+            raise ApiError(
+                "device_unknown_hold",
+                f"设备 {device_id} 存在未核对的动作结果（任务 {unknown_ids[0]}），"
+                "请先完成核对/收尾再变更绑定")
         allowed = {field: updates[field] for field in self.BINDING_FIELDS if field in updates}
         # 控制台使用资源编号；真实地址只在服务端从已加载绑定表解析。
         for selector, kind in (("camera_binding_id", "camera"),
@@ -1473,10 +1492,11 @@ class DeviceManager:
         heavy = bool(self.REATTACH_FIELDS & set(allowed))
         if heavy:
             # 重绑定：更新注册配置后走挂载路径（重建驱动、自检、版本递增、待校准）
+            # 先落盘再改内存：写失败时内存保持旧值，避免"内存新、磁盘旧"分叉。
+            self._persist_device(device_id, **allowed)
             for item in self._registered_configs:
                 if str(item.get("device_id")) == device_id:
                     item.update(allowed)
-            self._persist_binding_table()
             await self.attach_device({**merged})
             self._audit.record("device_binding_update", device_id=device_id,
                                operator_id=operator_id, reason=reason,
@@ -1487,7 +1507,8 @@ class DeviceManager:
                                               new_ime=requested_ime,
                                               operator_id=operator_id)
             return self.binding_view(device_id)
-        # 轻量字段：校验通过后再暂停设备，绑定变更期间不得执行任务
+        # 轻量字段：先落盘（失败则设备状态也不动），再暂停，再改内存/DB。
+        self._persist_device(device_id, **allowed)
         if device.get("status") in ("ready", "busy", "degraded", "returning_home"):
             self.pause(device_id, "绑定变更，设备自动暂停")
         for item in self._registered_configs:
@@ -1507,7 +1528,6 @@ class DeviceManager:
             device["device_mode"] = "unmanaged"
             device["device_mode_display"] = DEVICE_MODE["unmanaged"]
         self._store.save_device(device)
-        self._persist_binding_table()
         self._audit.record("device_binding_update", device_id=device_id,
                            operator_id=operator_id, reason=reason,
                            detail={"updates": allowed,
@@ -1529,11 +1549,12 @@ class DeviceManager:
         self._release_device_lease(device_id, f"绑定禁用：{reason}")
         if device.get("status") in ("ready", "busy", "degraded", "returning_home"):
             self.pause(device_id, f"绑定禁用：{reason}")
+        # 先落盘：写失败时设备仍是"启用"，避免"页面已禁用、重启又复活"。
+        self._persist_device(device_id, binding_enabled=False)
         device["binding_enabled"] = False
         device["device_mode"] = "unmanaged"
         device["device_mode_display"] = DEVICE_MODE["unmanaged"]
         self._store.save_device(device)
-        self._persist_binding_table()
         self._audit.record("device_binding_disable", device_id=device_id,
                            operator_id=operator_id, reason=reason)
         self._events.publish("device.updated", {"device_id": device_id, "reason": "绑定已禁用"})
@@ -1544,27 +1565,50 @@ class DeviceManager:
         device = self.get(device_id)
         if device.get("binding_enabled", True):
             raise ApiError("invalid_request", f"设备 {device_id} 绑定未被禁用，无需恢复")
+        self._persist_device(device_id, binding_enabled=True, calibration_status="due")
         device["binding_enabled"] = True
         device["calibration_status"] = "due"
         device["calibration_status_display"] = "待校准"
         device["device_mode"] = "unmanaged"
         device["device_mode_display"] = DEVICE_MODE["unmanaged"]
         self._store.save_device(device)
-        self._persist_binding_table()
         self._audit.record("device_binding_enable", device_id=device_id,
                            operator_id=operator_id, reason=reason,
                            detail={"note": "恢复后必须重新校准/主界面检查后才能托管"})
         self._events.publish("device.binding_enabled", {"device_id": device_id, "reason": reason})
         return self.binding_view(device_id)
 
-    def _persist_binding_table(self) -> None:
+    def _persist_device(self, device_id: str, *, create_if_missing: bool = True,
+                        **changes) -> dict:
+        """按设备写回静态绑定表（锁内读改写，不覆盖其它设备）。
+
+        changes 必须是纯 delta：已存在的设备只合并这些字段。把内存整条记录并进来
+        会让"只改 binding_enabled"退化成整条覆盖，把别的进程刚写的值改回（丢更新）。
+
+        create_if_missing 默认 True 以保持既有语义：动态注册的设备也会被写进静态表；
+        此时用内存视图作 create_seed 补全静态字段，避免留下空壳条目。
+        """
         if self._persist_configs is None:
-            return
+            return dict(changes)
+        seed = None
+        if create_if_missing:
+            from runtime.config import project_static_device
+
+            entry = next((item for item in self._registered_configs
+                          if str(item.get("device_id")) == device_id), None)
+            if entry is not None:
+                seed = project_static_device(dict(entry))
         try:
-            self._persist_configs(self._registered_configs)
+            return self._persist_configs(device_id, dict(changes),
+                                         create_if_missing=create_if_missing,
+                                         create_seed=seed)
         except Exception as exc:
-            self._audit.record("device_binding_update", reason=f"绑定表写回失败：{exc}",
-                               outcome="failed")
+            self._audit.record("device_binding_update", device_id=device_id,
+                               reason=f"绑定表写回失败：{exc}", outcome="failed")
+            if isinstance(exc, ApiError):
+                raise
+            raise ApiError("device_config_write_failed",
+                           f"绑定表写回失败，本次操作未生效：{exc}") from exc
 
     # ---------- 状态机 ----------
     def _set_status(self, device_id: str, status: str, reason: str | None = None, *, force: bool = False) -> None:
@@ -2262,13 +2306,14 @@ class DeviceManager:
                     cfg = next((item for item in self._registered_configs
                                 if str(item.get("device_id")) == device_id), None)
                     if cfg is not None:
+                        from runtime.config import update_device_config
+
+                        # 先落盘再改内存；带 create_seed，避免造出空壳条目。
+                        update_device_config(self._config_root, device_id,
+                                             {"serial_port": reenum},
+                                             create_if_missing=True,
+                                             create_seed=dict(cfg))
                         cfg["serial_port"] = reenum
-                        from runtime.config import save_device_configs
-
-                        from runtime.config import save_device_configs as _sdc
-
-                        _sdc(self._config_root,
-                             [dict(item) for item in self._registered_configs])
                         self._events.publish("device.serial_reenumerated", {
                             "device_id": device_id,
                             "old_serial_port": binding.get("serial_port"),
@@ -2315,11 +2360,13 @@ class DeviceManager:
                 assigned_this_pass.add(port_path)
             if free_cfg is not None:
                 device_id = str(free_cfg.get("device_id"))
-                free_cfg["serial_port"] = port_path
-                from runtime.config import save_device_configs as _sdc
+                from runtime.config import update_device_config
 
-                _sdc(self._config_root,
-                     [dict(cfg) for cfg in self._registered_configs])
+                update_device_config(self._config_root, device_id,
+                                     {"serial_port": port_path},
+                                     create_if_missing=True,
+                                     create_seed=dict(free_cfg))
+                free_cfg["serial_port"] = port_path
                 self._known_discovery_fingerprints.add(fingerprint)
                 self._events.publish("device.serial_auto_assigned", {
                     "device_id": device_id, "serial_port": port_path,

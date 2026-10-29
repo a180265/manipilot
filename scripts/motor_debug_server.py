@@ -456,7 +456,7 @@ def serial_bind_payload(device: str, port: str) -> dict:
     if cfg is None:
         raise ValueError(f"设备 {device} 未登记")
     old_port = cfg.get("serial_port")
-    from runtime.config import load_device_configs, save_device_configs, PROJECT_ROOT
+    from runtime.config import load_device_configs, update_device_config, PROJECT_ROOT
     disk_entries = load_device_configs(PROJECT_ROOT)
     target = next((item for item in disk_entries
                    if isinstance(item, dict) and item.get("device_id") == device), None)
@@ -465,8 +465,9 @@ def serial_bind_payload(device: str, port: str) -> dict:
             f"设备 {device} 不在静态绑定表（configs/devices.json），不能在此换口；"
             "动态注册设备的串口改绑请走平台注册流程")
     # 写前最后一次重读（上面 load 即最终读）：最小化与 8788 平台整表写的竞窗
-    target["serial_port"] = port
-    save_device_configs(PROJECT_ROOT, disk_entries)
+    # 锁内按设备读改写：整表写会把 Fleet 内存副本里的旧值写回来（丢更新）。
+    update_device_config(PROJECT_ROOT, device, {"serial_port": port},
+                         create_if_missing=True)
     log_op("serial_bind", {"device": device, "port": port,
                            "old_port": old_port}, ok=True)
     try:

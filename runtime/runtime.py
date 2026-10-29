@@ -160,7 +160,7 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         self.leases = LeaseManager(self.store, self.devices)
         # C 组：拔出/重绑定/禁用时撤销租约；绑定菜单变更写回绑定表
         self.devices.set_lease_manager(self.leases)
-        self.devices.set_config_persistence(self._save_binding_table)
+        self.devices.set_config_persistence(self._update_binding_table)
         self.plugins = PluginManager(self.store, self.audit, self.events, plugin_dir or self.config.plugin_dir)
         self.executor = TaskExecutor(self)
         # §10 回调持久队列：客户消息/任务结果回调失败入队，按退避重试。
@@ -2103,10 +2103,18 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         return record({"device_id": device_id, "home_ok": True, "checked_at": result.get("home_checked_at")})
 
     # ================= 设备菜单：绑定事实与绑定变更（C 组） =================
-    def _save_binding_table(self, configs: list[dict]) -> None:
-        from runtime.config import save_device_configs
+    def _update_binding_table(self, device_id: str, changes: dict,
+                              *, create_if_missing: bool = True,
+                              create_seed: dict | None = None) -> dict:
+        """按设备写回绑定表（锁内读改写）；返回写后条目。
 
-        save_device_configs(self.config.root, [dict(cfg) for cfg in configs])
+        2026-10-29：原实现拿调用方整表覆盖磁盘，会回滚别处刚写的值（丢更新）。
+        """
+        from runtime.config import update_device_config
+
+        return update_device_config(self.config.root, device_id, dict(changes),
+                                    create_if_missing=create_if_missing,
+                                    create_seed=create_seed)
 
     def device_binding_view(self, device_id: str) -> dict:
         view = self.devices.binding_view(device_id)

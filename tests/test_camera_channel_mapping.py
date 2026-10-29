@@ -54,7 +54,7 @@ def test_camera_mapping_storage_failure_leaves_old_objects_and_mapping(tmp_path,
         before=deepcopy(manager._devices['arm-01'])
         camera=manager.camera('arm-01')
         configs=deepcopy(manager._registered_configs)
-        def fail(_): raise OSError('disk full')
+        def fail(_device_id, _changes, **_kwargs): raise OSError('disk full')
         manager.set_config_persistence(fail)
         response=client.put('/v1/devices/arm-01/binding',json={
             **_op('写入失败',dangerous=True),'camera_binding_id':'camera:cam-09'})
@@ -93,7 +93,7 @@ def test_camera_mapping_real_arm_gates_use_replaced_camera_without_reconnect(tmp
     with device_client(tmp_path,monkeypatch) as (client,runtime,daemon,archive):
         manager=runtime.devices
         # Fixture-only function/Path providers are not serializable config fields.
-        manager.set_config_persistence(lambda configs: None)
+        manager.set_config_persistence(lambda *_a, **_k: None)
         arm=manager.driver('arm-01')
         session=manager._devices['arm-01']['daemon_session']
         response=client.put('/v1/devices/arm-01/binding',json={

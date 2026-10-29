@@ -7,10 +7,18 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse
+
+try:  # Windows 无 fcntl：降级为无锁，并在文档里如实声明范围
+    import fcntl  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - 非 POSIX 平台
+    fcntl = None  # type: ignore[assignment]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -310,19 +318,215 @@ def load_device_configs(root: Path = PROJECT_ROOT) -> list[dict]:
     return devices
 
 
+# 静态绑定表允许落盘的字段（写盘投影白名单）。
+# 来源 = devices.json 现存键 ∪ runtime/devices.py 实际读取的 cfg 键；
+# 目的是挡住 attach 后把 38 个运行时键（daemon_session/heartbeat/quality/home_*）
+# 灌回被 git 跟踪的文件。新增真正需要持久化的字段时，必须同时登记到这里，
+# 否则会被静默丢弃（test_device_config_static_keys 会拦）。
+STATIC_KEYS = frozenset({
+    "arm_binding_id", "arm_slot", "baud_rate", "binding_enabled", "binding_mode",
+    "binding_note", "binding_revision", "calibration_status", "calibration_validated_at",
+    "camera_binding_id", "camera_device_name", "camera_device_unique_id",
+    "camera_frame_provider", "camera_frame_url", "camera_id", "camera_index",
+    "camera_mode", "camera_source_mode", "camera_status_url", "capabilities",
+    "config_version", "daemon_addr", "daemon_binding_id", "daemon_resource_id",
+    "data_root", "device_id", "device_mode", "driver_mode", "enforce_input_gate",
+    "expected_frame_fps", "expected_frame_height", "expected_frame_width",
+    "hardware_mode", "hotplug", "ime_device_id", "ime_online", "input_device_id",
+    "keyboard_layout", "mac_mini_id", "name_display", "serial_port", "sim_calibrated",
+    "sim_ui_confidence", "sim_ui_state", "sim_wechat_window", "source_geometry_id",
+    "startup_view", "task_id", "transport_factory", "wechat_account_id",
+})
+
+
+_JSON_SCALARS = (str, int, float, bool)
+
+
+def _json_safe(value) -> bool:
+    """落盘值必须是 JSON 可序列化的（transport_factory 是函数、data_root 可能是 Path）。"""
+    if value is None or isinstance(value, _JSON_SCALARS):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_json_safe(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _json_safe(item)
+                   for key, item in value.items())
+    return False
+
+
+def project_static_device(entry: dict) -> dict:
+    """把一条设备记录投影到 STATIC_KEYS（运行时键一律不落盘，非 JSON 值丢弃）。"""
+    return {key: value for key, value in entry.items()
+            if key in STATIC_KEYS and _json_safe(value)}
+
+
+@contextlib.contextmanager
+def device_config_lock(root: Path, *, timeout: float = 1.0):
+    """configs/.devices.lock 上的进程间排他锁。
+
+    devices.json 有 7 处写入方（调试台换口、发现循环、相机换绑、绑定变更…），过去各自
+    "读整表→改一处→写整表"且无固定锁：共享固定临时名会让生效文件变成半截 JSON，启动直接失败。
+
+    本锁只保证**写入不撕裂、不并发交错**；它**不防丢更新**——调用方若在锁外读整表再整表写回，
+    仍会覆盖别人的改动。要防丢更新必须走 update_device_config()（per-device 锁内读改写，P1）。
+
+    超时默认 1.0s：调用点可能在 async 处理器里，长时间 sleep 轮询会卡住整个事件循环。
+    POSIX 用 fcntl.flock；Windows 无 fcntl 时降级为无锁（范围如实声明：Windows 部署需单写者纪律）。
+    """
+    from runtime.errors import ApiError
+
+    lock_path = root / "configs" / ".devices.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            deadline = time.monotonic() + max(0.1, timeout)
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise ApiError(
+                            "device_config_busy",
+                            f"绑定表被其它进程占用超过 {timeout:g}s，请稍后重试")
+                    time.sleep(0.02)
+        yield
+    finally:
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def read_device_config_payload(devices_path: Path) -> dict:
+    """读 devices.json 顶层对象；损坏时报错，不再静默降级成 {} 丢掉 comment/binding_mode。"""
+    from runtime.errors import ApiError
+
+    if not devices_path.exists():
+        return {}
+    try:
+        payload = json.loads(devices_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ApiError("device_config_invalid",
+                       f"绑定表无法解析，原文件未改动：{devices_path}（{exc}）") from exc
+    if not isinstance(payload, dict):
+        raise ApiError("device_config_invalid",
+                       f"绑定表顶层必须是对象，原文件未改动：{devices_path}")
+    return payload
+
+
+def atomic_write_json(path: Path, payload: dict) -> None:
+    """同目录唯一临时名 + fsync + os.replace + 目录 fsync。
+
+    唯一临时名是关键：固定 `devices.json.tmp` 时两个进程同写一个 inode，慢写方的尾巴
+    会落在快写方 replace 之后，把生效文件写成半截 JSON。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    # mkstemp 固定建 0600；不显式继承原文件权限，第一次写就会把 devices.json
+    # 从 0644 悄悄收紧成 0600，跨用户/以 root 跑的读者会突然读不到（2026-10-29 审查）。
+    existing_mode: int | None = None
+    try:
+        if path.exists():
+            existing_mode = path.stat().st_mode & 0o777
+    except OSError:
+        existing_mode = None
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if existing_mode is not None:
+            os.chmod(tmp_name, existing_mode)
+        os.replace(tmp_name, path)
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+        except OSError:
+            dir_fd = None
+        if dir_fd is not None:
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def update_device_config(root: Path, device_id: str, changes: dict,
+                         *, create_if_missing: bool = False,
+                         create_seed: dict | None = None,
+                         timeout: float = 1.0) -> dict:
+    """锁内「重读磁盘 → 只改这一台 → 校验 → 原子写」，返回写后的设备条目。
+
+    与 save_device_configs 的区别是**不丢更新**：save 用调用方手里的整表覆盖磁盘，
+    别人在锁外读到旧表再写回就会互相回滚（典型：Fleet 内存副本把调试台刚写的新串口
+    改回旧值）。这里在锁内以磁盘为准做字段级合并，其余设备保持磁盘现值。
+    """
+    from runtime.errors import ApiError
+
+    if not isinstance(changes, dict) or not changes:
+        raise ApiError("invalid_request", "绑定变更必须是非空对象")
+    if "device_id" in changes and str(changes["device_id"]) != device_id:
+        raise ApiError("invalid_request",
+                       f"不能通过绑定变更改设备标识（{device_id} → {changes['device_id']}）")
+    unknown = set(changes) - STATIC_KEYS
+    if unknown:
+        raise ApiError("invalid_request",
+                       f"不认识的绑定字段：{', '.join(sorted(unknown))}")
+    devices_path = root / "configs" / "devices.json"
+    devices_path.parent.mkdir(parents=True, exist_ok=True)
+    with device_config_lock(root, timeout=timeout):
+        payload = read_device_config_payload(devices_path)
+        raw_entries = payload.get("devices")
+        if raw_entries is None:
+            entries = []
+        elif isinstance(raw_entries, list):
+            entries = [project_static_device(dict(item))
+                       for item in raw_entries if isinstance(item, dict)]
+        else:
+            # 文件被改坏但仍可解析时，旧逻辑会静默清表（只剩目标设备）。
+            # 与 read_device_config_payload「损坏报错、原文件不动」保持一致。
+            raise ApiError("device_config_invalid",
+                           f"绑定表的 devices 字段必须是数组，原文件未改动：{devices_path}")
+        target = next((item for item in entries
+                       if str(item.get("device_id")) == device_id), None)
+        if target is None:
+            if not create_if_missing:
+                raise ApiError(
+                    "device_not_registered",
+                    f"设备 {device_id} 不在静态绑定表（configs/devices.json），未做任何修改")
+            # 仅创建分支用 create_seed 补齐静态字段；已存在设备一律只合并 changes，
+            # 否则"只改 binding_enabled"会退化成整条内存记录覆盖磁盘（同一设备的丢更新）。
+            target = {"device_id": device_id,
+                      **project_static_device(dict(create_seed or {}))}
+            entries.append(target)
+        target.update(changes)
+        validate_device_configs(entries)
+        payload["devices"] = entries
+        atomic_write_json(devices_path, payload)
+        return dict(target)
+
+
 def save_device_configs(root: Path, devices: list[dict]) -> Path:
-    """把绑定变更写回 configs/devices.json（原子替换 devices 数组，保留注释等顶层字段）。"""
+    """把绑定变更写回 configs/devices.json（锁内原子替换 devices 数组，保留顶层字段）。
+
+    整表接口只用于初始化/迁移/测试；运行期绑定变更请用 update_device_config
+    （锁外读整表再整表写回会覆盖别人刚写的值，即丢更新）。
+    写前统一投影到 STATIC_KEYS，运行时键不落盘。
+    """
+    devices = [project_static_device(dict(item)) for item in devices]
     validate_device_configs(devices)
     devices_path = root / "configs" / "devices.json"
     devices_path.parent.mkdir(parents=True, exist_ok=True)
-    payload: dict = {}
-    if devices_path.exists():
-        try:
-            payload = json.loads(devices_path.read_text(encoding="utf-8"))
-        except Exception:
-            payload = {}
-    payload["devices"] = devices
-    tmp_path = devices_path.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(devices_path)
+    with device_config_lock(root):
+        payload = read_device_config_payload(devices_path)
+        payload["devices"] = devices
+        atomic_write_json(devices_path, payload)
     return devices_path
