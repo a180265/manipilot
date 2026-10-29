@@ -145,3 +145,42 @@ def test_unknown_hold_blocks_rebind_and_tolerates_odd_shapes(tmp_path):
     assert _key(manager, {"unknown_hold_task_ids": [None, "", " "]}) != "device_unknown_hold"
     assert _key(manager, {"unknown_hold_task_ids": "task-x"}) == "device_unknown_hold"
     assert _key(manager, {}) != "device_unknown_hold"
+
+
+def test_serial_bind_logs_single_final_result(monkeypatch, tmp_path):
+    """换口台账只记一条最终结果；空消息异常也必须如实失败。"""
+    import importlib
+
+    server = importlib.import_module("scripts.motor_debug_server")
+    import runtime.config as runtime_config
+
+    (tmp_path / "configs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "configs" / "devices.json").write_text(json.dumps({
+        "devices": [{"device_id": "arm-01", "serial_port": "/dev/cu.OLD"}]},
+        ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(runtime_config, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(server, "_merged_device_configs",
+                        lambda: {"arm-01": {"device_id": "arm-01",
+                                            "serial_port": "/dev/cu.OLD"}})
+    monkeypatch.setattr(server, "_runtime_device_records", lambda: {"arm-01": {}})
+    entries = []
+    monkeypatch.setattr(server, "log_op",
+                        lambda action, detail=None, ok=True, **kw: entries.append(
+                            (action, ok, (detail or {}).get("attach_error", ""))))
+
+    monkeypatch.setattr(server, "_agent_json",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    result = server.serial_bind_payload("arm-01", "/dev/cu.usbserial-999")
+    assert result["ok"] is False and len(entries) == 1 and entries[0][1] is False
+
+    entries.clear()
+    monkeypatch.setattr(server, "_agent_json",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
+    result = server.serial_bind_payload("arm-01", "/dev/cu.usbserial-999")
+    assert result["ok"] is False, "空消息异常被当成成功"
+    assert len(entries) == 1 and entries[0][1] is False and entries[0][2]
+
+    entries.clear()
+    monkeypatch.setattr(server, "_agent_json", lambda *a, **k: {"ok": True})
+    result = server.serial_bind_payload("arm-01", "/dev/cu.usbserial-999")
+    assert result["ok"] is True and len(entries) == 1 and entries[0][1] is True

@@ -485,9 +485,10 @@ def serial_bind_payload(device: str, port: str) -> dict:
     # create_if_missing 保持默认 False：换口途中若另一写者删掉该设备，必须报错，
     # 不能悄悄重建一条只含 device_id/serial_port 的空壳条目（2026-10-29 复核）。
     update_device_config(PROJECT_ROOT, device, {"serial_port": port})
-    log_op("serial_bind", {"device": device, "port": port,
-                           "old_port": old_port}, ok=True)
+    # 台账只记最终结果：attach 之前先记一条 ok=True、失败后再记 ok=False 会一真一假。
+    # 失败判定用显式标记，不用 str(exc) 的真假（异常可能没有消息）。
     attach_error = ""
+    attach_failed = False
     try:
         _agent_json("POST", f"/v1/devices/{device}/attach", {
             "serial_port": port,
@@ -498,9 +499,10 @@ def serial_bind_payload(device: str, port: str) -> dict:
         })
     except Exception as exc:
         # 过去只 print 然后照样 ok=True：页面显示"换好了"，实际热重挂没跑。
-        attach_error = str(exc)
+        attach_failed = True
+        attach_error = str(exc) or type(exc).__name__
         print(f"attach 代理失败（绑定表已写，热重挂未生效）：{exc}", flush=True)
-    if attach_error:
+    if attach_failed:
         log_op("serial_bind", {"device": device, "port": port,
                                "old_port": old_port, "attach_error": attach_error}, ok=False)
         return {"ok": False, "device": device, "serial_port": port,
