@@ -106,3 +106,37 @@ def test_non_list_devices_field_raises_instead_of_clearing(tmp_path):
         update_device_config(tmp_path, "arm-01", {"binding_note": "x"}, create_if_missing=True)
     assert excinfo.value.key == "device_config_invalid"
     assert target.read_text(encoding="utf-8") == before
+
+
+def test_unknown_hold_blocks_rebind_and_tolerates_odd_shapes(tmp_path):
+    """unknown 未核对时禁止换绑；缺键/None/空串/字符串形态都不能抛异常或误拦。"""
+    import asyncio
+
+    from runtime.audit import AuditLog
+    from runtime.devices import DeviceManager
+    from runtime.errors import ApiError
+    from runtime.events import EventBus
+    from runtime.store import Store
+
+    def _manager(tmp_path):
+        store = Store(tmp_path / "fleet.db")
+        events = EventBus()
+        return DeviceManager(store, AuditLog(store, events), events,
+                             hardware_mode="simulation")
+
+    def _key(manager, payload):
+        manager._devices["arm-01"] = {"device_id": "arm-01", "status": "paused",
+                                      "binding_revision": 1, **payload}
+        try:
+            asyncio.run(manager.update_binding("arm-01", {"binding_note": "x"},
+                                               operator_id="op", reason="t"))
+        except ApiError as exc:
+            return exc.key
+        return None
+
+    manager = _manager(tmp_path)
+    assert _key(manager, {"unknown_hold_task_id": "task-9"}) == "device_unknown_hold"
+    assert _key(manager, {"unknown_hold_task_ids": ""}) != "device_unknown_hold"
+    assert _key(manager, {"unknown_hold_task_ids": [None, "", " "]}) != "device_unknown_hold"
+    assert _key(manager, {"unknown_hold_task_ids": "task-x"}) == "device_unknown_hold"
+    assert _key(manager, {}) != "device_unknown_hold"

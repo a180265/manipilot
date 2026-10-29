@@ -1429,9 +1429,15 @@ class DeviceManager:
         # （换源会让"未知"永远无法核对）。只看本地内存事实，不发 HTTP；字段按
         # None/空串容错，避免历史数据缺键时抛空值异常。
         unknown_first = str(device.get("unknown_hold_task_id") or "").strip()
-        unknown_rest = [str(item).strip()
-                        for item in (device.get("unknown_hold_task_ids") or [])
-                        if str(item or "").strip()]
+        raw_ids = device.get("unknown_hold_task_ids")
+        # 只接受 list/tuple：历史脏数据里若是字符串，逐字符迭代会把 "abc" 误判成 3 个任务。
+        if isinstance(raw_ids, (list, tuple)):
+            unknown_rest = [str(item).strip() for item in raw_ids
+                            if str(item or "").strip()]
+        elif isinstance(raw_ids, str):
+            unknown_rest = [raw_ids.strip()] if raw_ids.strip() else []
+        else:
+            unknown_rest = []
         unknown_ids = ([unknown_first] if unknown_first else []) + unknown_rest
         if unknown_ids:
             raise ApiError(
