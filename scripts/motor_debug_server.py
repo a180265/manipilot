@@ -576,7 +576,7 @@ def serial_unbind_payload(device: str) -> tuple[int, dict]:
         raise ValueError(f"设备 {device} 当前没有串口绑定，无需解除")
     _require_no_unknown_hold(device)
     _require_static_binding_entry(device, "解绑")
-    request_id = f"unbind-{int(time.time() * 1000)}"
+    request_id = f"unbind-{device}-{int(time.time() * 1000)}"
     status, payload = _agent_passthrough("PUT", f"/v1/devices/{device}/binding", {
         "serial_port": "",
         "operator_id": "调试台", "role": "operator",
@@ -895,7 +895,8 @@ def _merged_device_configs() -> dict[str, dict]:
     merged = {key: dict(value) for key, value in DEVICE_CONFIGS.items()}
     for device_id, record in _runtime_device_records().items():
         current = merged.get(device_id, {})
-        current.update({k: v for k, v in _runtime_config(record).items() if v not in (None, "")})
+        # 空串是"显式解绑"，必须覆盖启动时的静态旧值；只过滤 None。
+        current.update({k: v for k, v in _runtime_config(record).items() if v is not None})
         merged[device_id] = current
     return merged
 

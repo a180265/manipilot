@@ -90,6 +90,11 @@ IME_BASE_URL=http://127.0.0.1:8788 .venv/bin/python scripts/motor_debug_server.p
 - **未知动作门禁**：设备存在未核对的动作结果（`unknown_hold_task_id`/`unknown_hold_task_ids`）
   时，变更绑定返回 `409 device_unknown_hold`，须先完成核对/收尾。
 - `.gitignore` 已忽略 `configs/.devices.lock` 与 `configs/.devices.json.*.tmp`（运行时生成）。
+- **调试台解除绑定（`POST /api/serial-unbind`）**：清空该设备的串口绑定（代理平台
+  `PUT /v1/devices/{id}/binding {"serial_port": ""}`，落盘/暂停/待校准/审计由平台完成）。
+  用于绑错口时先解绑、再让另一台绑到该口。**解绑不会断开 daemon 已打开的串口会话**
+  （daemon 对空绑定保持旧 PORT），须点「断开」；未断开时再点「连接设备」会被 daemon 拒绝
+  （「串口绑定已解除」）。两台抢同一物理口仍按唯一性返回 `409 device_binding_conflict`。
 - **调试台换口（`POST /api/serial-bind`）**：只对**静态绑定表里已登记**的设备生效；
   动态注册设备（只在注册中心、不在 devices.json）会被明确拒绝并提示走平台注册流程——
   不再隐式创建只含 `device_id/serial_port` 的空壳条目。

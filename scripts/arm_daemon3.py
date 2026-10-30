@@ -710,6 +710,11 @@ class ArmHolder:
             arm.close()
         print(f"串口会话已丢弃：{reason}（重连后将生成新锚点）", flush=True)
 
+    def _configured_serial_port(self) -> str | None:
+        """磁盘绑定端口（只读）；未绑定/读取失败一律 None。"""
+        state, port = self._serial_binding_state()
+        return port if state == "bound" else None
+
     def _serial_binding_state(self) -> tuple[str, str | None]:
         """本设备串口绑定状态：bound / unbound / unknown。
 
@@ -756,9 +761,19 @@ class ArmHolder:
                 raise RuntimeError("串口绑定已解除：请先在调试台绑定串口后再「连接设备」")
             self._refresh_serial_binding_locked()
             if self.arm is not None:
-                return {"connected": True, "deviceId": DEVICE_ID,
-                        "session": self.arm.session, "already": True,
-                        "communicationRecoveryRequired": bool(getattr(self, "communication_recovery", None))}
+                # 已连接时如实报告"当前会话端口 vs 磁盘绑定端口"是否一致，
+                # 不一致返回 needReconnect——否则"改绑定 + 点连接"会被当成成功。
+                bound = self._configured_serial_port()
+                open_port = getattr(self.arm, "open_port", PORT)
+                payload = {"connected": True, "deviceId": DEVICE_ID,
+                           "session": self.arm.session, "already": True,
+                           "communicationRecoveryRequired": bool(
+                               getattr(self, "communication_recovery", None))}
+                if bound:
+                    payload.update(openPort=open_port, boundPort=bound)
+                if bound and bound != open_port:
+                    payload["needReconnect"] = True
+                return payload
             try:
                 arm = ArmSession()
             except Exception as exc:
