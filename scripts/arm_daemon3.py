@@ -727,7 +727,12 @@ class ArmHolder:
             matches = [c for c in entries if c.get("device_id") == DEVICE_ID]
             if len(matches) != 1:
                 return "unknown", None
-            raw = matches[0].get("serial_port")
+            entry = matches[0]
+            if "serial_port" not in entry:
+                # 历史配置缺这个键：按"未配置"处理（保持旧行为），
+                # 只有**显式写入空值**才算业主解绑。
+                return "unknown", None
+            raw = entry.get("serial_port")
             if raw is None or (isinstance(raw, str) and not raw.strip()):
                 return "unbound", None
             if not isinstance(raw, str) or not re.fullmatch(

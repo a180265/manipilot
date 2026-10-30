@@ -145,3 +145,16 @@ def test_connect_refuses_when_unbound_and_session_open(rig):
     with pytest.raises(RuntimeError) as excinfo:
         holder.connect()
     assert "断开" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("entry,expect", [
+    ({"device_id": "arm-01"}, ("unknown", None)),
+    ({"device_id": "arm-01", "serial_port": None}, ("unbound", None)),
+    ({"device_id": "arm-01", "serial_port": ""}, ("unbound", None)),
+    ({"device_id": "arm-01", "serial_port": "/dev/cu.ok"}, ("bound", "/dev/cu.ok")),
+])
+def test_serial_binding_state_distinguishes_missing_vs_cleared(rig, entry, expect):
+    """缺键（历史配置）不能当成解绑，否则会误伤本来能连的设备。"""
+    holder, config = rig
+    config.write_text(json.dumps({"devices": [entry]}), encoding="utf-8")
+    assert holder._serial_binding_state() == expect
