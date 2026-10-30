@@ -26,6 +26,7 @@ STATUS_DISPLAY = {
     "crashed": "进程异常退出",
     "failed": "重启次数耗尽",
     "config_error": "配置错误",
+    "unbound": "串口未绑定（等待人工绑定）",
     "port_conflict": "端口被其他进程占用",
     "external": "已连接独立 daemon（保留现有校准）",
 }
@@ -188,9 +189,11 @@ class DaemonSupervisor:
             )
             return None
         if not str(config.get("serial_port") or "").strip():
+            # 串口未绑定（含业主在调试台「解除绑定」后的空值）不是配置错误：
+            # 这是"等待人工绑定"的正常中间态。以前显示"配置错误"，会让业主以为坏了。
             self._set_state(
-                str(config.get("device_id") or ""), "config_error",
-                last_error="真机 daemon 缺少 serial_port",
+                str(config.get("device_id") or ""), "unbound",
+                last_error="串口未绑定（在调试台绑定后会自动拉起 daemon）",
             )
             return None
         if not self.script_path.exists():
