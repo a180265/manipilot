@@ -955,6 +955,9 @@ function renderSerialAction() {
   button.style.display = !opt?.value || other ? "none" : "";
   button.textContent = own && deviceConnectPending ? "⏳ 正在连接并等待就绪…" : own ? "连接此串口" : "绑定此串口";
   button.disabled = serialActionPending || deviceConnectPending || cameraMappingPending || (own && $("#btnConnect").disabled);
+  // 缺席绑定口（拔出/断电）：只能解绑，不能"连接此串口"。
+  const absent = opt?.dataset.absent === "1";
+  if (absent) { button.style.display = "none"; button.disabled = true; }
   // 解绑只对"当前设备已绑定的那个口"出现（选中他人口/空口时隐藏）。
   const unbind = $("#btnUnbindSerial");
   if (unbind) {
@@ -994,6 +997,18 @@ $("#btnScanSerial").addEventListener("click", async e => {
       const bound = p.bound_device ? `（已绑定 ${p.bound_device}，${p.state === "present" ? "串口在场" : "串口不在场"}）` : "（未绑定）";
       opt.textContent = `${p.path} ${bound} [${(p.serial_number || "").slice(0, 12)}]`;
       opt.dataset.bound = p.bound_device || "";
+      sel.appendChild(opt);
+    }
+    // 绑定口不在场（拔出/断电）时后端只放进 absent_ports、不渲染成可选项；
+    // 但"绑错口 + 线已拔"正是最需要解绑的场景，所以为本机缺席绑定补一个
+    // 只用于解绑的条目（dataset.absent=1，不提供"绑定/连接"）。
+    const absentMine = (data.absent_ports || []).find(p => p.bound_device === device);
+    if (absentMine && !ports.some(p => p.path === absentMine.path)) {
+      const opt = document.createElement("option");
+      opt.value = absentMine.path;
+      opt.textContent = `${absentMine.path} （已绑定本机，串口不在场）`;
+      opt.dataset.bound = device;
+      opt.dataset.absent = "1";
       sel.appendChild(opt);
     }
     const preferred = ports.find(p => p.bound_device === device) ||

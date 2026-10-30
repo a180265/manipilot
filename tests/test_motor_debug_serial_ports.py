@@ -559,3 +559,20 @@ def test_serial_unbind_blocked_by_unknown_hold(env, monkeypatch, tmp_path):
         monkeypatch.setattr(debug, "_agent_passthrough", lambda *a, **k: (200, {"ok": True}))
         status, _ = debug.serial_unbind_payload("arm-01")
         assert status == 200, f"脏数据误拦：{shape}"
+
+
+def test_serial_unbind_works_when_port_absent(monkeypatch, tmp_path):
+    """绑定口不在场时也必须能解绑（后端只读合并配置，不依赖在场状态）。"""
+    import json as _json
+    monkeypatch.setattr("runtime.config.PROJECT_ROOT", tmp_path)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "devices.json").write_text(_json.dumps({"devices": [
+        {"device_id": "arm-01", "serial_port": "/dev/cu.usbserial-GONE"}]}))
+    monkeypatch.setattr(debug, "_merged_device_configs", lambda: {
+        "arm-01": {"device_id": "arm-01", "serial_port": "/dev/cu.usbserial-GONE"}})
+    monkeypatch.setattr(debug, "_runtime_device_records", lambda: {"arm-01": {}})
+    calls = {}
+    monkeypatch.setattr(debug, "_agent_passthrough",
+                        lambda m, p, b=None: (calls.update(path=p, body=b) or (200, {"ok": True})))
+    status, _ = debug.serial_unbind_payload("arm-01")
+    assert status == 200 and calls["body"]["serial_port"] == ""
