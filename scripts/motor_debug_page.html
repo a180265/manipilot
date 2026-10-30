@@ -138,6 +138,8 @@
   <button id="btnScanSerial">🔍 扫描串口</button>
   <select id="serialPortSel" style="max-width:340px"></select>
   <button id="btnBindSerial" class="primary" style="display:none">连接此串口</button>
+  <button id="btnUnbindSerial" class="danger" style="display:none"
+    title="清空当前设备的串口绑定（不影响其它设备）。解绑后设备暂停并要求重新校准；daemon 已打开的串口会话不会自动断开，请点「断开」。">解除绑定</button>
   <span id="serialPortMsg" style="color:#8a94a2"></span>
 </div>
 <div id="deviceContext" class="hint" style="margin:8px 16px 0;color:#b8c3cf"></div>
@@ -953,6 +955,12 @@ function renderSerialAction() {
   button.style.display = !opt?.value || other ? "none" : "";
   button.textContent = own && deviceConnectPending ? "⏳ 正在连接并等待就绪…" : own ? "连接此串口" : "绑定此串口";
   button.disabled = serialActionPending || deviceConnectPending || cameraMappingPending || (own && $("#btnConnect").disabled);
+  // 解绑只对"当前设备已绑定的那个口"出现（选中他人口/空口时隐藏）。
+  const unbind = $("#btnUnbindSerial");
+  if (unbind) {
+    unbind.style.display = own ? "" : "none";
+    unbind.disabled = serialActionPending || deviceConnectPending || cameraMappingPending;
+  }
 }
 let serialActionPending = false;
 let serialScanGeneration = 0;
@@ -1030,6 +1038,35 @@ $("#btnRecoveryAttempt").addEventListener("click", async e => {
 $("#serialPortSel").addEventListener("change", e => {
   renderSerialAction();
 });
+$("#btnUnbindSerial").addEventListener("click", async e => {
+  e.preventDefault();
+  if (serialActionPending || deviceConnectPending || cameraMappingPending) return;
+  const sel = $("#serialPortSel");
+  const opt = sel && sel.selectedOptions[0];
+  if (!opt || opt.dataset.bound !== DEV_RAW()) return;
+  const device = DEV_RAW();
+  if (!confirm(`解除 ${device} 与 ${sel.value} 的串口绑定？\n\n` +
+      "解绑后设备将暂停并要求重新校准；daemon 已打开的串口会话不会自动断开，" +
+      "请随后点「断开」。绑错口时：先解除一方的绑定，另一方即可绑到此口。")) return;
+  serialActionPending = true;
+  if (typeof renderDeviceWritePending === "function") renderDeviceWritePending();
+  sel.disabled = true;
+  $("#serialPortMsg").textContent = "解除绑定中…";
+  try {
+    const r = await api("/api/serial-unbind", {method: "POST", body: JSON.stringify({device})});
+    opt.dataset.bound = "";
+    opt.textContent = `${sel.value} （未绑定）`;
+    $("#serialPortMsg").textContent = r.note || "绑定已解除；设备已暂停并要求重新校准。";
+    await refreshStatus();
+  } catch (err) {
+    $("#serialPortMsg").textContent = `解除失败：${err.message || err}`;
+  } finally {
+    serialActionPending = false;
+    sel.disabled = false;
+    if (typeof renderDeviceWritePending === "function") renderDeviceWritePending();
+  }
+});
+
 $("#btnBindSerial").addEventListener("click", async e => {
   e.preventDefault();
   if (serialActionPending || deviceConnectPending || cameraMappingPending) return;

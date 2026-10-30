@@ -243,7 +243,7 @@ _WIZARD_INSTALLATION_LOCKED_ACTIONS = frozenset({
 _DEVICE_OPERATION_LOCKS: dict[str, threading.Lock] = {}
 _DEVICE_OPERATION_LOCKS_GUARD = threading.Lock()
 _OPERATION_STATE_POST_PATHS = frozenset({
-    "/api/connect", "/api/serial-bind", "/api/estop_reset",
+    "/api/connect", "/api/serial-bind", "/api/serial-unbind", "/api/estop_reset",
 })
 _WIZARD_CONCURRENT_ACTIONS = frozenset({"auto-state", "auto-stop", "cancel"})
 
@@ -464,6 +464,40 @@ def _validate_serial_port_form(port: str) -> None:
         raise ValueError(f"串口路径形态不合法（须为 /dev/cu.* 或 /dev/tty.*）：{port!r}")
 
 
+def _require_no_unknown_hold(device: str) -> None:
+    """unknown 门禁：换绑入口（换口/解绑）在动作结果未知未核对时一律拒绝。
+
+    状态取自注册中心快照；字段按 None/空串/字符串容错（历史脏数据 list 会被逐字符误判）。
+    """
+    record = _runtime_device_records().get(device) or {}
+    unknown_first = str(record.get("unknown_hold_task_id") or "").strip()
+    raw_ids = record.get("unknown_hold_task_ids")
+    if isinstance(raw_ids, (list, tuple)):
+        unknown_rest = [str(item).strip() for item in raw_ids if str(item or "").strip()]
+    elif isinstance(raw_ids, str):
+        unknown_rest = [raw_ids.strip()] if raw_ids.strip() else []
+    else:
+        unknown_rest = []
+    if unknown_first or unknown_rest:
+        from runtime.errors import ApiError
+
+        raise ApiError("device_unknown_hold",
+                       f"设备 {device} 存在未核对的动作结果，请先完成核对/收尾再变更绑定")
+
+
+def _require_static_binding_entry(device: str, action: str) -> None:
+    """绑定写入口共用限制：动态注册设备的绑定变更请走平台注册流程。"""
+    from runtime.config import load_device_configs, PROJECT_ROOT
+
+    disk_entries = load_device_configs(PROJECT_ROOT)
+    target = next((item for item in disk_entries
+                   if isinstance(item, dict) and item.get("device_id") == device), None)
+    if target is None:
+        raise ValueError(
+            f"设备 {device} 不在静态绑定表（configs/devices.json），不能在此{action}；"
+            "动态注册设备的串口绑定变更请走平台注册流程")
+
+
 def serial_bind_payload(device: str, port: str) -> dict:
     """换口重绑：持久化 devices.json 串口 + 经平台 attach 热重挂新端口。
 
@@ -478,22 +512,7 @@ def serial_bind_payload(device: str, port: str) -> dict:
     if cfg is None:
         raise ValueError(f"设备 {device} 未登记")
     old_port = cfg.get("serial_port")
-    # unknown 门禁：动作结果未知未核对时换口会让"未知"永远无法核对。
-    # 状态取自注册中心快照；字段按 None/空串/字符串容错。
-    record = _runtime_device_records().get(device) or {}
-    unknown_first = str(record.get("unknown_hold_task_id") or "").strip()
-    raw_ids = record.get("unknown_hold_task_ids")
-    if isinstance(raw_ids, (list, tuple)):
-        unknown_rest = [str(item).strip() for item in raw_ids if str(item or "").strip()]
-    elif isinstance(raw_ids, str):
-        unknown_rest = [raw_ids.strip()] if raw_ids.strip() else []
-    else:
-        unknown_rest = []
-    if unknown_first or unknown_rest:
-        from runtime.errors import ApiError
-
-        raise ApiError("device_unknown_hold",
-                       f"设备 {device} 存在未核对的动作结果，请先完成核对/收尾再换口")
+    _require_no_unknown_hold(device)
     from runtime.config import load_device_configs, update_device_config, PROJECT_ROOT
     disk_entries = load_device_configs(PROJECT_ROOT)
     target = next((item for item in disk_entries
@@ -537,6 +556,44 @@ def serial_bind_payload(device: str, port: str) -> dict:
     return {"ok": True, "device": device, "serial_port": port,
             "old_serial_port": old_port,
             "note": "绑定已更新；daemon 将在新端口重连，随后走正常校准流程"}
+
+
+def serial_unbind_payload(device: str) -> tuple[int, dict]:
+    """解除串口绑定：代理平台 PUT /v1/devices/{id}/binding {"serial_port": ""}。
+
+    不直接改 devices.json——落盘、Fleet 内存、暂停+待校准与审计由平台同一条路径完成。
+    注意：解绑不会断开 daemon 已打开的会话（daemon 对空绑定保持旧 PORT），
+    前端须提示手动「断开」；daemon 侧已加守卫，未断开时 CONNECT 会被拒绝。
+    """
+    if not device:
+        raise ValueError("serial-unbind 需要 device")
+    configs = _merged_device_configs()
+    cfg = configs.get(device)
+    if cfg is None:
+        raise ValueError(f"设备 {device} 未登记")
+    old_port = cfg.get("serial_port")
+    if not str(old_port or "").strip():
+        raise ValueError(f"设备 {device} 当前没有串口绑定，无需解除")
+    _require_no_unknown_hold(device)
+    _require_static_binding_entry(device, "解绑")
+    request_id = f"unbind-{int(time.time() * 1000)}"
+    status, payload = _agent_passthrough("PUT", f"/v1/devices/{device}/binding", {
+        "serial_port": "",
+        "operator_id": "调试台", "role": "operator",
+        "reason": f"调试台解除串口绑定（原 {old_port}）",
+        "confirmation_token": "确认执行",
+        "correlation_id": "serial-unbind",
+        "client_request_id": request_id,
+    })
+    ok = status == 200
+    log_op("serial_unbind", {"device": device, "old_port": old_port, "http": status},
+           ok=ok, detail=payload if isinstance(payload, dict) else str(payload))
+    if not ok:
+        return status, payload
+    return 200, {"ok": True, "device": device, "serial_port": "",
+                 "old_serial_port": old_port,
+                 "note": "绑定已解除；设备已暂停并要求重新校准。"
+                         "daemon 已打开的串口会话不会自动断开，请点「断开」后再重新绑定。"}
 
 
 def camera_bind_payload(device: str, camera_resource: str, request_id: str) -> tuple[int, dict]:
@@ -4319,6 +4376,9 @@ class Handler(BaseHTTPRequestHandler):
                 log_op("recovery_attempt", {"device": device},
                        ok=bool(result.get("recovered")), detail=result)
                 self._json(result)
+            elif path == "/api/serial-unbind":
+                status, payload = serial_unbind_payload(str(body.get("device") or ""))
+                self._json(payload, code=status)
             elif path == "/api/serial-bind":
                 # P0-1（2026-09-30 审查）：前端以 POST 调用（原误写在 do_GET，
                 # POST 必 404）。绑定属配置写操作但免 device-context：与

@@ -504,3 +504,58 @@ def test_post_promote_pause_failure_does_not_publish_readiness(env, monkeypatch)
     assert '暂停未成功' in result['pause']
     assert calls == ['/v1/devices/arm-01/pause']
     assert 'calibration-status' not in result
+
+
+def test_serial_unbind_proxies_platform_binding_with_empty_port(env, monkeypatch, tmp_path):
+    """解除绑定：代理平台 PUT binding {"serial_port": ""}，不自造半状态。"""
+    import json as _json
+    monkeypatch.setattr("runtime.config.PROJECT_ROOT", tmp_path)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "devices.json").write_text(_json.dumps({"devices": [
+        {"device_id": "arm-01", "serial_port": "/dev/cu.usbserial-21110",
+         "arm_slot": 1, "hardware_mode": "real"}]}))
+    calls = {"put": None}
+
+    def fake_passthrough(method, path, body=None):
+        calls["put"] = {"method": method, "path": path, "body": body}
+        return 200, {"ok": True, "device_id": "arm-01"}
+
+    monkeypatch.setattr(debug, "_agent_passthrough", fake_passthrough)
+    monkeypatch.setattr(debug, "_runtime_device_records", lambda: {"arm-01": {}})
+    status, payload = debug.serial_unbind_payload("arm-01")
+    assert status == 200 and payload["ok"] is True
+    assert calls["put"]["method"] == "PUT"
+    assert calls["put"]["path"] == "/v1/devices/arm-01/binding"
+    assert calls["put"]["body"]["serial_port"] == ""
+    assert calls["put"]["body"]["confirmation_token"] == "确认执行"
+
+
+def test_serial_unbind_rejected_when_nothing_bound(env, monkeypatch):
+    monkeypatch.setattr(debug, "_runtime_device_records", lambda: {"arm-01": {}})
+    monkeypatch.setattr(debug, "_merged_device_configs", lambda: {
+        "arm-01": {"device_id": "arm-01", "serial_port": ""}})
+    with pytest.raises(ValueError) as excinfo:
+        debug.serial_unbind_payload("arm-01")
+    assert "没有串口绑定" in str(excinfo.value)
+
+
+def test_serial_unbind_blocked_by_unknown_hold(env, monkeypatch, tmp_path):
+    import json as _json
+    from runtime.errors import ApiError
+    monkeypatch.setattr("runtime.config.PROJECT_ROOT", tmp_path)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "devices.json").write_text(_json.dumps({"devices": [
+        {"device_id": "arm-01", "serial_port": "/dev/cu.usbserial-21110"}]}))
+    for shape in ({"unknown_hold_task_id": "task-9"},
+                  {"unknown_hold_task_ids": ["t"]},
+                  {"unknown_hold_task_ids": "abc"}):
+        monkeypatch.setattr(debug, "_runtime_device_records", lambda shape=shape: {"arm-01": shape})
+        with pytest.raises(ApiError) as excinfo:
+            debug.serial_unbind_payload("arm-01")
+        assert excinfo.value.key == "device_unknown_hold"
+    for shape in ({}, {"unknown_hold_task_id": None}, {"unknown_hold_task_ids": []},
+                  {"unknown_hold_task_ids": ""}, {"unknown_hold_task_ids": [None, ""]}):
+        monkeypatch.setattr(debug, "_runtime_device_records", lambda shape=shape: {"arm-01": shape})
+        monkeypatch.setattr(debug, "_agent_passthrough", lambda *a, **k: (200, {"ok": True}))
+        status, _ = debug.serial_unbind_payload("arm-01")
+        assert status == 200, f"脏数据误拦：{shape}"
