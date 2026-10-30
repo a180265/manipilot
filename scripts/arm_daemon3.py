@@ -710,8 +710,45 @@ class ArmHolder:
             arm.close()
         print(f"串口会话已丢弃：{reason}（重连后将生成新锚点）", flush=True)
 
+    def _serial_binding_state(self) -> tuple[str, str | None]:
+        """本设备串口绑定状态：bound / unbound / unknown。
+
+        unbound = devices.json 里该设备明确解绑（serial_port 为空）；与配置缺失/
+        读取失败/条目缺失（unknown，独立运行或配置故障）区分，避免解绑后被当成
+        "没配置"，CONNECT 仍用进程内旧 PORT 去开别的臂的串口。
+        """
+        config_file = os.environ.get("ARM_DAEMON_CONFIG_FILE")
+        if not config_file:
+            return "unknown", None
+        try:
+            entries = json.loads(Path(config_file).read_text(encoding="utf-8"))["devices"]
+            if not isinstance(entries, list) or not all(isinstance(c, dict) for c in entries):
+                return "unknown", None
+            matches = [c for c in entries if c.get("device_id") == DEVICE_ID]
+            if len(matches) != 1:
+                return "unknown", None
+            raw = matches[0].get("serial_port")
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                return "unbound", None
+            if not isinstance(raw, str) or not re.fullmatch(
+                    r"/dev/(?:cu|tty)\.[A-Za-z0-9._-]+", raw):
+                return "unknown", None
+            if any(c.get("device_id") != DEVICE_ID and c.get("serial_port") == raw
+                   for c in entries):
+                return "unknown", None
+            return "bound", raw
+        except (OSError, ValueError, KeyError, TypeError):
+            return "unknown", None
+
     def connect(self) -> dict:
         with self.cmd_lock:  # 全程持锁：两路同时 CONNECT 不允许交错开串口
+            state, bound = self._serial_binding_state()
+            if state == "unbound":
+                # 解绑后绝不能用进程内旧 PORT 开串口——那个口可能已属另一台臂。
+                if self.arm is not None:
+                    raise RuntimeError(
+                        "串口绑定已解除：当前会话仍占用旧串口，请先「断开」再重新绑定串口")
+                raise RuntimeError("串口绑定已解除：请先在调试台绑定串口后再「连接设备」")
             self._refresh_serial_binding_locked()
             if self.arm is not None:
                 return {"connected": True, "deviceId": DEVICE_ID,

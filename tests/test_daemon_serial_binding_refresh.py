@@ -123,3 +123,25 @@ def test_watch_skips_presence_check_while_command_is_running(rig, monkeypatch):
     with holder.cmd_lock:
         tick(holder)
     assert daemon.PORT == "/dev/cu.old"
+
+
+def test_connect_refuses_when_binding_explicitly_unbound(rig):
+    """解绑（serial_port 为空）后 CONNECT 必须拒绝，不得用旧 PORT 打开别人的口。"""
+    holder, config = rig
+    config.write_text(json.dumps({"devices": [{"device_id": "arm-01", "serial_port": ""}]}),
+                      encoding="utf-8")
+    assert holder._serial_binding_state() == ("unbound", None)
+    with pytest.raises(RuntimeError) as excinfo:
+        holder.connect()
+    assert "串口绑定已解除" in str(excinfo.value)
+
+
+def test_connect_refuses_when_unbound_and_session_open(rig):
+    """已连接状态下解绑：提示先断开，而不是回 already=true。"""
+    holder, config = rig
+    holder.arm = SimpleNamespace(session="s-1", open_port="/dev/cu.old", close=lambda: None)
+    config.write_text(json.dumps({"devices": [{"device_id": "arm-01", "serial_port": ""}]}),
+                      encoding="utf-8")
+    with pytest.raises(RuntimeError) as excinfo:
+        holder.connect()
+    assert "断开" in str(excinfo.value)
