@@ -381,6 +381,52 @@ class DaemonSupervisor:
         self._set_state(device_id, "restarting", restart_count=count + 1)
         self._restart_due[device_id] = time.monotonic() + self.restart_delay_seconds
 
+    async def _sync_from_disk(self) -> None:
+        """绑定表变了就同步：业主在调试台绑定串口后，daemon 必须被自动拉起。
+
+        2026-10-31 事故：supervisor 只在 start() 读一次绑定表，之后绑定变化
+        （调试台绑串口/发现循环自动分配）都不会触发 daemon 启动，于是调试台
+        永远等不到 daemon 状态、显示"当前状态暂不可确认"、连接按钮一直是灰的。
+        这里每个监控周期按文件 mtime 检查一次，变化时：
+          · 新增/改绑的设备 → 更新配置并尝试启动；
+          · 变成未绑定（serial_port 空）的设备 → 停掉它的 daemon。
+        """
+        path = self.root / "configs" / "devices.json"
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        if stamp == getattr(self, "_configs_stamp", None):
+            return
+        self._configs_stamp = stamp
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            entries = payload.get("devices")
+            if not isinstance(entries, list):
+                return
+        except (OSError, ValueError):
+            return
+        fresh = {str(item.get("device_id")): dict(item)
+                 for item in entries
+                 if isinstance(item, dict) and str(item.get("device_id") or "").strip()}
+        for device_id, config in fresh.items():
+            previous = self._configs.get(device_id) or {}
+            changed = any(str(previous.get(key) or "") != str(config.get(key) or "")
+                          for key in ("serial_port", "daemon_addr", "driver_mode"))
+            self._configs[device_id] = config
+            running = (device_id in self._processes or device_id in self._external_devices)
+            if not self.enabled or not self._eligible(config, self.hardware_mode):
+                continue
+            unbound = not str(config.get("serial_port") or "").strip()
+            if unbound and running:
+                await self.stop_device(device_id, reason="串口绑定被解除")
+                continue
+            if not unbound and (changed or not running):
+                if changed and running:
+                    await self.stop_device(device_id, reason="串口/地址变更，按新配置重建")
+                await self.start_device(device_id)
+
     async def _monitor_once(self) -> None:
         for device_id, (host, port) in list(self._external_devices.items()):
             previous = self.state(device_id)
