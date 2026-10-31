@@ -66,7 +66,7 @@ class TakeoverBridge:
             },
         }
         url = base.rstrip("/") + self._path(conversation_id)
-        client = self.client or httpx.AsyncClient(timeout=5)
+        client = self.client or httpx.AsyncClient(timeout=5, trust_env=False)
         try:
             response = await client.post(url, json=payload)
             try:

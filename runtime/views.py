@@ -357,7 +357,7 @@ class ViewSessionManager:
         import httpx
 
         try:
-            async with httpx.AsyncClient(timeout=1.5) as client:
+            async with httpx.AsyncClient(timeout=1.5, trust_env=False) as client:
                 resp = await client.post(
                     url, json={"session_id": session["wx_session_id"]},
                     headers=headers)

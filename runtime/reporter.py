@@ -43,7 +43,7 @@ class Reporter:
                                  callback_id=callback_id or f"{action}:{task_id or path}",
                                  outcome="no_callback_url", reason="未配置 WX 回调地址")
             return False
-        client = self.client or httpx.AsyncClient(timeout=5)
+        client = self.client or httpx.AsyncClient(timeout=5, trust_env=False)
         try:
             response = await client.post(base.rstrip("/") + path, json=payload)
             # §问题10：HTTP 2xx 只表示“收到请求”，不单独表示业务成功。
@@ -108,7 +108,7 @@ class Reporter:
                                  callback_id=callback_id, outcome="no_callback_url", reason=reason)
             return {"accepted": False, "retryable": True, "reason": reason}
 
-        client = self.client or httpx.AsyncClient(timeout=5)
+        client = self.client or httpx.AsyncClient(timeout=5, trust_env=False)
         try:
             response = await client.post(base.rstrip("/") + path, json=payload)
             try:

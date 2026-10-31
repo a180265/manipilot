@@ -116,7 +116,7 @@ class CallbackOutbox:
             summary["skipped"] = len(due)
             return summary
         owns_client = client is None
-        http = client or httpx.AsyncClient(timeout=5)
+        http = client or httpx.AsyncClient(timeout=5, trust_env=False)
         try:
             for item in due[:max(1, int(limit))]:
                 await self._deliver(http, base_url.rstrip("/"), item, summary)
