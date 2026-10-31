@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     status TEXT,
     json TEXT NOT NULL
 );
+-- 注意：tasks.status 故意**不建索引**（2026-10-31 实测）。派发循环按
+-- `status NOT IN (...)` 过滤，SQLite 对取反列表谓词不做范围查找（EXPLAIN 恒为
+-- SCAN tasks）；加索引后实测反而从 0.0135 ms 劣化到 0.868 ms（维护 + 页开销），
+-- 且全仓没有任何 tasks.status 的正向过滤查询能受益。收益来自"少解析 N 行 JSON"。
 CREATE TABLE IF NOT EXISTS leases (
     device_id TEXT PRIMARY KEY,
     json TEXT NOT NULL
@@ -191,6 +195,30 @@ class Store:
 
     def all_tasks(self) -> list[dict]:
         return self._all("tasks")
+
+    def active_tasks(self) -> list[dict]:
+        """只返回**非终态**任务（派发循环专用）。
+
+        2026-10-31 空转修复：`_dispatch_loop` 每 0.05 秒调一次 `all_tasks()`，
+        而 `_all()` 是 `SELECT json FROM tasks` + 逐行 `json.loads`。现场 95 个
+        任务全部是终态时，单次 13.78 ms × 20 Hz ≈ 单核 28%，机器持续发热，
+        却没有任何可派发的工作。
+
+        `_dispatch_once` 只消费 `awaiting_device`（孤儿对账）与 `queued`（派发），
+        两者都是非终态，因此这里按 `TERMINAL_STATUSES` 反向过滤即可：
+        语义不变、派发延迟不变，空闲时扫描行数由 N 降为 0。
+
+        status 为 NULL/空时 `NULL NOT IN (...)` 结果为 NULL（WHERE 视为不满足），
+        会把历史/异常行**静默漏掉**——宁可多扫一行，也不能漏派发。
+        """
+        from .executor import TERMINAL_STATUSES
+
+        terminal = sorted(TERMINAL_STATUSES)
+        placeholders = ",".join("?" for _ in terminal)
+        rows = self._query_all(
+            f"SELECT json FROM tasks WHERE status IS NULL OR status = '' "
+            f"OR status NOT IN ({placeholders})", tuple(terminal))
+        return [json.loads(row["json"]) for row in rows]
 
     def delete_task(self, task_id: str) -> None:
         self._delete("tasks", "task_id", task_id)

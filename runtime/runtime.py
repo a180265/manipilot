@@ -1675,7 +1675,12 @@ class ArmFleetRuntime(PluginCapabilityMixin):
         except Exception:
             pass
         try:
-            all_tasks = self.store.all_tasks()
+            # 2026-10-31 空转修复：本循环每 0.05 秒跑一次，原先每次都全量读+解析
+            # 整张任务表（含全部终态）。现场 95 个任务全为终态时单次 13.78 ms，
+            # 20 Hz ≈ 单核 28%，机器持续发热却无可派发工作。
+            # 下面只消费 awaiting_device（孤儿对账）与 queued（派发），都是非终态，
+            # 故改读 active_tasks()：语义与派发延迟不变，空闲扫描行数降为 0。
+            all_tasks = self.store.active_tasks()
         except Exception:
             return
         # S1（第六轮）：awaiting_device 孤儿对账——执行协程不存在且设备无
