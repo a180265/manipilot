@@ -587,6 +587,18 @@ class TaskExecutor:
             # ---- 全部步骤成功 ----
             return await self.finalize(task, "confirmed", plugin=plugin, extras=self._aggregate_results(task))
         except Exception as exc:  # 未预期异常：结果未知，不能猜
+            # 2026-10-31：收尾异常只留下"...Invalid port: ':1]'"这种残缺消息，
+            # 定位需要完整堆栈。这里落盘一张 traceback（不影响任务结果）。
+            try:
+                import traceback as _tb
+                from pathlib import Path as _P
+                _log = _P(__file__).resolve().parents[1] / "data" / "logs" / "executor_errors.log"
+                _log.parent.mkdir(parents=True, exist_ok=True)
+                with _log.open("a", encoding="utf-8") as _fh:
+                    _fh.write(f"=== {task.get('task_id')} {task.get('task_type')} "
+                              f"{type(exc).__name__}: {exc}\n{_tb.format_exc()}\n")
+            except Exception:  # noqa: BLE001 记录失败不影响收尾
+                pass
             return await self.finalize(
                 task, "unknown", plugin=plugin,
                 message=f"运行时异常，动作结果无法确认：{exc}",
