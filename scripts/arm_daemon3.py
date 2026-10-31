@@ -103,6 +103,14 @@ MPOS_RESPONSE_TIMEOUT_S = 2.0
 CONNECT_HANDSHAKE_TIMEOUT_S = 8.0
 CONNECT_STARTUP_OBSERVATION_S = 4.0
 CONNECT_STABLE_WINDOW_S = 0.5
+# 打开串口会让部分 USB-串口驱动拉 DTR → 控制器复位，启动横幅"Grbl 1.3b…"
+# 可能比握手晚到几百毫秒。若握手已宣布就绪再收到横幅，旧逻辑会立刻撤销会话，
+# 表现为"刚连上就断"（2026-10-31 现场，历史累计 22 次）。因此：
+#   · 握手阶段再加一段"无横幅静默期"，把延迟启动横幅吃在握手内；
+#   · 就绪后极短窗口内的横幅仍按启动输出处理（仅当尚未发生任何运动），
+#     一旦有过运动/租约，立即撤销会话的既有安全语义不变。
+CONNECT_QUIET_WINDOW_S = 1.5
+POST_READY_BANNER_GRACE_S = 2.0
 RESUME_CONFIRM_TIMEOUT_S = 1.5  # 调试台控制请求总超时为 2 秒。
 CLIENT_IDLE_TIMEOUT_S = 120.0
 COMMAND_LOCK_TIMEOUT_S = 5.0
@@ -124,6 +132,9 @@ class ArmSession:
 
     def __init__(self) -> None:
         self.session = uuid.uuid4().hex
+        # 本次会话实际打开的串口：与 devices.json 当前绑定不一致时由 CONNECT 上报
+        # needReconnect（换口后没断开就点连接，过去会回 already=true 假成功）。
+        self.open_port = PORT
         self.serial = None
         # 启动宽限仅覆盖连接握手。首次位置可能早于延迟启动横幅，不能
         # 只凭第一条回包就宣布就绪；握手完成后横幅仍立即撤销会话。
@@ -133,6 +144,9 @@ class ArmSession:
         # Unknown by default. Only a completed handshake/idle barrier can prove
         # no motion has been queued since the last confirmed idle state.
         self._idle_without_motion = False
+        # 就绪后是否下发过运动类指令（G0/G1/回零等）。启动横幅宽限只允许
+        # 发生在"还没动过"的阶段；一旦动过，横幅必须立即撤销会话。
+        self._motion_commanded_since_ready = False
         try:
             self.serial = self._open_serial()
             # 部分 macOS USB-串口驱动不支持 DTR/RTS 控制，会在设备已成功打开后
@@ -179,9 +193,14 @@ class ArmSession:
         started = time.monotonic()
         deadline = started + CONNECT_HANDSHAKE_TIMEOUT_S
         stable_key, stable_since = None, None
+        banner_seen = 0
+        last_banner_at = started
         while time.monotonic() < deadline:
             position = self.mpos(deadline=deadline)
             state = position["state"]
+            if self._startup_banner_count != banner_seen:
+                banner_seen = self._startup_banner_count
+                last_banner_at = time.monotonic()
             key = (self._startup_banner_count, state,
                    position["x"], position["y"], position["z"])
             if state not in {"Idle", "Hold:0", "Alarm", "Door:0", "Check", "Sleep"}:
@@ -189,10 +208,15 @@ class ArmSession:
             elif key != stable_key:
                 stable_key, stable_since = key, time.monotonic()
             elif (time.monotonic() - started >= CONNECT_STARTUP_OBSERVATION_S
-                  and time.monotonic() - stable_since >= CONNECT_STABLE_WINDOW_S):
+                  and time.monotonic() - stable_since >= CONNECT_STABLE_WINDOW_S
+                  and self._startup_banner_count == banner_seen
+                  and time.monotonic() - last_banner_at >= CONNECT_QUIET_WINDOW_S):
+                # 静默期：等待可能延迟到达的启动横幅，避免"刚宣布就绪就收到
+                # Grbl 横幅 → 立刻撤销会话"的竞态。
                 self._boot_banner_grace = False
                 self._initializing_connection = False
                 self._idle_without_motion = state == "Idle"
+                self._ready_at = time.monotonic()
                 return
             time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
         raise serial.serialutil.SerialException("连接状态握手未取得连续稳定位置，未宣布连接就绪")
@@ -348,9 +372,11 @@ class ArmSession:
             if not text:
                 continue
             if self._is_controller_reset_banner(text):
-                if getattr(self, "_boot_banner_grace", False):
+                if self._banner_is_startup_noise():
                     self._startup_banner_count = getattr(self, "_startup_banner_count", 0) + 1
-                    continue  # CONNECT 启动横幅：预期内的开机输出，跳过
+                    # 启动复位会清零坐标基准：之后的 Idle 不能当作旧基准下的空闲证明。
+                    self._idle_without_motion = False
+                    continue  # 打开串口引发的启动横幅：预期内输出，跳过
                 raise self._controller_reset_error(text)
             out.append(text)
             if text == "ok":
@@ -365,13 +391,33 @@ class ArmSession:
                 raise RuntimeError(f"控制器拒绝: {text}（{line}）")
         raise SerialResponseTimeout(f"等待 ok 超时: {line}")
 
+    _MOTION_PREFIXES = ("G0", "G1", "G2", "G3", "G4", "G28", "G53", "G91", "$H", "$X")
+
     def send(self, line: str, expect_ok: bool = True) -> list[str]:
+        if str(line).strip().upper().startswith(self._MOTION_PREFIXES):
+            self._motion_commanded_since_ready = True
+            self._idle_without_motion = False
         return self._send_raw(line, expect_ok)
 
     # 控制器启动/复位横幅（P11/规范 §5.4）：已建立的串口会话内读到即代表
     # 控制器经历了复位（看门狗/掉电），坐标基准丢失。会话字符串没换不能
     # 证明坐标系连续——必须撤销会话，绝不能把复位后的 MPos:0,0,0 当作
     # 旧坐标系中的有效位置。
+    def _banner_is_startup_noise(self) -> bool:
+        """横幅是否属于"打开串口引发的启动复位"。
+
+        只有两个条件同时成立才宽限：①握手宽限期内，或就绪后极短窗口内；
+        ②**自上次确认空闲以来没有任何运动**（_idle_without_motion）。
+        一旦有过运动，坐标基准已参与过计算，横幅必须撤销会话。
+        """
+        if getattr(self, "_boot_banner_grace", False):
+            return True                  # 握手宽限期：原有语义不变
+        if getattr(self, "_motion_commanded_since_ready", False):
+            return False                 # 有过运动指令：必须撤销会话
+        ready_at = getattr(self, "_ready_at", None)
+        return (ready_at is not None
+                and time.monotonic() - ready_at <= POST_READY_BANNER_GRACE_S)
+
     @staticmethod
     def _is_controller_reset_banner(text: str) -> bool:
         return (text.startswith("Grbl ")
@@ -392,9 +438,11 @@ class ArmSession:
             text = self._readline(deadline).decode(errors="ignore").strip()
             self._observe_pending_response(text)
             if self._is_controller_reset_banner(text):
-                if getattr(self, "_boot_banner_grace", False):
+                if self._banner_is_startup_noise():
                     self._startup_banner_count = getattr(self, "_startup_banner_count", 0) + 1
-                    continue  # CONNECT 启动横幅：预期内的开机输出，跳过
+                    # 启动复位会清零坐标基准：之后的 Idle 不能当作旧基准下的空闲证明。
+                    self._idle_without_motion = False
+                    continue  # 打开串口引发的启动横幅：预期内输出，跳过
                 raise self._controller_reset_error(text)
             if (not text.startswith("<") or not text.endswith(">")
                     or text.count("<") != 1 or text.count(">") != 1):
@@ -666,61 +714,12 @@ class ArmHolder:
                     self.cmd_lock.release()
             time.sleep(WATCH_INTERVAL_S)
 
-    def _refresh_serial_binding_locked(self) -> None:
-        """监督器显式指定配置源；独立运行的 daemon 保持 env 绑定。"""
-        global PORT
-        config_file = os.environ.get("ARM_DAEMON_CONFIG_FILE")
-        if not config_file or self.arm is not None or self.leases.snapshot():
-            return
-        try:
-            entries = json.loads(Path(config_file).read_text(encoding="utf-8"))["devices"]
-            if not isinstance(entries, list) or not all(isinstance(c, dict) for c in entries):
-                return
-            matches = [c for c in entries if c.get("device_id") == DEVICE_ID]
-            if len(matches) != 1:
-                return
-            port = matches[0].get("serial_port")
-            if not isinstance(port, str) or not re.fullmatch(r"/dev/(?:cu|tty)\.[A-Za-z0-9._-]+", port):
-                return
-            if any(c.get("device_id") != DEVICE_ID and c.get("serial_port") == port for c in entries):
-                return
-        except (OSError, ValueError, KeyError, TypeError):
-            return
-        if port != PORT:
-            PORT = port
-            self.device_present = os.path.exists(PORT)
-            print(f"已同步 {DEVICE_ID} 串口绑定：{PORT}（等待人工 CONNECT）", flush=True)
-
-    def _drop(self, arm: ArmSession, reason: str) -> None:
-        # Watcher, manual disconnect and command-error paths all serialize
-        # teardown with motion/CONNECT so no command can use a dead session.
-        with self.cmd_lock:
-            self._drop_locked(arm, reason)
-
-    def _drop_locked(self, arm: ArmSession, reason: str) -> None:
-        """Drop a session while ``cmd_lock`` is already held."""
-        with self.lock:
-            if self.arm is not arm:
-                return
-            self.arm = None
-            self.disconnect_reason = reason
-            self.communication_recovery = None
-            self.leases.invalidate_all(reason)
-            self.transactions.clear()
-            arm.close()
-        print(f"串口会话已丢弃：{reason}（重连后将生成新锚点）", flush=True)
-
-    def _configured_serial_port(self) -> str | None:
-        """磁盘绑定端口（只读）；未绑定/读取失败一律 None。"""
-        state, port = self._serial_binding_state()
-        return port if state == "bound" else None
-
     def _serial_binding_state(self) -> tuple[str, str | None]:
-        """本设备串口绑定状态：bound / unbound / unknown。
+        """本设备串口绑定的三种状态：bound / unbound / unknown。
 
-        unbound = devices.json 里该设备明确解绑（serial_port 为空）；与配置缺失/
-        读取失败/条目缺失（unknown，独立运行或配置故障）区分，避免解绑后被当成
-        "没配置"，CONNECT 仍用进程内旧 PORT 去开别的臂的串口。
+        unbound 表示**配置明确解绑**（devices.json 里该设备存在且 serial_port 为空）——
+        与"配置文件缺失/读不出/条目缺失"（unknown，独立运行或配置故障）区分开，
+        否则解绑会被当成"没配置"，CONNECT 仍去开旧 PORT 抢别的臂的口。
         """
         config_file = os.environ.get("ARM_DAEMON_CONFIG_FILE")
         if not config_file:
@@ -750,29 +749,91 @@ class ArmHolder:
         except (OSError, ValueError, KeyError, TypeError):
             return "unknown", None
 
+    def _configured_serial_port(self) -> str | None:
+        """只读 devices.json 里本设备绑定的串口，不改变 PORT。
+
+        与 _refresh_serial_binding_locked 同一套校验；差别是不要求 arm 为空，
+        因此可用于「当前会话端口 vs 磁盘绑定端口」的一致性对照（CONNECT 时上报）。
+        """
+        config_file = os.environ.get("ARM_DAEMON_CONFIG_FILE")
+        if not config_file:
+            return None
+        try:
+            entries = json.loads(Path(config_file).read_text(encoding="utf-8"))["devices"]
+            if not isinstance(entries, list) or not all(isinstance(c, dict) for c in entries):
+                return None
+            matches = [c for c in entries if c.get("device_id") == DEVICE_ID]
+            if len(matches) != 1:
+                return None
+            port = matches[0].get("serial_port")
+            if not isinstance(port, str) or not re.fullmatch(r"/dev/(?:cu|tty)\.[A-Za-z0-9._-]+", port):
+                return None
+            if any(c.get("device_id") != DEVICE_ID and c.get("serial_port") == port for c in entries):
+                return None
+            return port
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def _refresh_serial_binding_locked(self) -> None:
+        """监督器显式指定配置源；独立运行的 daemon 保持 env 绑定。"""
+        global PORT
+        if self.arm is not None or self.leases.snapshot():
+            return
+        port = self._configured_serial_port()
+        if port is None:
+            return
+        if port != PORT:
+            PORT = port
+            self.device_present = os.path.exists(PORT)
+            print(f"已同步 {DEVICE_ID} 串口绑定：{PORT}（等待人工 CONNECT）", flush=True)
+
+    def _drop(self, arm: ArmSession, reason: str) -> None:
+        # Watcher, manual disconnect and command-error paths all serialize
+        # teardown with motion/CONNECT so no command can use a dead session.
+        with self.cmd_lock:
+            self._drop_locked(arm, reason)
+
+    def _drop_locked(self, arm: ArmSession, reason: str) -> None:
+        """Drop a session while ``cmd_lock`` is already held."""
+        with self.lock:
+            if self.arm is not arm:
+                return
+            self.arm = None
+            self.disconnect_reason = reason
+            self.communication_recovery = None
+            self.leases.invalidate_all(reason)
+            self.transactions.clear()
+            arm.close()
+        print(f"串口会话已丢弃：{reason}（重连后将生成新锚点）", flush=True)
+
     def connect(self) -> dict:
         with self.cmd_lock:  # 全程持锁：两路同时 CONNECT 不允许交错开串口
             state, bound = self._serial_binding_state()
             if state == "unbound":
-                # 解绑后绝不能用进程内旧 PORT 开串口——那个口可能已属另一台臂。
+                # 业主在调试台「解除串口绑定」后，磁盘绑定已清空。此时绝不能再用
+                # 进程内的旧 PORT 去开串口——那个口可能已被另一台臂绑定，
+                # 打开它等于两台 daemon 抢同一物理串口。
                 if self.arm is not None:
                     raise RuntimeError(
                         "串口绑定已解除：当前会话仍占用旧串口，请先「断开」再重新绑定串口")
                 raise RuntimeError("串口绑定已解除：请先在调试台绑定串口后再「连接设备」")
             self._refresh_serial_binding_locked()
             if self.arm is not None:
-                # 已连接时如实报告"当前会话端口 vs 磁盘绑定端口"是否一致，
-                # 不一致返回 needReconnect——否则"改绑定 + 点连接"会被当成成功。
+                # 已连接时如实报告"当前会话端口"与"磁盘绑定端口"是否一致：
+                # 不一致返回 needReconnect，避免"绑定新口 + 点连接 = 假成功"。
                 bound = self._configured_serial_port()
                 open_port = getattr(self.arm, "open_port", PORT)
+                need_reconnect = bool(bound and bound != open_port)
                 payload = {"connected": True, "deviceId": DEVICE_ID,
                            "session": self.arm.session, "already": True,
                            "communicationRecoveryRequired": bool(
                                getattr(self, "communication_recovery", None))}
                 if bound:
                     payload.update(openPort=open_port, boundPort=bound)
-                if bound and bound != open_port:
+                if need_reconnect:
                     payload["needReconnect"] = True
+                    print(f"串口绑定已变更（{open_port} → {bound}），"
+                          f"当前会话仍用旧端口；请先 DISCONNECT 再 CONNECT", flush=True)
                 return payload
             try:
                 arm = ArmSession()
@@ -1115,6 +1176,11 @@ def handle(line: str, conn_id: int,
             holder.use()
             lease = holder.leases.claim(conn_id, parts[1].lower(), parts[2],
                                         " ".join(parts[3:]) if len(parts) > 3 else "")
+            # 取得运动租约 = 明确运动意图：此后任何启动横幅都不再按"开机输出"宽限，
+            # 必须撤销会话（P11 原语义）。
+            if getattr(holder, "arm", None) is not None:
+                holder.arm._motion_commanded_since_ready = True
+                holder.arm._idle_without_motion = False
         return json.dumps({"claimed": True, **lease}, ensure_ascii=False)
     if cmd == "RENEW":
         lease = holder.leases.renew(conn_id)
@@ -1406,7 +1472,7 @@ def main() -> None:
     normal_slots = threading.BoundedSemaphore(MAX_CLIENTS)
     emergency_slots = threading.BoundedSemaphore(EMERGENCY_RESERVED_CLIENTS)
     print(f"arm-daemon3 就绪：{DEVICE_ID} @ {LISTEN[0]}:{LISTEN[1]}"
-          f"（监听 {PORT} 在位，等待人工 CONNECT；运动需 CLAIM 租约）", flush=True)
+          f"（串口启动值 {PORT}，之后以 devices.json 绑定为准；等待人工 CONNECT；运动需 CLAIM 租约）", flush=True)
     conn_seq = iter(range(1, 10 ** 9))
     while True:
         conn, _ = srv.accept()

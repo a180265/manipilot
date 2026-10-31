@@ -92,6 +92,7 @@ class DaemonSupervisor:
         poll_interval_seconds: float = 1.0,
         restart_delay_seconds: float = 1.0,
         max_restarts: int = 5,
+        stable_seconds: float = 30.0,
         process_factory: Callable[..., Any] | None = None,
         event_handler: Callable[[dict], Awaitable[None] | None] | None = None,
     ) -> None:
@@ -108,6 +109,10 @@ class DaemonSupervisor:
         self.poll_interval_seconds = max(0.1, float(poll_interval_seconds))
         self.restart_delay_seconds = max(0.0, float(restart_delay_seconds))
         self.max_restarts = max(0, int(max_restarts))
+        # 稳定运行多久后把 restart_count 清零。没有这一步时计数只增不减：
+        # 同一进程内累计重启 5 次（例如反复换串口）就会把设备打成 failed，
+        # 之后 supervisor 拒绝再拉起（2026-10-29 审计）。
+        self.stable_seconds = max(1.0, float(stable_seconds))
         self._process_factory = process_factory or subprocess.Popen
         self._event_handler = event_handler
         self._processes: dict[str, Any] = {}
@@ -399,25 +404,37 @@ class DaemonSupervisor:
         stamp = (stat.st_mtime_ns, stat.st_size)
         if stamp == getattr(self, "_configs_stamp", None):
             return
-        self._configs_stamp = stamp
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             entries = payload.get("devices")
             if not isinstance(entries, list):
                 return
         except (OSError, ValueError):
-            return
+            return                     # 读失败不记 stamp：下个周期重试，避免永久跳过
+        self._configs_stamp = stamp
         fresh = {str(item.get("device_id")): dict(item)
                  for item in entries
                  if isinstance(item, dict) and str(item.get("device_id") or "").strip()}
+        # 被人工停止的设备（_stop_requested）不得因为一次配置写入就被悄悄拉起。
+        removed = [device_id for device_id in self._configs if device_id not in fresh]
+        for device_id in removed:
+            if device_id in self._processes or device_id in self._external_devices:
+                await self.stop_device(device_id, reason="设备已从绑定表移除")
+            self._configs.pop(device_id, None)
         for device_id, config in fresh.items():
             previous = self._configs.get(device_id) or {}
             changed = any(str(previous.get(key) or "") != str(config.get(key) or "")
                           for key in ("serial_port", "daemon_addr", "driver_mode"))
             self._configs[device_id] = config
             running = (device_id in self._processes or device_id in self._external_devices)
+            if device_id in self._stop_requested:
+                continue               # 人工停止中：保持停止，等显式启动
             if not self.enabled or not self._eligible(config, self.hardware_mode):
+                if running:            # 变成非 daemon 驱动：按新配置停掉旧进程
+                    await self.stop_device(device_id, reason="驱动模式已变更")
                 continue
+            if self.state(device_id).get("status") == "failed" and not changed:
+                continue               # 重启次数耗尽且配置没变：不自动复活
             unbound = not str(config.get("serial_port") or "").strip()
             if unbound and running:
                 await self.stop_device(device_id, reason="串口绑定被解除")
@@ -428,6 +445,20 @@ class DaemonSupervisor:
                 await self.start_device(device_id)
 
     async def _monitor_once(self) -> None:
+        try:
+            await self._sync_from_disk()
+        except Exception as exc:  # noqa: BLE001 - 同步失败不能拖垮监督循环
+            print(f"监督器同步绑定表失败：{exc}", flush=True)
+        # 稳定运行够久就把重启计数清零，否则计数只增不减会让设备永久 failed。
+        for device_id, process in list(self._processes.items()):
+            if process.poll() is not None:
+                continue
+            state = self.state(device_id)
+            if not state.get("restart_count") or state.get("status") != "running":
+                continue
+            started_at = float(state.get("started_at") or 0)
+            if started_at and time.time() - started_at >= self.stable_seconds:
+                self._set_state(device_id, "running", restart_count=0)
         for device_id, (host, port) in list(self._external_devices.items()):
             previous = self.state(device_id)
             current = await asyncio.to_thread(_existing_daemon, host, port, device_id)
